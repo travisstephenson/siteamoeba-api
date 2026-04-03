@@ -1455,6 +1455,16 @@ function StyledPreview({
   // Cap font size for the preview card so it doesn't overflow
   const previewFontSize = Math.min(fontSize, 32);
 
+  // Detect transparent backgrounds and pick a contrasting bg
+  const rawBg = parsedStyles.backgroundColor || "";
+  const isTransparentBg = !rawBg || rawBg === "transparent" || rawBg === "rgba(0, 0, 0, 0)";
+  // Check if text color is light (white-ish) to determine fallback bg
+  const rawColor = parsedStyles.color || "";
+  const isLightText = /^(rgb\(\s*2[0-4]\d|rgb\(\s*25[0-5]|rgba\(\s*2[0-4]\d|rgba\(\s*25[0-5]|#f|#e|white)/i.test(rawColor);
+  const effectiveBg = isTransparentBg
+    ? (isLightText ? "#1a1a2e" : "#ffffff")
+    : rawBg;
+
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between">
@@ -1467,7 +1477,7 @@ function StyledPreview({
             fontSize: previewFontSize + "px",
             fontWeight: parsedStyles.fontWeight || "inherit",
             color: parsedStyles.color || "inherit",
-            backgroundColor: parsedStyles.backgroundColor || "#1a1a2e",
+            backgroundColor: effectiveBg,
             textAlign: (parsedStyles.textAlign || "left") as React.CSSProperties["textAlign"],
             lineHeight: parsedStyles.lineHeight || "1.3",
             letterSpacing: parsedStyles.letterSpacing || "normal",
