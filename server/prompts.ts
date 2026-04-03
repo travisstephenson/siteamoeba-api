@@ -99,8 +99,14 @@ Valid strategy values: curiosity_gap, problem_agitation, social_proof, feature_b
 export function buildHeadlineGenerationPrompt(
   context: GenerationContext
 ): LLMMessage[] {
-  const controlInfo = context.controlHeadline
-    ? `\nControl headline (the original): "${context.controlHeadline}"`
+  // Use section-specific control text when available (for non-hero headlines like Problem Agitation, Pricing, etc.)
+  const sectionSpecificText = context.controlText || context.controlHeadline || "";
+  const sectionLabel = context.sectionLabel || "Hero Headline";
+  const sectionPurpose = context.sectionPurpose || "Capture attention and create curiosity";
+  const isHeroHeadline = sectionLabel.toLowerCase().includes("hero") || !context.sectionLabel;
+
+  const controlInfo = sectionSpecificText
+    ? `\nOriginal text for this section: "${sectionSpecificText}"`
     : "";
 
   const existingVariantsInfo =
@@ -115,43 +121,49 @@ export function buildHeadlineGenerationPrompt(
       : "";
 
   const userMessage = `Campaign: "${context.campaignName}"
-Page URL: ${context.pageUrl}${nicheInfo}${controlInfo}${existingVariantsInfo}${tagsInfo}
+Page URL: ${context.pageUrl}${nicheInfo}
+Section: ${sectionLabel}
+Section purpose: ${sectionPurpose}${controlInfo}${existingVariantsInfo}${tagsInfo}
 
-TASK: Generate exactly 3 new HERO HEADLINE variants for the top of this page.
+TASK: Generate exactly 3 new headline variants for the "${sectionLabel}" section.
 
-WHAT MAKES HEADLINES CONVERT (data-backed):
-- Headlines with NUMBERS convert 30% better than those without (Content Marketing Institute)
-- Odd numbers get 20% higher CTR than even numbers
-- Ideal headline length: 8 words for organic, 16-18 words for sales pages (Outbrain)
-- Negative framing outperforms positive by 60%: "never", "worst", "stop" beat "best", "always" (Moz/Conductor)
-- Two-part headlines with a colon or dash perform 9% better than single-part
-- Numerals ("$4M") stop the eye better than words ("four million") — they stand out and imply facts
-- First 2-3 words matter most — users scan and decide in the first 11 characters (Jakob Nielsen)
-- Clarity ALWAYS beats cleverness. No ambiguity.
+*** CRITICAL — PRESERVE THE CORE MESSAGE ***
+Before generating, identify:
+1. Every factual claim in the original (numbers, dollar amounts, timeframes, outcomes)
+2. The narrative frame (is it a success story? a discovery? a problem statement? a call to action?)
+3. The emotional tone (confident, urgent, challenging, empathetic)
 
-PROVEN HEADLINE FORMULAS (from 100+ years of direct response):
-1. "How I [achieved result] [in timeframe]" — How I Improved My Memory in One Evening
-2. "Do You [make this mistake / have this problem]?" — Do You Make These Mistakes in English?
-3. "[Number] [benefit] [in timeframe] or [guarantee]" — Play Guitar in 7 Days or Money Back
-4. "They Laughed When I [did thing] — But When [surprising result]!" — They Laughed When I Sat Down at the Piano
-5. "To [specific person] Who Wants [specific desire]" — To Men Who Want to Quit Working Some Day
-6. "The Secret of [desirable outcome]" — The Secret of Making People Like You
-7. "Who Else Wants [aspirational benefit]?" — Who Else Wants a Screen Star Figure?
-8. "Give Me [time] and I'll Give You [transformation]" — Give Me 5 Days and I'll Give You a Magnetic Personality
-9. "A Little [mistake/flaw] That [big consequence]" — A Little Mistake That Cost a Farmer $3,000 a Year
-10. "[Specific fact about product] [unexpected detail]" — At 60 mph the loudest noise in this Rolls-Royce comes from the electric clock
-11. "How [discovery/method] [solved specific problem]" — How a Strange Accident Saved Me from Baldness
-12. "Why [unexpected group] [surprising outcome]" — Why Some People Almost Always Make Money in the Stock Market
+Your variants MUST preserve ALL of these exactly. You are testing different STRUCTURES and HOOKS for the SAME message. Do NOT change facts, invert the narrative, or distort the tone.
+- "Spent $4M" must stay as "spent" NOT "lost" or "wasted"
+- A success story must remain a success story
+- A problem agitation must remain problem agitation
+- Numbers and claims must appear unchanged
 
+HOW TO CREATE VARIANTS (what you CAN change):
+- Reorder information: lead with the result vs lead with the journey
+- Change sentence structure: statement → question, "How I..." → "What if..." → direct address
+- Shift emphasis: spotlight a different fact from the same story
+- Adjust the hook: specificity, curiosity gap, direct benefit, pattern interrupt
+- Use proven headline formulas as structural templates (not content templates)
+
+${isHeroHeadline ? `PROVEN HEADLINE FORMULAS (use as structural inspiration, NOT to replace the core message):
+- "How I [their result] [their timeframe]" structure
+- "[Number fact] [unexpected detail]" structure
+- "Give Me [time] and I'll Give You [their transformation]" structure
+- Question format: "What if [their claim] could work for you?"
+- Direct address: "To [their audience] who wants [their promised outcome]"
+` : `This is NOT the hero headline — it's the "${sectionLabel}" which serves a specific purpose on the page.
+The variant must fulfill the same purpose: ${sectionPurpose}
+Do NOT generate hero-style headlines. Match the tone and intent of the original section text.
+`}
 RULES:
-1. Use ONE of the proven formulas above as the structural basis for each variant
-2. Every headline MUST contain a specific number, dollar amount, timeframe, or quantity
-3. Every headline MUST communicate a clear benefit or transformation for the READER
-4. Each of the 3 variants must use a DIFFERENT formula from the list above
-5. If the control has HTML styling tags, preserve that exact styling pattern
-6. Do NOT generate: transition phrases, vague questions, product names alone, blog titles, or generic clickbait
+1. Preserve all factual claims exactly as stated in the original
+2. Keep approximately the same word count (within 20%)
+3. If the control has HTML styling tags, preserve that exact styling pattern
+4. Each of the 3 variants must test a different structural approach
+5. Do NOT generate content that belongs in a different section
+6. Do NOT invent new claims, change numbers, or distort the story
 7. Do NOT include existing variants or close rewrites
-8. 8-20 words ideal. First 3 words must hook attention.
 
 Return ONLY the JSON array, no other text.`;
 
@@ -417,7 +429,15 @@ ${pageContextRules}
 
 CRITICAL RULES — FOLLOW ALL OF THESE:
 
-1. MATCH THE ORIGINAL FORMAT: Your variants MUST be the same TYPE of content as the control.
+1. PRESERVE THE CORE MESSAGE AND FACTS: This is the #1 most important rule.
+   - Identify every factual claim in the control (numbers, dollar amounts, timeframes, names, outcomes)
+   - These facts MUST appear accurately in every variant. Do NOT change, exaggerate, or distort them.
+   - "Spent $4M" must NOT become "lost $4M" or "wasted $4M" — that changes the narrative
+   - "Discovered" must NOT become "recovered from failure" — that inverts the story
+   - The TONE of the original must be preserved: if it's a success story, keep it as a success story. If it's overcoming adversity, keep that frame. Do NOT flip the narrative.
+   - You are testing different HOOKS and STRUCTURES to present the SAME core message, NOT changing what the message says.
+
+2. MATCH THE ORIGINAL FORMAT: Your variants MUST be the same TYPE of content as the control.
    - If the control is a short CTA button (2-6 words), generate short CTA buttons (2-6 words)
    - If the control is a paragraph, generate paragraphs of similar length
    - If the control is a bullet list, generate a bullet list
@@ -425,27 +445,28 @@ CRITICAL RULES — FOLLOW ALL OF THESE:
    - If the control is a section header, generate a section header
    - NEVER turn a CTA into a paragraph, or a paragraph into a headline, etc.
 
-2. MATCH THE APPROXIMATE LENGTH: Stay within 20% of the control's word count.
+3. MATCH THE APPROXIMATE LENGTH: Stay within 20% of the control's word count.
    - Short control (under 10 words) = generate short variants (under 10 words)
    - Medium control (10-50 words) = generate medium variants
    - Long control (50+ words) = generate full paragraphs/sections
 
-3. MATCH THE CONTEXT: The variant must make sense in the exact position on the page where the control sits.
+4. MATCH THE CONTEXT: The variant must make sense in the exact position on the page where the control sits.
    - Your variant will REPLACE the control text in that exact spot on the page
    - It must flow naturally with whatever comes before and after it
    - Do NOT generate content that belongs in a different section of the page
 
-4. PRESERVE FORMATTING: If the control has HTML, preserve the structure.
+5. PRESERVE FORMATTING: If the control has HTML, preserve the structure.
    - HTML tags, spans, bolds, colors = keep the same styling pattern
    - Line breaks = keep similar structure
    - Bullet points = keep bullet format
 
-5. GENERATE REAL ALTERNATIVES:
-   - Each variant must use a DIFFERENT persuasion strategy
+6. GENERATE REAL ALTERNATIVES:
+   - Each variant must use a DIFFERENT persuasion strategy (hook, structure, framing)
    - Each must be meaningfully different from the control AND from each other
    - Do NOT just rephrase the same thing
+   - The DIFFERENCE should be in HOW you present the message, not WHAT the message says
 
-6. Return ONLY a JSON array, no markdown, no explanation outside the JSON`;
+7. Return ONLY a JSON array, no markdown, no explanation outside the JSON`;
 
   const controlText = context.controlText || context.currentVariants[0] || "(no control text available)";
   const controlWordCount = controlText.split(/\s+/).length;
@@ -461,11 +482,24 @@ Section purpose: ${context.sectionPurpose || "Improve conversion"}
 Current control text (~${controlWordCount} words):
 """${controlText}"""
 
+STEP 1 — EXTRACT THE CORE MESSAGE (do this mentally before generating):
+- What are the specific facts/claims? (dollar amounts, timeframes, numbers, names, results)
+- What is the narrative frame? (success story? discovery? transformation? problem-solution?)
+- What is the emotional tone? (confident? urgent? empathetic? authoritative?)
+These elements MUST be preserved exactly in every variant.
+
+STEP 2 — GENERATE VARIANTS that test different HOOKS and STRUCTURES while keeping the same facts and narrative:
+- Reorder the information (lead with the result vs lead with the journey)
+- Change the sentence structure (question vs statement vs command vs "How to" vs direct address)
+- Adjust the emphasis (which fact gets the spotlight)
+- Test different opening hooks (specificity, curiosity, direct benefit)
+- Do NOT invent new claims, change numbers, flip the tone, or distort the story
+
 Your variants MUST:
-- Be the same type of content as the control above (if it is a button, generate buttons; if it is a paragraph, generate paragraphs of similar length)
+- Preserve ALL factual claims from the control exactly as stated
 - Be approximately ${controlWordCount} words long (within 20%)
 - Make sense as a direct replacement in this exact page position
-- Each test a different persuasion angle
+- Each test a different hook/structure while delivering the SAME core message
 
 Existing variants:
 ${existingVariants}
@@ -474,7 +508,7 @@ ${context.existingPersuasionTags?.length ? `Strategies already being tested: ${c
 
 Generate 3 new test variants. Return a JSON array:
 [
-  {"text": "variant text here", "strategy": "strategy_name", "reasoning": "why this could outperform"}
+  {"text": "variant text here", "strategy": "strategy_name", "reasoning": "why this hook/structure could outperform while preserving the same message"}
 ]`;
 
   return [
