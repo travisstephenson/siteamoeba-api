@@ -49,6 +49,7 @@ import {
   Activity,
   BarChart3,
   TrendingUp as TrendingUpIcon,
+  Settings,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -1289,11 +1290,73 @@ function WinLossTimeline({ wins, losses }: {
 // MAIN PAGE
 // ============================================================
 
+// ── Onboarding Modal for new free users ──
+function OnboardingModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const [, navigate] = useLocation();
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md" data-testid="dialog-onboarding">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2 text-lg">
+            <Sparkles className="w-5 h-5 text-primary" />
+            Welcome to SiteAmoeba
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-2">
+          <p className="text-sm text-muted-foreground">
+            You're on the <strong>Free plan</strong> — which means you can use your own AI API keys for unlimited testing at no cost.
+          </p>
+          <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
+            <p className="text-sm font-medium">To get started:</p>
+            <div className="flex items-start gap-3">
+              <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</div>
+              <div className="text-sm text-muted-foreground">
+                Go to <strong>Settings</strong> and add your AI API key from any supported provider: OpenAI, Anthropic, Google, Mistral, xAI, or Meta.
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</div>
+              <div className="text-sm text-muted-foreground">
+                Come back here and click <strong>"New Campaign"</strong> to scan your first page.
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">3</div>
+              <div className="text-sm text-muted-foreground">
+                The AI will identify testable sections and generate optimized variants — your first test can be live in under 5 minutes.
+              </div>
+            </div>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button
+              className="flex-1"
+              onClick={() => { onClose(); navigate("/settings"); }}
+              data-testid="button-onboarding-settings"
+            >
+              <Settings className="w-4 h-4 mr-2" />
+              Go to Settings
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={onClose}
+              data-testid="button-onboarding-dismiss"
+            >
+              I'll do this later
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function CampaignsPage() {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const [, navigate] = useLocation();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'active' | 'archived'>('active');
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const { toast } = useToast();
 
   const { data: campaigns, isLoading } = useQuery<CampaignWithStats[]>({
@@ -1335,6 +1398,20 @@ export default function CampaignsPage() {
     },
   });
 
+  // Show onboarding for new free users without API keys
+  const needsOnboarding = !authLoading && isAuthenticated && user
+    && user.plan === "free"
+    && !user.llmProvider
+    && campaigns !== undefined
+    && campaigns.length === 0;
+
+  // Auto-show onboarding once when conditions met
+  const [onboardingShownOnce, setOnboardingShownOnce] = useState(false);
+  if (needsOnboarding && !showOnboarding && !onboardingShownOnce) {
+    setShowOnboarding(true);
+    setOnboardingShownOnce(true);
+  }
+
   // Redirect if not authenticated
   if (!authLoading && !isAuthenticated) {
     navigate("/auth");
@@ -1352,6 +1429,9 @@ export default function CampaignsPage() {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Onboarding modal for new free users */}
+      <OnboardingModal open={showOnboarding} onClose={() => setShowOnboarding(false)} />
+
       {/* Page header */}
       <div className="flex items-center justify-between gap-4 px-6 py-5 border-b border-border">
         <div>
