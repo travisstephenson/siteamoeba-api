@@ -84,6 +84,7 @@ export interface IStorage {
   // Users
   getUserById(id: number): Promise<User | undefined>;
   getUserByEmail(email: string): Promise<User | undefined>;
+  getUserByStripeCustomerId(customerId: string): Promise<User | undefined>;
   getUserByReferralCode(code: string): Promise<User | undefined>;
   createUser(data: InsertUser & { passwordHash: string }): Promise<User>;
   updateUser(id: number, data: Partial<User>): Promise<User | undefined>;
@@ -415,6 +416,11 @@ class StorageImpl implements IStorage {
 
   async getUserByEmail(email: string): Promise<User | undefined> {
     const rows = await db.select().from(users).where(eq(users.email, email));
+    return rows[0];
+  }
+
+  async getUserByStripeCustomerId(customerId: string): Promise<User | undefined> {
+    const rows = await db.select().from(users).where(eq(users.stripeCustomerId, customerId));
     return rows[0];
   }
 

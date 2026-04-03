@@ -65,12 +65,12 @@ function sanitizeInput(input: string): string {
   });
 }
 
-// Plan config
+// Plan config — Stripe price IDs for beta pricing (half off)
 const PLANS: Record<string, { credits: number; campaigns: number; priceId: string | null }> = {
-  free:    { credits: 10,   campaigns: 1,  priceId: null },
-  starter: { credits: 100,  campaigns: 3,  priceId: "price_starter" },
-  growth:  { credits: 500,  campaigns: 10, priceId: "price_growth" },
-  scale:   { credits: 2000, campaigns: 50, priceId: "price_scale" },
+  free:      { credits: 0,    campaigns: 999, priceId: null },
+  pro:       { credits: 500,  campaigns: 999, priceId: "price_1TICnfLj5hhothOuz2yfIWZi" },
+  business:  { credits: 1200, campaigns: 999, priceId: "price_1TICngLj5hhothOuPEzJ9Nwa" },
+  autopilot: { credits: 3000, campaigns: 999, priceId: "price_1TICngLj5hhothOuIYr4AGgK" },
 };
 
 const PLAN_LIMITS: Record<string, { concurrentTests: number }> = {
@@ -269,8 +269,17 @@ export async function registerRoutes(server: Server, app: Express) {
 
     if (event.type === "customer.subscription.deleted") {
       const customerId = event.data?.object?.customer;
-      // Find user by stripe customer ID and downgrade to free
-      // For now, handled via admin
+      if (customerId) {
+        // Find user by stripe customer ID and downgrade to free
+        const user = await storage.getUserByStripeCustomerId(customerId);
+        if (user) {
+          await storage.updateUser(user.id, {
+            plan: "free",
+            creditsLimit: 0,
+            stripeSubscriptionId: null,
+          });
+        }
+      }
     }
 
     res.json({ received: true });
@@ -279,10 +288,10 @@ export async function registerRoutes(server: Server, app: Express) {
   app.get("/api/billing/plans", (_req: Request, res: Response) => {
     res.json({
       plans: [
-        { id: "free", name: "Free", price: 0, credits: 10, visitors: "1,000", campaigns: 1, features: ["1 campaign", "1,000 visitors/mo", "Basic analytics"] },
-        { id: "starter", name: "Starter", price: 29, credits: 100, visitors: "10,000", campaigns: 3, features: ["3 campaigns", "10,000 visitors/mo", "Full analytics", "Priority support"] },
-        { id: "growth", name: "Growth", price: 79, credits: 500, visitors: "50,000", campaigns: 10, features: ["10 campaigns", "50,000 visitors/mo", "Full analytics", "A/B significance alerts", "API access"] },
-        { id: "scale", name: "Scale", price: 199, credits: 2000, visitors: "200,000", campaigns: 50, features: ["50 campaigns", "200,000 visitors/mo", "Full analytics", "White-label embed", "Dedicated support"] },
+        { id: "free", name: "Free", price: 0, betaPrice: 0, credits: 0, features: ["BYOK — use your own AI keys", "Unlimited campaigns", "Behavioral tracking", "Analytics dashboard"] },
+        { id: "pro", name: "Pro", price: 47, betaPrice: 23.50, credits: 500, features: ["Brain access", "500 AI credits", "Daily observations", "Brain Chat", "All page sections"] },
+        { id: "business", name: "Business", price: 97, betaPrice: 48.50, credits: 1200, features: ["1,200 AI credits", "Multi-seat access", "Advanced analytics", "Custom webhooks"] },
+        { id: "autopilot", name: "Autopilot", price: 299, betaPrice: 149.50, credits: 3000, features: ["3,000 AI credits", "Autonomous optimization", "AI-driven winner promotion", "Unlimited concurrent tests"] },
       ],
     });
   });

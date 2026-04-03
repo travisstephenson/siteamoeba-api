@@ -15,6 +15,7 @@ const NEW_PLANS = [
     id: "free",
     name: "Free",
     price: 0,
+    betaPrice: 0,
     icon: Zap,
     tagline: "BYOK — bring your own AI key",
     highlight: false,
@@ -26,25 +27,25 @@ const NEW_PLANS = [
       "AI variant generation (your key)",
       "Analytics dashboard",
       "Embed widget & conversion pixel",
-      "1 concurrent test",
+      "Behavioral tracking",
     ],
   },
   {
     id: "pro",
     name: "Pro",
     price: 47,
+    betaPrice: 23.50,
     icon: Brain,
     tagline: "Brain-powered testing",
     highlight: false,
-    badge: null as string | null,
+    badge: "Beta — 50% off" as string | null,
     features: [
       "Everything in Free",
       "Brain access — AI trained on real tests",
-      "500 AI credits for generation & analysis",
+      "500 AI credits/month",
       "All page sections (CTAs, social proof, body copy)",
       "Brain Chat for guided optimization",
-      "Unlimited visitor tracking",
-      "Priority email support",
+      "Daily observations",
       "3 concurrent tests",
     ],
   },
@@ -52,16 +53,16 @@ const NEW_PLANS = [
     id: "business",
     name: "Business",
     price: 97,
+    betaPrice: 48.50,
     icon: Crown,
     tagline: "Scale your testing program",
     highlight: false,
-    badge: null as string | null,
+    badge: "Beta — 50% off" as string | null,
     features: [
       "Everything in Pro",
-      "1,200 AI credits for generation & analysis",
+      "1,200 AI credits/month",
       "Multi-seat team access",
       "Advanced analytics & CSV exports",
-      "Priority support & onboarding",
       "Custom webhook integrations",
       "5 concurrent tests",
     ],
@@ -70,17 +71,17 @@ const NEW_PLANS = [
     id: "autopilot",
     name: "Autopilot",
     price: 299,
+    betaPrice: 149.50,
     icon: Rocket,
     tagline: "Full autonomous optimization",
     highlight: true,
-    badge: "Most Popular",
+    badge: "Most Popular — 50% off",
     features: [
       "Everything in Business",
-      "3,000 AI credits for generation & analysis",
+      "3,000 AI credits/month",
       "Autonomous page optimization — no manual work",
       "Continuous multi-section testing",
       "AI-driven winner promotion",
-      "Dedicated success manager",
       "Unlimited concurrent tests",
     ],
   },
@@ -260,10 +261,20 @@ export default function BillingPage() {
                           </div>
                           <CardDescription className="text-xs">{plan.tagline}</CardDescription>
                           <div className="mt-1">
-                            <span className="text-xl font-bold tabular-nums">
-                              ${plan.price}
-                              <span className="text-xs font-normal text-muted-foreground">/mo</span>
-                            </span>
+                            {plan.betaPrice > 0 ? (
+                              <div>
+                                <span className="text-xl font-bold tabular-nums">
+                                  ${plan.betaPrice}
+                                  <span className="text-xs font-normal text-muted-foreground">/mo</span>
+                                </span>
+                                <span className="text-xs text-muted-foreground line-through ml-2">${plan.price}/mo</span>
+                              </div>
+                            ) : (
+                              <span className="text-xl font-bold tabular-nums">
+                                ${plan.price}
+                                <span className="text-xs font-normal text-muted-foreground">/mo</span>
+                              </span>
+                            )}
                           </div>
                         </CardHeader>
                         <CardContent className="space-y-3">
@@ -311,10 +322,13 @@ export default function BillingPage() {
                           {plan.price === 0 ? (
                             <span className="text-xl font-bold">Free</span>
                           ) : (
-                            <span className="text-xl font-bold tabular-nums">
-                              ${plan.price}
-                              <span className="text-xs font-normal text-muted-foreground">/mo</span>
-                            </span>
+                            <div>
+                              <span className="text-xl font-bold tabular-nums">
+                                ${plan.betaPrice}
+                                <span className="text-xs font-normal text-muted-foreground">/mo</span>
+                              </span>
+                              <span className="text-xs text-muted-foreground line-through ml-2">${plan.price}/mo</span>
+                            </div>
                           )}
                         </div>
                       </CardHeader>
