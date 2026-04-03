@@ -507,6 +507,7 @@ export async function registerRoutes(server: Server, app: Express) {
       type: v.type,
       isControl: v.isControl,
       isActive: v.isActive,
+      testSectionId: v.testSectionId,
       visitors: v.impressions,
       conversions: v.conversions,
       conversionRate: v.conversionRate * 100,
@@ -794,7 +795,7 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(400).json({ error: "Please configure your AI provider in Settings" });
     }
 
-    const { campaignId, type } = req.body;
+    const { campaignId, type, sectionId } = req.body;
     if (!campaignId || !type) {
       return res.status(400).json({ error: "campaignId and type are required" });
     }
@@ -843,9 +844,11 @@ export async function registerRoutes(server: Server, app: Express) {
       model: user.llmModel || undefined,
     };
 
-    // Get test section info for context if available
+    // Get test section info for context — use sectionId if provided (precise), otherwise fall back to first match
     const testSections = await storage.getTestSectionsByCampaign(campaign.id);
-    const matchingSection = testSections.find(s => s.category === type);
+    const matchingSection = sectionId
+      ? testSections.find(s => s.id === parseInt(sectionId))
+      : testSections.find(s => s.category === type);
     if (matchingSection) {
       context.controlText = matchingSection.currentText || undefined;
       context.sectionLabel = matchingSection.label;

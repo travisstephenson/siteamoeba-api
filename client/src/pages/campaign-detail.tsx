@@ -105,6 +105,7 @@ interface VariantStats {
   type: string;
   isControl: boolean;
   isActive: boolean;
+  testSectionId?: number | null;
   visitors: number;
   conversions: number;
   conversionRate: number;
@@ -900,11 +901,13 @@ function AutopilotPromoCard() {
 function AIVariantGenerator({
   campaignId,
   type,
+  sectionId,
   onAdded,
   userPlan,
 }: {
   campaignId: number;
   type: string;
+  sectionId?: number;
   onAdded: () => void;
   userPlan: string;
 }) {
@@ -918,6 +921,7 @@ function AIVariantGenerator({
       const res = await apiRequest("POST", "/api/ai/generate-variants", {
         campaignId,
         type,
+        sectionId,
       });
       if (!res.ok) {
         const err = await res.json();
@@ -947,6 +951,7 @@ function AIVariantGenerator({
         isActive: true,
         campaignId,
         persuasionTags: [variant.strategy],
+        testSectionId: sectionId || null,
       });
       if (!res.ok) {
         const err = await res.json();
@@ -1205,11 +1210,13 @@ function ManualAddVariantForm({
 function AddVariantForm({
   campaignId,
   type,
+  sectionId,
   onAdded,
   userPlan,
 }: {
   campaignId: number;
   type: string;
+  sectionId?: number;
   onAdded: () => void;
   userPlan: string;
 }) {
@@ -1217,6 +1224,7 @@ function AddVariantForm({
     <AIVariantGenerator
       campaignId={campaignId}
       type={type}
+      sectionId={sectionId}
       onAdded={onAdded}
       userPlan={userPlan}
     />
@@ -2509,6 +2517,7 @@ function TestSectionCard({
   campaignId,
   campaignUrl,
   variants,
+  allSections,
   statsLoading,
   userPlan,
 }: {
@@ -2516,6 +2525,7 @@ function TestSectionCard({
   campaignId: number;
   campaignUrl: string;
   variants: VariantStats[];
+  allSections?: TestSection[];
   statsLoading: boolean;
   userPlan: string;
 }) {
@@ -2526,8 +2536,18 @@ function TestSectionCard({
   const CatIcon = catConfig.icon;
   const MethodIcon = methodConfig.icon;
 
+  // Filter variants by test_section_id when available, fall back to type-based matching
   const sectionVariants = variants
-    .filter((v) => v.type === section.category)
+    .filter((v) => {
+      // If variant has a testSectionId, match by section ID (precise)
+      if (v.testSectionId) return v.testSectionId === section.id;
+      // Fall back to type-based match for legacy variants without testSectionId
+      // But only if there's exactly one section of this type (no ambiguity)
+      const sameCategorySections = allSections?.filter(s => s.category === section.category) || [];
+      if (sameCategorySections.length <= 1) return v.type === section.category;
+      // Multiple sections of same type and no testSectionId — don't show (ambiguous)
+      return false;
+    })
     .sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
 
   const controlVariant = sectionVariants.find((v) => v.isControl);
@@ -2696,6 +2716,7 @@ function TestSectionCard({
             <AddVariantForm
               campaignId={campaignId}
               type={section.category}
+              sectionId={section.id}
               userPlan={userPlan}
               onAdded={() =>
                 queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] })
@@ -3624,6 +3645,7 @@ export default function CampaignDetailPage() {
                 campaignId={campaignId}
                 campaignUrl={campaign.url}
                 variants={variants}
+                allSections={testSections}
                 statsLoading={statsLoading}
                 userPlan={userPlan}
               />

@@ -34,6 +34,7 @@ export interface VariantStats {
   text: string;
   isControl: boolean;
   isActive: boolean;
+  testSectionId: number | null;
   impressions: number;
   conversions: number;
   conversionRate: number;
@@ -661,6 +662,7 @@ class StorageImpl implements IStorage {
         text: v.text,
         isControl: v.isControl,
         isActive: v.isActive,
+        testSectionId: v.testSectionId ?? null,
         impressions: imp,
         conversions: conv,
         conversionRate: cr,
