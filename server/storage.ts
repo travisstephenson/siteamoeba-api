@@ -160,6 +160,7 @@ export interface IStorage {
     converted?: boolean;
   }): Promise<void>;
   getSessionsByCampaign(campaignId: number): Promise<VisitorSession[]>;
+  getVisitorFeed(campaignId: number, limit?: number): Promise<any[]>;
   getSessionStats(campaignId: number): Promise<{
     avgScrollDepth: number;
     avgTimeOnPage: number;
@@ -543,7 +544,17 @@ class StorageImpl implements IStorage {
   }
 
   async deleteVariant(id: number): Promise<void> {
-    await db.delete(variants).where(eq(variants.id, id));
+    // Check if any visitors reference this variant — if so, soft-delete (deactivate) instead of hard delete
+    const hasVisitors = await pool.query(
+      'SELECT 1 FROM visitors WHERE headline_variant_id = $1 OR subheadline_variant_id = $1 LIMIT 1',
+      [id]
+    );
+    if (hasVisitors.rows.length > 0) {
+      // Soft delete: deactivate and mark as not control so it doesn't appear in active tests
+      await db.update(variants).set({ isActive: false, isControl: false } as any).where(eq(variants.id, id));
+    } else {
+      await db.delete(variants).where(eq(variants.id, id));
+    }
   }
 
   // ===== Test Sections =====
@@ -726,16 +737,17 @@ class StorageImpl implements IStorage {
     const results: CampaignWithStats[] = [];
 
     for (const campaign of userCampaigns) {
+      // Only count visitors whose headline variant still exists in DB (excludes orphaned references)
       const visResult = await pool.query(
-        "SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1",
+        "SELECT COUNT(*) as count FROM visitors v INNER JOIN variants var ON var.id = v.headline_variant_id WHERE v.campaign_id = $1",
         [campaign.id]
       );
       const convResult = await pool.query(
-        "SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1 AND converted = true",
+        "SELECT COUNT(*) as count FROM visitors v INNER JOIN variants var ON var.id = v.headline_variant_id WHERE v.campaign_id = $1 AND v.converted = true",
         [campaign.id]
       );
       const revResult = await pool.query(
-        "SELECT COALESCE(SUM(revenue), 0) as total FROM visitors WHERE campaign_id = $1 AND converted = true",
+        "SELECT COALESCE(SUM(v.revenue), 0) as total FROM visitors v INNER JOIN variants var ON var.id = v.headline_variant_id WHERE v.campaign_id = $1 AND v.converted = true",
         [campaign.id]
       );
       const varResult = await pool.query(
@@ -927,6 +939,47 @@ class StorageImpl implements IStorage {
   async getSessionsByCampaign(campaignId: number): Promise<VisitorSession[]> {
     const rows = await db.select().from(visitorSessions).where(eq(visitorSessions.campaignId, campaignId));
     return rows;
+  }
+
+  async getVisitorFeed(campaignId: number, limit: number = 20): Promise<any[]> {
+    const result = await pool.query(
+      `SELECT
+        vs.visitor_id,
+        vs.device_type,
+        vs.max_scroll_depth,
+        vs.time_on_page,
+        vs.click_count,
+        vs.sections_viewed,
+        vs.video_played,
+        vs.converted,
+        vs.created_at,
+        v.converted_at,
+        v.revenue,
+        var.text as headline_variant,
+        var.is_control
+       FROM visitor_sessions vs
+       LEFT JOIN visitors v ON v.id = vs.visitor_id AND v.campaign_id = vs.campaign_id
+       LEFT JOIN variants var ON var.id = v.headline_variant_id
+       WHERE vs.campaign_id = $1
+       ORDER BY vs.created_at DESC
+       LIMIT $2`,
+      [campaignId, limit]
+    );
+    return result.rows.map((r: any) => ({
+      visitorId: r.visitor_id,
+      device: r.device_type || "desktop",
+      maxScrollDepth: parseInt(r.max_scroll_depth) || 0,
+      timeOnPage: parseInt(r.time_on_page) || 0,
+      clickCount: parseInt(r.click_count) || 0,
+      sectionsViewed: r.sections_viewed ? (() => { try { return JSON.parse(r.sections_viewed); } catch { return []; } })() : [],
+      videoPlayed: r.video_played || false,
+      converted: r.converted || false,
+      convertedAt: r.converted_at || null,
+      revenue: r.revenue ? parseFloat(r.revenue) : 0,
+      createdAt: r.created_at,
+      headlineVariant: r.headline_variant || null,
+      isControl: r.is_control || false,
+    }));
   }
 
   async getSessionStats(campaignId: number): Promise<{

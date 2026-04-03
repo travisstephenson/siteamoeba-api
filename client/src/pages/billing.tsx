@@ -137,10 +137,12 @@ export default function BillingPage() {
 
   const currentPlan = user?.plan ?? "free";
   const creditsUsed = user?.creditsUsed ?? 0;
-  const creditsLimit = user?.creditsLimit ?? 10;
+  const creditsLimit = user?.creditsLimit ?? 0;
   const creditsPct = creditsLimit > 0 ? Math.min(100, (creditsUsed / creditsLimit) * 100) : 0;
-  const visitorsUsed = creditsUsed * 100;
-  const visitorsLimit = creditsLimit * 100;
+  const creditsRemaining = Math.max(creditsLimit - creditsUsed, 0);
+  const isLow = creditsLimit > 0 && creditsPct >= 80;
+  const isExhausted = creditsLimit > 0 && creditsPct >= 100;
+  const isFree = currentPlan === "free";
 
   return (
     <div className="flex flex-col h-full">
@@ -183,25 +185,50 @@ export default function BillingPage() {
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div>
-              <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
-                <span>Visitor credits used</span>
-                <span className="tabular-nums" data-testid="text-credits-usage">
-                  {visitorsUsed.toLocaleString()} / {visitorsLimit.toLocaleString()} visitors
-                </span>
+            {isFree ? (
+              <div className="rounded-lg border border-border bg-muted/30 p-3">
+                <div className="flex items-center gap-2 mb-1">
+                  <Zap className="w-4 h-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">BYOK Mode</span>
+                </div>
+                <p className="text-xs text-muted-foreground">You're using your own AI API keys — unlimited usage at no cost. Upgrade to access the Brain and get AI credits for generation and analysis.</p>
               </div>
-              <Progress
-                value={creditsPct}
-                className="h-2"
-                data-testid="progress-credits"
-              />
-              {creditsPct >= 90 && (
-                <p className="text-xs text-destructive mt-1.5 flex items-center gap-1">
-                  <Zap className="w-3 h-3" />
-                  You're close to your limit. Upgrade to avoid interruptions.
-                </p>
-              )}
-            </div>
+            ) : (
+              <div className="space-y-3">
+                <div>
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <span className="text-muted-foreground font-medium">AI Credits</span>
+                    <span className={`tabular-nums font-bold ${isExhausted ? 'text-destructive' : isLow ? 'text-amber-500' : 'text-foreground'}`} data-testid="text-credits-usage">
+                      {creditsUsed.toLocaleString()} / {creditsLimit.toLocaleString()} used
+                    </span>
+                  </div>
+                  <Progress
+                    value={creditsPct}
+                    className={`h-2.5 ${isExhausted ? '[&>div]:bg-destructive' : isLow ? '[&>div]:bg-amber-500' : ''}`}
+                    data-testid="progress-credits"
+                  />
+                  <div className="flex items-center justify-between mt-1.5">
+                    <span className="text-xs text-muted-foreground">{creditsRemaining.toLocaleString()} credits remaining</span>
+                    <span className="text-xs text-muted-foreground">Resets monthly</span>
+                  </div>
+                </div>
+                {isExhausted && (
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 flex items-start gap-2">
+                    <Zap className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-xs font-medium text-destructive">Credits exhausted</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">AI generation and observations are paused. Upgrade your plan to continue.</p>
+                    </div>
+                  </div>
+                )}
+                {isLow && !isExhausted && (
+                  <p className="text-xs text-amber-500 flex items-center gap-1">
+                    <Zap className="w-3 h-3" />
+                    Running low on credits. Consider upgrading for more.
+                  </p>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-4 text-xs">
               <div>
                 <div className="text-muted-foreground">Credits used</div>

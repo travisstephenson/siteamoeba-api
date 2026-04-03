@@ -493,9 +493,11 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(404).json({ error: "Campaign not found" });
     }
     const variantStats = await storage.getVariantStats(campaign.id);
-    const totalVisitors = await storage.getVisitorCountByCampaign(campaign.id);
-    const totalConversions = variantStats.reduce((sum, v) => sum + (v.type === "headline" ? v.conversions : 0), 0) || 0;
-    const totalRevenue = variantStats.reduce((sum, v) => sum + (v.type === "headline" ? v.revenue : 0), 0) || 0;
+    // Calculate totals from headline variants only (primary split dimension)
+    const headlineStats = variantStats.filter(v => v.type === "headline");
+    const totalVisitors = headlineStats.reduce((sum, v) => sum + v.impressions, 0);
+    const totalConversions = headlineStats.reduce((sum, v) => sum + v.conversions, 0);
+    const totalRevenue = headlineStats.reduce((sum, v) => sum + v.revenue, 0);
     const conversionRate = totalVisitors > 0 ? totalConversions / totalVisitors : 0;
 
     // Map to the shape the frontend expects
@@ -1825,7 +1827,7 @@ export async function registerRoutes(server: Server, app: Express) {
       user = (await storage.updateUser(user.id, { referralCode: code })) || user;
     }
 
-    const referralLink = `https://app.siteamoeba.com/register?ref=${user.referralCode}`;
+    const referralLink = `https://siteamoeba.com/?ref=${user.referralCode}`;
     res.json({ referralCode: user.referralCode, referralLink });
   });
 
@@ -1872,13 +1874,25 @@ export async function registerRoutes(server: Server, app: Express) {
       })
     );
 
-    const referralLink = `https://app.siteamoeba.com/register?ref=${user.referralCode}`;
+    const referralLink = `https://siteamoeba.com/?ref=${user.referralCode}`;
     res.json({
       referralCode: user.referralCode,
       referralLink,
       ...stats,
       referrals: enrichedReferrals,
     });
+  });
+
+  // GET /api/campaigns/:id/visitor-feed — live visitor feed for campaign dashboard
+  app.get("/api/campaigns/:id/visitor-feed", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const feed = await storage.getVisitorFeed(campaignId, 20);
+    res.json(feed);
   });
 }
 

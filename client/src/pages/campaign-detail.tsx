@@ -1876,6 +1876,177 @@ function generateEmbedCodeClient(apiBase: string, campaignId: number, headlineSe
   return lines.join("\n");
 }
 
+// ---- Visitor Feed Panel ----
+interface VisitorFeedEntry {
+  visitorId: string;
+  device: string;
+  maxScrollDepth: number;
+  timeOnPage: number;
+  clickCount: number;
+  sectionsViewed: string[];
+  videoPlayed: boolean;
+  converted: boolean;
+  convertedAt: string | null;
+  revenue: number;
+  createdAt: string;
+  headlineVariant: string | null;
+  isControl: boolean;
+}
+
+const ALL_SECTIONS = ["hero", "social_proof", "features", "pricing", "cta", "faq", "testimonials"];
+
+function VisitorFeedPanel({ campaignId }: { campaignId: number }) {
+  const [expanded, setExpanded] = useState(true);
+
+  const { data: feed = [], isLoading } = useQuery<VisitorFeedEntry[]>({
+    queryKey: [`/api/campaigns/${campaignId}/visitor-feed`],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/campaigns/${campaignId}/visitor-feed`);
+      return res.json();
+    },
+    refetchInterval: 30000,
+  });
+
+  const buyers = feed.filter((v) => v.converted);
+  const nonBuyers = feed.filter((v) => !v.converted);
+  const avgBuyerScroll = buyers.length > 0
+    ? Math.round(buyers.reduce((s, v) => s + v.maxScrollDepth, 0) / buyers.length)
+    : 0;
+  const avgVisitorScroll = nonBuyers.length > 0
+    ? Math.round(nonBuyers.reduce((s, v) => s + v.maxScrollDepth, 0) / nonBuyers.length)
+    : 0;
+
+  // Find top engaged section
+  const sectionCounts: Record<string, number> = {};
+  for (const v of buyers) {
+    for (const s of v.sectionsViewed) {
+      sectionCounts[s] = (sectionCounts[s] || 0) + 1;
+    }
+  }
+  const topSection = Object.entries(sectionCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "hero";
+
+  return (
+    <Card data-testid="visitor-feed-panel">
+      <CardHeader
+        className="pb-3 cursor-pointer select-none"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
+          </span>
+          Live Visitor Feed
+          <Badge variant="secondary" className="text-xs ml-auto">
+            {feed.length} recent
+          </Badge>
+          {expanded ? (
+            <ChevronUp className="w-4 h-4 text-muted-foreground" />
+          ) : (
+            <ChevronDown className="w-4 h-4 text-muted-foreground" />
+          )}
+        </CardTitle>
+      </CardHeader>
+
+      {expanded && (
+        <CardContent className="pt-0">
+          {isLoading ? (
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <Skeleton key={i} className="h-24 w-full" />
+              ))}
+            </div>
+          ) : feed.length === 0 ? (
+            <p className="text-xs text-muted-foreground text-center py-6">
+              No visitor sessions yet. Data will appear once visitors interact with your page.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {feed.map((v, i) => (
+                <div
+                  key={v.visitorId + "-" + i}
+                  className="rounded-lg border p-3 space-y-2"
+                  data-testid={`visitor-row-${i}`}
+                >
+                  {/* Top row: avatar + label + status */}
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0 ${
+                        v.converted
+                          ? "bg-gradient-to-br from-teal-400 to-teal-600"
+                          : "bg-gray-400"
+                      }`}
+                    >
+                      {v.converted ? "B" : "V"}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="text-sm font-medium">
+                        {v.converted ? "Buyer" : "Visitor"}
+                      </span>
+                      {v.converted ? (
+                        <Badge variant="default" className="ml-2 text-[10px] bg-green-600 hover:bg-green-600">
+                          ✓ Converted{v.revenue > 0 ? ` · $${v.revenue}` : ""}
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary" className="ml-2 text-[10px]">
+                          Browsing
+                        </Badge>
+                      )}
+                    </div>
+                    <Badge variant="outline" className="text-[10px] capitalize">
+                      {v.device}
+                    </Badge>
+                  </div>
+
+                  {/* Metrics row */}
+                  <div className="flex gap-4 text-xs text-muted-foreground">
+                    <span title="Scroll depth">↕ {v.maxScrollDepth}%</span>
+                    <span title="Time on page">⏱ {v.timeOnPage}s</span>
+                    <span title="Clicks">🖱 {v.clickCount} clicks</span>
+                  </div>
+
+                  {/* Section pills */}
+                  <div className="flex flex-wrap gap-1">
+                    {ALL_SECTIONS.map((section) => {
+                      const viewed = v.sectionsViewed.includes(section);
+                      return (
+                        <span
+                          key={section}
+                          className={`text-[10px] px-1.5 py-0.5 rounded ${
+                            viewed
+                              ? "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300"
+                              : "bg-gray-100 text-gray-400 dark:bg-gray-800/50 dark:text-gray-500"
+                          }`}
+                        >
+                          {section.replace(/_/g, " ")}
+                        </span>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+
+              {/* Brain Insight summary */}
+              {feed.length > 0 && (
+                <div className="mt-3 p-3 rounded-lg bg-gradient-to-r from-teal-50 to-emerald-50 dark:from-teal-950/20 dark:to-emerald-950/20 border border-teal-200 dark:border-teal-800">
+                  <div className="flex items-start gap-2">
+                    <Brain className="w-4 h-4 text-teal-600 mt-0.5 shrink-0" />
+                    <p className="text-xs text-teal-800 dark:text-teal-200">
+                      <span className="font-semibold">Brain Insight:</span>{" "}
+                      Buyers average {avgBuyerScroll}% scroll depth vs {avgVisitorScroll}% for non-buyers.
+                      Top engaged section: <span className="font-medium">{topSection.replace(/_/g, " ")}</span>.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
 function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector }: { campaignId: number; headlineSelector: string; subheadlineSelector: string }) {
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedInline, setCopiedInline] = useState(false);
@@ -3483,6 +3654,9 @@ export default function CampaignDetailPage() {
             />
           </>
         )}
+
+        {/* Live Visitor Feed */}
+        <VisitorFeedPanel campaignId={campaignId} />
 
         {/* Embed code */}
         <EmbedCodeSection campaignId={campaignId} headlineSelector={campaign?.headlineSelector || "h1"} subheadlineSelector={campaign?.subheadlineSelector || "h2"} />

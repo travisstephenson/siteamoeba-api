@@ -14,6 +14,7 @@ import {
   ChevronRight,
   MessageSquarePlus,
   Gift,
+  Zap,
 } from "lucide-react";
 import {
   Sidebar,
@@ -91,6 +92,67 @@ function SiteAmoebaLogo() {
       <span className="font-semibold text-sm tracking-tight text-foreground">
         SiteAmoeba
       </span>
+    </div>
+  );
+}
+
+// ---- Credit Usage Widget (sidebar) ----
+function CreditUsageWidget({ user }: { user: { plan: string; creditsUsed: number; creditsLimit: number } }) {
+  const isFree = user.plan === "free";
+  const used = user.creditsUsed || 0;
+  const limit = user.creditsLimit || 0;
+  const pct = limit > 0 ? Math.min((used / limit) * 100, 100) : 0;
+  const remaining = Math.max(limit - used, 0);
+  const isLow = limit > 0 && pct >= 80;
+  const isExhausted = limit > 0 && pct >= 100;
+
+  if (isFree) {
+    // Free users use BYOK — no credit meter needed
+    return (
+      <div className="mx-3 mb-1 px-3 py-2 rounded-lg bg-muted/40 border border-border/50" data-testid="widget-usage-free">
+        <div className="flex items-center gap-1.5 mb-0.5">
+          <Zap className="w-3 h-3 text-muted-foreground" />
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">BYOK Mode</span>
+        </div>
+        <p className="text-[11px] text-muted-foreground leading-snug">Using your own AI keys — unlimited.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-3 mb-1 px-3 py-2 rounded-lg bg-muted/40 border border-border/50" data-testid="widget-usage-credits">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1">
+          <Zap className="w-3 h-3" />
+          AI Credits
+        </span>
+        <span className={`text-[11px] font-bold tabular-nums ${isExhausted ? 'text-destructive' : isLow ? 'text-amber-500' : 'text-foreground'}`}>
+          {used.toLocaleString()} / {limit.toLocaleString()}
+        </span>
+      </div>
+      <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${isExhausted ? 'bg-destructive' : isLow ? 'bg-amber-500' : 'bg-primary'}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      {isLow && (
+        <div className="mt-1.5">
+          {isExhausted ? (
+            <Link href="/billing">
+              <Button size="sm" variant="destructive" className="h-5 text-[10px] w-full" data-testid="button-credits-upgrade">
+                Credits exhausted — Upgrade
+              </Button>
+            </Link>
+          ) : (
+            <p className="text-[10px] text-amber-500 font-medium">
+              {remaining.toLocaleString()} credits remaining
+              {' · '}
+              <Link href="/billing" className="underline">Upgrade</Link>
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -371,9 +433,10 @@ export function AppSidebar() {
 
       <SidebarSeparator />
 
-      {/* Brain promo — above footer nav */}
-      {isAuthenticated && (
-        <div className="pt-3">
+      {/* Credit usage + Brain promo — above footer nav */}
+      {isAuthenticated && user && (
+        <div className="pt-3 space-y-1">
+          <CreditUsageWidget user={user as any} />
           <BrainPromoCard plan={user?.plan ?? "free"} />
         </div>
       )}

@@ -37,19 +37,15 @@ interface ReferralStats {
 
 const PLAN_LABELS: Record<string, string> = {
   free: "Free",
-  starter: "Starter",
   pro: "Pro",
-  growth: "Growth",
-  scale: "Scale",
+  business: "Business",
   autopilot: "Autopilot",
 };
 
 const PLAN_COLORS: Record<string, string> = {
   free: "secondary",
-  starter: "outline",
   pro: "default",
-  growth: "default",
-  scale: "default",
+  business: "default",
   autopilot: "default",
 };
 
