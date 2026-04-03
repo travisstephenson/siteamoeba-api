@@ -1,0 +1,730 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SiteAmoeba — Site Intelligence And Performance Improvement Engine</title>
+  <meta name="description" content="SiteAmoeba's AI Brain generates high-converting page variants grounded in proven psychology and learns from every test across the platform. Your pages improve while you sleep.">
+  <meta property="og:title" content="SiteAmoeba — AI-Powered Conversion Optimization">
+  <meta property="og:description" content="Stop guessing. Start knowing what converts. SiteAmoeba's AI Brain scans your page, generates variants, and continuously learns from thousands of tests.">
+  <link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800&f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+  <!-- ========== NAV ========== -->
+  <header class="nav" id="nav">
+    <div class="nav__inner container">
+      <a href="#" class="nav__logo" aria-label="SiteAmoeba home">
+        <svg class="nav__logo-icon" width="32" height="32" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+          <circle cx="20" cy="20" r="14" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>
+          <circle cx="20" cy="20" r="5" fill="url(#logoGrad)"/>
+          <circle cx="12" cy="12" r="3" fill="url(#logoGrad)" opacity="0.7"/>
+          <circle cx="29" cy="13" r="2.5" fill="url(#logoGrad)" opacity="0.6"/>
+          <circle cx="28" cy="28" r="2" fill="url(#logoGrad)" opacity="0.5"/>
+          <circle cx="10" cy="26" r="2.5" fill="url(#logoGrad)" opacity="0.55"/>
+          <line x1="20" y1="20" x2="12" y2="12" stroke="url(#logoGrad)" stroke-width="1" opacity="0.4"/>
+          <line x1="20" y1="20" x2="29" y2="13" stroke="url(#logoGrad)" stroke-width="1" opacity="0.4"/>
+          <line x1="20" y1="20" x2="28" y2="28" stroke="url(#logoGrad)" stroke-width="1" opacity="0.4"/>
+          <line x1="20" y1="20" x2="10" y2="26" stroke="url(#logoGrad)" stroke-width="1" opacity="0.4"/>
+          <circle cx="20" cy="20" r="18" stroke="currentColor" stroke-width="0.75" stroke-dasharray="3 4" opacity="0.15"/>
+          <defs>
+            <linearGradient id="logoGrad" x1="0" y1="0" x2="40" y2="40">
+              <stop offset="0%" stop-color="#0EA5E9"/>
+              <stop offset="100%" stop-color="#10B981"/>
+            </linearGradient>
+          </defs>
+        </svg>
+        <span class="nav__logo-text">SiteAmoeba</span>
+      </a>
+      <nav class="nav__links" id="navLinks" aria-label="Main navigation">
+        <a href="#features" class="nav__link">Features</a>
+        <a href="#autopilot" class="nav__link">Autopilot</a>
+        <a href="#pricing" class="nav__link">Pricing</a>
+        <a href="#faq" class="nav__link">FAQ</a>
+        <div class="nav__dropdown">
+          <button class="nav__link nav__dropdown-trigger" aria-expanded="false" aria-haspopup="true">
+            Enterprise
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M3 5l3 3 3-3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="nav__dropdown-menu">
+            <a href="#enterprise" class="nav__dropdown-item">Enterprise Plans</a>
+            <a href="mailto:stephenson.travis@gmail.com" class="nav__dropdown-item" target="_blank" rel="noopener noreferrer">Contact Sales</a>
+          </div>
+        </div>
+      </nav>
+      <div class="nav__actions">
+        <a href="https://app.siteamoeba.com" class="btn btn--primary btn--sm" target="_blank" rel="noopener noreferrer">Start Free</a>
+        <button class="nav__hamburger" id="navHamburger" aria-label="Toggle menu" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- ========== HERO (Dark) ========== -->
+    <section class="hero" id="hero">
+      <!-- Noise texture overlay -->
+      <div class="noise-overlay"></div>
+      <!-- Aurora glow -->
+      <div class="hero__aurora"></div>
+
+      <div class="hero__inner container">
+        <div class="hero__content">
+          <div class="hero__testing-label">
+            <span class="hero__pulse"></span>
+            This headline is testing itself right now
+          </div>
+          <div class="hero__headline-wrapper">
+            <h1 class="hero__headline" id="heroHeadline">
+              The AI that turns your pages into<br>
+              <span class="hero__typed-wrapper"><span class="hero__typed" id="heroTyped">conversion machines</span><span class="hero__cursor">|</span></span>
+            </h1>
+          </div>
+          <p class="hero__sub">SiteAmoeba's AI Brain scans your page, generates high-converting variants grounded in proven psychology, and continuously learns from every test running across the platform — so your pages improve while you sleep.</p>
+          <div class="hero__ctas">
+            <a href="https://app.siteamoeba.com" class="btn btn--primary btn--lg" target="_blank" rel="noopener noreferrer">Start Free</a>
+            <a href="#how-it-works" class="btn btn--ghost btn--lg">See How It Works</a>
+          </div>
+        </div>
+
+        <!-- Dashboard mockup BELOW headline, centered -->
+        <div class="hero__visual">
+          <div class="hero__dashboard-wrapper">
+            <div class="hero__dashboard">
+              <svg viewBox="0 0 960 540" fill="none" class="hero__dashboard-svg" aria-label="SiteAmoeba dashboard showing active campaign with variant performance data">
+                <!-- Window chrome -->
+                <rect x="0" y="0" width="960" height="540" rx="12" fill="#0f172a" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+                <rect x="0" y="0" width="960" height="40" rx="12" fill="#1e293b"/>
+                <rect x="0" y="28" width="960" height="12" fill="#1e293b"/>
+                <circle cx="20" cy="20" r="5" fill="#ff5f57"/>
+                <circle cx="38" cy="20" r="5" fill="#ffbd2e"/>
+                <circle cx="56" cy="20" r="5" fill="#28c840"/>
+                <text x="480" y="25" text-anchor="middle" font-size="12" fill="rgba(255,255,255,0.5)" font-family="General Sans, sans-serif">SiteAmoeba — Campaign Dashboard</text>
+                
+                <!-- Sidebar -->
+                <rect x="0" y="40" width="200" height="500" fill="#1e293b" opacity="0.5"/>
+                <rect x="16" y="60" width="168" height="10" rx="5" fill="rgba(255,255,255,0.06)"/>
+                <rect x="16" y="84" width="168" height="36" rx="8" fill="rgba(14,165,233,0.12)"/>
+                <text x="32" y="106" font-size="13" fill="#0EA5E9" font-family="General Sans, sans-serif" font-weight="600">Campaigns</text>
+                <rect x="16" y="132" width="168" height="36" rx="8" fill="transparent"/>
+                <text x="32" y="154" font-size="13" fill="rgba(255,255,255,0.4)" font-family="General Sans, sans-serif">Analytics</text>
+                <rect x="16" y="180" width="168" height="36" rx="8" fill="transparent"/>
+                <text x="32" y="202" font-size="13" fill="rgba(255,255,255,0.4)" font-family="General Sans, sans-serif">Brain Chat</text>
+                <rect x="16" y="228" width="168" height="36" rx="8" fill="transparent"/>
+                <text x="32" y="250" font-size="13" fill="rgba(255,255,255,0.4)" font-family="General Sans, sans-serif">Settings</text>
+
+                <!-- Main content area -->
+                <text x="228" y="76" font-size="18" fill="rgba(255,255,255,0.95)" font-family="Cabinet Grotesk, sans-serif" font-weight="700">Homepage Hero Test</text>
+                <rect x="420" y="60" width="64" height="24" rx="12" fill="rgba(16,185,129,0.15)"/>
+                <text x="452" y="76" text-anchor="middle" font-size="11" fill="#10B981" font-family="General Sans, sans-serif" font-weight="600">LIVE</text>
+                <circle cx="426" cy="72" r="4" fill="#10B981">
+                  <animate attributeName="opacity" values="1;0.3;1" dur="2s" repeatCount="indefinite"/>
+                </circle>
+
+                <!-- Variant A (Winner) -->
+                <rect x="228" y="100" width="704" height="100" rx="10" fill="rgba(255,255,255,0.03)" stroke="rgba(14,165,233,0.4)" stroke-width="1.5"/>
+                <rect x="860" y="100" width="72" height="24" rx="6" fill="#0EA5E9"/>
+                <text x="896" y="116" text-anchor="middle" font-size="10" fill="white" font-family="General Sans, sans-serif" font-weight="700">WINNER</text>
+                <text x="252" y="128" font-size="14" fill="rgba(255,255,255,0.9)" font-family="General Sans, sans-serif" font-weight="600">Variant A — Original</text>
+                <text x="252" y="150" font-size="12" fill="rgba(255,255,255,0.45)" font-family="General Sans, sans-serif">"Grow your business with AI-powered insights"</text>
+                <text x="252" y="180" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Conv. Rate</text>
+                <text x="340" y="180" font-size="16" fill="#0EA5E9" font-family="General Sans, sans-serif" font-weight="700">4.2%</text>
+                <text x="420" y="180" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Visitors</text>
+                <text x="490" y="180" font-size="16" fill="rgba(255,255,255,0.8)" font-family="General Sans, sans-serif" font-weight="600">1,247</text>
+                <text x="570" y="180" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Confidence</text>
+                <text x="660" y="180" font-size="16" fill="#10B981" font-family="General Sans, sans-serif" font-weight="700">94.3%</text>
+
+                <!-- Variant B -->
+                <rect x="228" y="216" width="704" height="100" rx="10" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+                <text x="252" y="244" font-size="14" fill="rgba(255,255,255,0.9)" font-family="General Sans, sans-serif" font-weight="600">Variant B — Brain Generated</text>
+                <text x="252" y="266" font-size="12" fill="rgba(255,255,255,0.45)" font-family="General Sans, sans-serif">"Stop losing leads. See what's converting — in real time."</text>
+                <text x="252" y="296" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Conv. Rate</text>
+                <text x="340" y="296" font-size="16" fill="rgba(255,255,255,0.7)" font-family="General Sans, sans-serif" font-weight="600">3.1%</text>
+                <text x="420" y="296" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Visitors</text>
+                <text x="490" y="296" font-size="16" fill="rgba(255,255,255,0.7)" font-family="General Sans, sans-serif" font-weight="600">1,253</text>
+                <text x="570" y="296" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Confidence</text>
+                <text x="660" y="296" font-size="14" fill="rgba(255,255,255,0.3)" font-family="General Sans, sans-serif">—</text>
+
+                <!-- Variant C -->
+                <rect x="228" y="332" width="704" height="100" rx="10" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+                <text x="252" y="360" font-size="14" fill="rgba(255,255,255,0.9)" font-family="General Sans, sans-serif" font-weight="600">Variant C — Brain Generated</text>
+                <text x="252" y="382" font-size="12" fill="rgba(255,255,255,0.45)" font-family="General Sans, sans-serif">"The fastest way to turn visitors into paying customers"</text>
+                <text x="252" y="412" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Conv. Rate</text>
+                <text x="340" y="412" font-size="16" fill="rgba(255,255,255,0.7)" font-family="General Sans, sans-serif" font-weight="600">3.8%</text>
+                <text x="420" y="412" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Visitors</text>
+                <text x="490" y="412" font-size="16" fill="rgba(255,255,255,0.7)" font-family="General Sans, sans-serif" font-weight="600">1,198</text>
+                <text x="570" y="412" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Confidence</text>
+                <text x="660" y="412" font-size="14" fill="rgba(255,255,255,0.5)" font-family="General Sans, sans-serif">72.1%</text>
+
+                <!-- Bottom behavioral bar -->
+                <rect x="228" y="452" width="704" height="60" rx="10" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+                <text x="252" y="478" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Avg. Scroll Depth</text>
+                <text x="380" y="478" font-size="13" fill="rgba(255,255,255,0.8)" font-family="General Sans, sans-serif" font-weight="600">68%</text>
+                <text x="440" y="478" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Avg. Time on Page</text>
+                <text x="590" y="478" font-size="13" fill="rgba(255,255,255,0.8)" font-family="General Sans, sans-serif" font-weight="600">2m 14s</text>
+                <text x="680" y="478" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Section Engagement</text>
+                <rect x="810" y="470" width="40" height="6" rx="3" fill="#0EA5E9" opacity="0.7"/>
+                <rect x="856" y="470" width="32" height="6" rx="3" fill="#0EA5E9" opacity="0.5"/>
+                <rect x="894" y="470" width="24" height="6" rx="3" fill="#0EA5E9" opacity="0.3"/>
+                <text x="252" y="498" font-size="11" fill="rgba(255,255,255,0.35)" font-family="General Sans, sans-serif">Top Engaging Section</text>
+                <text x="400" y="498" font-size="13" fill="#10B981" font-family="General Sans, sans-serif" font-weight="600">Testimonials (87% view rate)</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Social proof bar -->
+      <div class="hero__proof">
+        <div class="container hero__proof-inner">
+          <div class="hero__proof-stat">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z" fill="url(#proofGrad1)" opacity="0.15"/>
+              <path d="M12 6c-1.1 0-2 .9-2 2 0 .74.4 1.38 1 1.72V14h2V9.72c.6-.34 1-.98 1-1.72 0-1.1-.9-2-2-2z" fill="url(#proofGrad1)"/>
+              <path d="M8 16c0 2.21 1.79 4 4 4s4-1.79 4-4H8z" fill="url(#proofGrad1)" opacity="0.6"/>
+              <defs><linearGradient id="proofGrad1" x1="2" y1="2" x2="22" y2="22"><stop stop-color="#0EA5E9"/><stop offset="1" stop-color="#10B981"/></linearGradient></defs>
+            </svg>
+            <span class="hero__proof-number" data-target="12847">0</span><span class="hero__proof-plus">+</span>
+            <span class="hero__proof-label">tests created</span>
+          </div>
+          <div class="hero__proof-divider"></div>
+          <div class="hero__proof-stat">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M10 1l2.39 4.84L18 6.71l-4 3.9.94 5.5L10 13.38 5.06 16.1l.94-5.49-4-3.9 5.61-.87L10 1z" fill="#0EA5E9" opacity="0.6"/>
+            </svg>
+            <span class="hero__proof-label">Trusted by conversion-focused teams</span>
+          </div>
+          <div class="hero__proof-divider"></div>
+          <div class="hero__proof-stat">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <rect x="2" y="2" width="16" height="16" rx="3" stroke="#10B981" stroke-width="1.5" fill="none"/>
+              <path d="M6 10l3 3 5-6" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span class="hero__proof-label">Works with any page builder</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== UNDERSTAND YOUR BUYERS (Light) ========== -->
+    <section class="buyers" id="buyers">
+      <div class="container">
+        <div class="buyers__grid">
+          <div class="buyers__content reveal">
+            <span class="section-label">Behavioral Intelligence</span>
+            <h2 class="section-title">Finally understand what makes your visitors <span class="gradient-text">buy</span></h2>
+            <p class="buyers__body">Every visit is tracked in detail — scroll patterns, section engagement, click paths, time-on-page, video views. But here's what makes SiteAmoeba different: we don't just track visitors. We deep-analyze every buyer to learn exactly what they engaged with before converting.</p>
+            <p class="buyers__body">Over time, the system builds a behavioral profile of your ideal buyer — what sections they read, how far they scroll, what they click. Your page starts catering to the behavior patterns that lead to sales.</p>
+            <p class="buyers__highlight">More alignment with buyers = more customers.</p>
+          </div>
+          <div class="buyers__visual reveal">
+            <div class="buyers__live-dashboard">
+              <div class="buyers__dash-header">
+                <span class="buyers__dash-dot buyers__dash-dot--live"></span>
+                <span class="buyers__dash-title">Live Visitor Feed</span>
+              </div>
+              <div class="buyers__dash-row buyers__dash-row--buyer">
+                <div class="buyers__dash-avatar buyers__dash-avatar--buyer">B</div>
+                <div class="buyers__dash-info">
+                  <div class="buyers__dash-label">Buyer <span class="buyers__dash-converted">✓ Converted</span></div>
+                  <div class="buyers__dash-metrics">
+                    <span>Scroll: <strong>100%</strong></span>
+                    <span>Time: <strong>3m 42s</strong></span>
+                    <span>Clicks: <strong>7</strong></span>
+                  </div>
+                  <div class="buyers__dash-sections">
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">Hero</span>
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">Proof</span>
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">Features</span>
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">Pricing</span>
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">CTA</span>
+                  </div>
+                </div>
+              </div>
+              <div class="buyers__dash-row">
+                <div class="buyers__dash-avatar">V</div>
+                <div class="buyers__dash-info">
+                  <div class="buyers__dash-label">Visitor <span class="buyers__dash-bounced">× Bounced</span></div>
+                  <div class="buyers__dash-metrics">
+                    <span>Scroll: <strong>42%</strong></span>
+                    <span>Time: <strong>23s</strong></span>
+                    <span>Clicks: <strong>0</strong></span>
+                  </div>
+                  <div class="buyers__dash-sections">
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">Hero</span>
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">Proof</span>
+                    <span class="buyers__dash-sec">Features</span>
+                    <span class="buyers__dash-sec">Pricing</span>
+                    <span class="buyers__dash-sec">CTA</span>
+                  </div>
+                </div>
+              </div>
+              <div class="buyers__dash-row buyers__dash-row--buyer">
+                <div class="buyers__dash-avatar buyers__dash-avatar--buyer">B</div>
+                <div class="buyers__dash-info">
+                  <div class="buyers__dash-label">Buyer <span class="buyers__dash-converted">✓ Converted</span></div>
+                  <div class="buyers__dash-metrics">
+                    <span>Scroll: <strong>94%</strong></span>
+                    <span>Time: <strong>2m 18s</strong></span>
+                    <span>Clicks: <strong>5</strong></span>
+                  </div>
+                  <div class="buyers__dash-sections">
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">Hero</span>
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">Proof</span>
+                    <span class="buyers__dash-sec">Features</span>
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">Pricing</span>
+                    <span class="buyers__dash-sec buyers__dash-sec--seen">CTA</span>
+                  </div>
+                </div>
+              </div>
+              <div class="buyers__dash-insight">
+                <span class="buyers__dash-insight-icon">🧠</span>
+                <span>Brain insight: Buyers spend <strong>3.8x longer</strong> on Pricing and read <strong>100% of Social Proof</strong> before converting.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== HOW IT WORKS (Light) ========== -->
+    <section class="how" id="how-it-works">
+      <div class="container">
+        <span class="section-label reveal">How It Works</span>
+        <h2 class="section-title reveal">Three steps to <span class="gradient-text">more conversions</span></h2>
+        <div class="how__steps">
+          <div class="how__step reveal">
+            <div class="how__step-icon">
+              <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+                <rect x="8" y="12" width="48" height="36" rx="4" stroke="url(#stepGrad)" stroke-width="2"/>
+                <line x1="8" y1="22" x2="56" y2="22" stroke="url(#stepGrad)" stroke-width="1.5"/>
+                <circle cx="14" cy="17" r="2" fill="#0EA5E9" opacity="0.4"/>
+                <circle cx="20" cy="17" r="2" fill="#0EA5E9" opacity="0.4"/>
+                <circle cx="26" cy="17" r="2" fill="#0EA5E9" opacity="0.4"/>
+                <rect x="14" y="28" width="36" height="4" rx="2" fill="#0EA5E9" opacity="0.2"/>
+                <rect x="14" y="36" width="24" height="4" rx="2" fill="#0EA5E9" opacity="0.15"/>
+                <path d="M44 32l6-4v12l-6-4z" fill="#0EA5E9" opacity="0.5"/>
+                <defs><linearGradient id="stepGrad" x1="0" y1="0" x2="64" y2="64"><stop stop-color="#0EA5E9"/><stop offset="1" stop-color="#10B981"/></linearGradient></defs>
+              </svg>
+            </div>
+            <div class="how__step-number">01</div>
+            <h3 class="how__step-title">Scan</h3>
+            <p class="how__step-desc">Paste your URL. The AI scans your entire page structure — identifying your headline, subheadline, CTAs, social proof, guarantee, pricing, and body copy. It captures your exact fonts, colors, and layout so everything stays on-brand.</p>
+            <div class="how__step-visual">
+              <div class="how__scan-visual">
+                <div class="how__scan-url"><span class="how__scan-icon">🔍</span> yoursite.com/offer</div>
+                <div class="how__scan-sections">
+                  <div class="how__scan-tag" style="--delay:0.1s">Hero Headline</div>
+                  <div class="how__scan-tag" style="--delay:0.2s">Subheadline</div>
+                  <div class="how__scan-tag" style="--delay:0.3s">Primary CTA</div>
+                  <div class="how__scan-tag" style="--delay:0.4s">Social Proof</div>
+                  <div class="how__scan-tag" style="--delay:0.5s">Guarantee</div>
+                  <div class="how__scan-tag" style="--delay:0.6s">Pricing</div>
+                  <div class="how__scan-tag" style="--delay:0.7s">Body Copy</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="how__step reveal">
+            <div class="how__step-icon">
+              <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+                <circle cx="32" cy="32" r="20" stroke="url(#stepGrad)" stroke-width="2" stroke-dasharray="4 3"/>
+                <circle cx="32" cy="32" r="8" fill="#0EA5E9" opacity="0.2"/>
+                <circle cx="32" cy="32" r="3" fill="#0EA5E9"/>
+                <path d="M32 12v6M32 46v6M12 32h6M46 32h6" stroke="url(#stepGrad)" stroke-width="1.5" stroke-linecap="round"/>
+                <path d="M20 20l3 3M41 41l3 3M44 20l-3 3M23 41l-3 3" stroke="#0EA5E9" stroke-width="1" stroke-linecap="round" opacity="0.5"/>
+              </svg>
+            </div>
+            <div class="how__step-number">02</div>
+            <h3 class="how__step-title">Optimize</h3>
+            <p class="how__step-desc">The Brain generates variants backed by conversion psychology and continuous learning from thousands of tests across the platform. Not random copy — intelligent, data-informed alternatives tailored to your page type.</p>
+            <div class="how__step-visual">
+              <div class="how__optimize-visual">
+                <div class="how__opt-original"><span class="how__opt-label">Original</span> "Buy Now — Limited Time"</div>
+                <div class="how__opt-arrow">⟶ Brain analyzes ⟶</div>
+                <div class="how__opt-variants">
+                  <div class="how__opt-variant how__opt-variant--a"><span class="how__opt-badge">A</span> "Yes, I Want This — Reserve Mine"</div>
+                  <div class="how__opt-variant how__opt-variant--b"><span class="how__opt-badge how__opt-badge--b">B</span> "Get Instant Access Now"</div>
+                  <div class="how__opt-variant how__opt-variant--c"><span class="how__opt-badge how__opt-badge--c">C</span> "Start My 30-Day Guarantee"</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="how__step reveal">
+            <div class="how__step-icon">
+              <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+                <path d="M16 48l8-14 8 8 8-18 8 10" stroke="url(#stepGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="16" cy="48" r="3" fill="#0EA5E9" opacity="0.4"/>
+                <circle cx="24" cy="34" r="3" fill="#0EA5E9" opacity="0.5"/>
+                <circle cx="32" cy="42" r="3" fill="#0EA5E9" opacity="0.6"/>
+                <circle cx="40" cy="24" r="3" fill="#0EA5E9" opacity="0.7"/>
+                <circle cx="48" cy="34" r="3" fill="#10B981"/>
+                <path d="M48 34l4-6" stroke="#10B981" stroke-width="1.5" stroke-linecap="round"/>
+                <path d="M50 26l2 2 4-1" stroke="#10B981" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+            <div class="how__step-number">03</div>
+            <h3 class="how__step-title">Learn &amp; Improve</h3>
+            <p class="how__step-desc">Real-time behavioral tracking shows exactly how visitors interact with each variant. Winners are identified with statistical confidence. Use <strong>Brain Chat</strong> to ask questions about your data — leverage thousands of proven data points to understand what's working and why.</p>
+            <div class="how__step-visual">
+              <div class="how__chat-visual">
+                <div class="how__chat-msg how__chat-msg--user"><span class="how__chat-avatar">You</span> Why is Variant B outperforming the original?</div>
+                <div class="how__chat-msg how__chat-msg--brain"><span class="how__chat-avatar how__chat-avatar--brain">🧠</span> Variant B uses first-person ownership language ("my") which creates psychological commitment. Based on 847 similar tests, this approach lifts CTA clicks 12-18% on sales pages with price points under $100.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== FEATURES — Bento Grid (Light) ========== -->
+    <section class="features" id="features">
+      <div class="container">
+        <span class="section-label reveal">Features</span>
+        <h2 class="section-title reveal">Everything you need to <span class="gradient-text">optimize</span></h2>
+
+        <!-- THE BRAIN — hero-sized card -->
+        <div class="features__bento">
+          <div class="features__card features__card--hero reveal">
+            <div class="features__card-content">
+              <div class="features__card-icon">
+                <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><circle cx="16" cy="16" r="10" stroke="url(#fGrad)" stroke-width="1.5" stroke-dasharray="3 2"/><circle cx="16" cy="16" r="4" fill="url(#fGrad)" opacity="0.3"/><circle cx="16" cy="16" r="1.5" fill="url(#fGrad)"/><path d="M16 6v3M16 23v3M6 16h3M23 16h3" stroke="url(#fGrad)" stroke-width="1" stroke-linecap="round" opacity="0.5"/><defs><linearGradient id="fGrad" x1="0" y1="0" x2="32" y2="32"><stop stop-color="#0EA5E9"/><stop offset="1" stop-color="#10B981"/></linearGradient></defs></svg>
+              </div>
+              <h3 class="features__card-title">The Brain</h3>
+              <p class="features__card-desc">Every test across the entire platform teaches the Brain what works. It learns which psychological triggers, headline frameworks, and section strategies drive conversions for different page types. Your suggestions get smarter every day — powered by collective intelligence from thousands of tests.</p>
+            </div>
+            <div class="features__card-visual" aria-hidden="true">
+              <!-- Neural network SVG -->
+              <svg viewBox="0 0 400 300" class="brain-network-svg">
+                <circle cx="200" cy="150" r="120" stroke="url(#brainGlow)" stroke-width="0.5" fill="none" opacity="0.2"/>
+                <circle cx="200" cy="150" r="80" stroke="url(#brainGlow)" stroke-width="0.5" fill="none" opacity="0.15" stroke-dasharray="4 3"/>
+                <!-- Connections -->
+                <line x1="200" y1="150" x2="120" y2="80" stroke="#0EA5E9" stroke-width="1" opacity="0.2" class="brain-line"/>
+                <line x1="200" y1="150" x2="300" y2="90" stroke="#0EA5E9" stroke-width="1" opacity="0.2" class="brain-line"/>
+                <line x1="200" y1="150" x2="310" y2="200" stroke="#10B981" stroke-width="1" opacity="0.2" class="brain-line"/>
+                <line x1="200" y1="150" x2="100" y2="220" stroke="#10B981" stroke-width="1" opacity="0.2" class="brain-line"/>
+                <line x1="200" y1="150" x2="240" y2="260" stroke="#0EA5E9" stroke-width="1" opacity="0.15" class="brain-line"/>
+                <line x1="200" y1="150" x2="80" y2="140" stroke="#0EA5E9" stroke-width="1" opacity="0.15" class="brain-line"/>
+                <line x1="200" y1="150" x2="320" y2="140" stroke="#10B981" stroke-width="1" opacity="0.15" class="brain-line"/>
+                <line x1="120" y1="80" x2="300" y2="90" stroke="#0EA5E9" stroke-width="0.5" opacity="0.08"/>
+                <line x1="310" y1="200" x2="240" y2="260" stroke="#10B981" stroke-width="0.5" opacity="0.08"/>
+                <line x1="100" y1="220" x2="80" y2="140" stroke="#0EA5E9" stroke-width="0.5" opacity="0.08"/>
+                <!-- Nodes -->
+                <circle cx="200" cy="150" r="14" fill="url(#brainGlow)" opacity="0.3" class="brain-core"/>
+                <circle cx="200" cy="150" r="6" fill="url(#brainGlow)" class="brain-core"/>
+                <circle cx="120" cy="80" r="5" fill="#0EA5E9" opacity="0.4" class="brain-node"/>
+                <circle cx="300" cy="90" r="4" fill="#0EA5E9" opacity="0.35" class="brain-node"/>
+                <circle cx="310" cy="200" r="5" fill="#10B981" opacity="0.4" class="brain-node"/>
+                <circle cx="100" cy="220" r="4" fill="#10B981" opacity="0.3" class="brain-node"/>
+                <circle cx="240" cy="260" r="3.5" fill="#0EA5E9" opacity="0.3" class="brain-node"/>
+                <circle cx="80" cy="140" r="3" fill="#0EA5E9" opacity="0.25" class="brain-node"/>
+                <circle cx="320" cy="140" r="4" fill="#10B981" opacity="0.35" class="brain-node"/>
+                <defs><linearGradient id="brainGlow" x1="0" y1="0" x2="400" y2="300"><stop stop-color="#0EA5E9"/><stop offset="1" stop-color="#10B981"/></linearGradient></defs>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Other feature cards in bento layout -->
+          <div class="features__card features__card--medium reveal">
+            <div class="features__card-icon">
+              <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M8 28V18M14 28V12M20 28V20M26 28V8" stroke="url(#fGrad)" stroke-width="2.5" stroke-linecap="round"/></svg>
+            </div>
+            <h3 class="features__card-title">Behavioral Tracking</h3>
+            <p class="features__card-desc">Every scroll, click, section view, video play, and exit. Not just pageviews.</p>
+          </div>
+
+          <div class="features__card features__card--medium reveal">
+            <div class="features__card-icon">
+              <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="4" y="6" width="24" height="20" rx="3" stroke="url(#fGrad)" stroke-width="2"/><path d="M10 14h12M10 18h8" stroke="url(#fGrad)" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/><circle cx="24" cy="10" r="3" fill="#10B981" opacity="0.5"/></svg>
+            </div>
+            <h3 class="features__card-title">Daily Observations</h3>
+            <p class="features__card-desc">AI-written daily briefings about what's working and what's dropping off.</p>
+          </div>
+
+          <div class="features__card features__card--small reveal">
+            <div class="features__card-icon">
+              <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="6" y="4" width="20" height="24" rx="3" stroke="url(#fGrad)" stroke-width="2"/><rect x="10" y="10" width="12" height="3" rx="1.5" fill="#0EA5E9" opacity="0.3"/><rect x="10" y="16" width="8" height="3" rx="1.5" fill="#0EA5E9" opacity="0.2"/><rect x="10" y="22" width="10" height="3" rx="1.5" fill="#0EA5E9" opacity="0.15"/></svg>
+            </div>
+            <h3 class="features__card-title">Styled Previews</h3>
+            <p class="features__card-desc">See variants rendered in your page's actual fonts, colors, and layout.</p>
+          </div>
+
+          <div class="features__card features__card--small reveal">
+            <div class="features__card-icon">
+              <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="4" y="8" width="24" height="16" rx="3" stroke="url(#fGrad)" stroke-width="2"/><path d="M12 16h8" stroke="url(#fGrad)" stroke-width="2" stroke-linecap="round"/><path d="M16 12v8" stroke="url(#fGrad)" stroke-width="2" stroke-linecap="round" opacity="0.5"/></svg>
+            </div>
+            <h3 class="features__card-title">BYOK</h3>
+            <p class="features__card-desc">Bring your own AI keys. Use the platform free, forever. Your tests still feed the Brain.</p>
+          </div>
+
+          <div class="features__card features__card--small reveal">
+            <div class="features__card-icon">
+              <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M6 10l10-6 10 6v12l-10 6-10-6V10z" stroke="url(#fGrad)" stroke-width="2"/><path d="M16 4v24M6 10l10 6 10-6" stroke="url(#fGrad)" stroke-width="1" opacity="0.3"/></svg>
+            </div>
+            <h3 class="features__card-title">One Script Tag</h3>
+            <p class="features__card-desc">Works with any page builder. GoHighLevel, WordPress, Shopify, Webflow, custom HTML.</p>
+          </div>
+
+          <div class="features__card features__card--small reveal">
+            <div class="features__card-icon">
+              <svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><path d="M16 4v6M10 7l3 5M22 7l-3 5" stroke="url(#fGrad)" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="18" r="8" stroke="url(#fGrad)" stroke-width="2"/><text x="16" y="21" text-anchor="middle" font-size="8" fill="#0EA5E9" font-family="General Sans, sans-serif" font-weight="700">$</text></svg>
+            </div>
+            <h3 class="features__card-title">Revenue Attribution</h3>
+            <p class="features__card-desc">Connect Stripe. See actual revenue per variant, not just conversion rates.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== AUTOPILOT (Dark) ========== -->
+    <section class="autopilot" id="autopilot">
+      <div class="noise-overlay"></div>
+      <div class="container">
+        <span class="section-label section-label--dark reveal">The Optimization Loop</span>
+        <h2 class="section-title section-title--dark reveal">Set it. Forget it. <span class="gradient-text">Watch it improve.</span></h2>
+        <p class="autopilot__sub reveal">Autopilot monitors your tests 24/7. When a variant reaches statistical significance, it promotes the winner, retires losers, and generates new challengers — automatically.</p>
+
+        <div class="autopilot__cycle reveal" aria-label="Continuous optimization loop diagram">
+          <div class="autopilot__ring">
+            <div class="autopilot__node autopilot__node--1">
+              <div class="autopilot__node-icon">
+                <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>
+              </div>
+              <span class="autopilot__node-label">Generate</span>
+              <span class="autopilot__node-desc">Brain creates variants</span>
+            </div>
+            <div class="autopilot__node autopilot__node--2">
+              <div class="autopilot__node-icon">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M4 12h16M12 4v16" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" opacity="0.4"/><rect x="6" y="6" width="12" height="12" rx="2" stroke="currentColor" stroke-width="1.5"/></svg>
+              </div>
+              <span class="autopilot__node-label">Test</span>
+              <span class="autopilot__node-desc">Split traffic automatically</span>
+            </div>
+            <div class="autopilot__node autopilot__node--3">
+              <div class="autopilot__node-icon">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M6 18l4-6 4 4 4-8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <span class="autopilot__node-label">Measure</span>
+              <span class="autopilot__node-desc">Track behavioral data</span>
+            </div>
+            <div class="autopilot__node autopilot__node--4">
+              <div class="autopilot__node-icon">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M5 12l5 5L20 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <span class="autopilot__node-label">Promote</span>
+              <span class="autopilot__node-desc">Winner goes live</span>
+            </div>
+          </div>
+          <div class="autopilot__center">
+            <div class="autopilot__center-pulse"></div>
+            <svg viewBox="0 0 48 48" fill="none" class="autopilot__center-icon">
+              <circle cx="24" cy="24" r="20" stroke="url(#autoGrad)" stroke-width="1" opacity="0.3"/>
+              <path d="M16 24C16 19.58 19.58 16 24 16s8 3.58 8 8-3.58 8-8 8" stroke="url(#autoGrad)" stroke-width="2" stroke-linecap="round"/>
+              <path d="M24 32l-3-3 3-3" stroke="url(#autoGrad)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <defs><linearGradient id="autoGrad" x1="0" y1="0" x2="48" y2="48"><stop stop-color="#0EA5E9"/><stop offset="1" stop-color="#10B981"/></linearGradient></defs>
+            </svg>
+            <span class="autopilot__center-label">Always<br>Improving</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== PRICING (Light) ========== -->
+    <section class="pricing" id="pricing">
+      <div class="container">
+        <span class="section-label reveal">Pricing</span>
+        <h2 class="section-title reveal">Simple, transparent <span class="gradient-text">pricing</span></h2>
+        <p class="pricing__sub reveal">Start free. Upgrade when you need the Brain.</p>
+        <div class="pricing__grid">
+          <!-- Free -->
+          <div class="pricing__card reveal">
+            <div class="pricing__card-header">
+              <h3 class="pricing__card-name">Free</h3>
+              <div class="pricing__card-price"><span class="pricing__amount">$0</span><span class="pricing__period">/mo</span></div>
+            </div>
+            <ul class="pricing__card-features" role="list">
+              <li>BYOK (your own AI keys)</li>
+              <li>Unlimited campaigns</li>
+              <li>Behavioral tracking</li>
+              <li>Analytics dashboard</li>
+            </ul>
+            <a href="https://app.siteamoeba.com" class="btn btn--outline btn--full" target="_blank" rel="noopener noreferrer">Start Free</a>
+          </div>
+          <!-- Pro -->
+          <div class="pricing__card reveal">
+            <div class="pricing__card-header">
+              <h3 class="pricing__card-name">Pro</h3>
+              <div class="pricing__card-price"><span class="pricing__amount">$47</span><span class="pricing__period">/mo</span></div>
+            </div>
+            <ul class="pricing__card-features" role="list">
+              <li>Everything in Free</li>
+              <li><span class="pricing__brain-icon">🧠</span> Brain access</li>
+              <li>500 AI credits/month</li>
+              <li>Daily observations</li>
+              <li>Brain Chat</li>
+              <li>All page sections</li>
+            </ul>
+            <a href="https://app.siteamoeba.com" class="btn btn--primary btn--full" target="_blank" rel="noopener noreferrer">Get Started</a>
+          </div>
+          <!-- Business -->
+          <div class="pricing__card reveal">
+            <div class="pricing__card-header">
+              <h3 class="pricing__card-name">Business</h3>
+              <div class="pricing__card-price"><span class="pricing__amount">$97</span><span class="pricing__period">/mo</span></div>
+            </div>
+            <ul class="pricing__card-features" role="list">
+              <li>Everything in Pro</li>
+              <li><span class="pricing__brain-icon">🧠</span> Brain access</li>
+              <li>1,200 AI credits/month</li>
+              <li>Multi-seat team access</li>
+              <li>Advanced analytics</li>
+            </ul>
+            <a href="https://app.siteamoeba.com" class="btn btn--primary btn--full" target="_blank" rel="noopener noreferrer">Get Started</a>
+          </div>
+          <!-- Autopilot -->
+          <div class="pricing__card pricing__card--popular reveal">
+            <div class="pricing__card-badge">Most Popular</div>
+            <div class="pricing__card-header">
+              <h3 class="pricing__card-name">Autopilot</h3>
+              <div class="pricing__card-price"><span class="pricing__amount">$299</span><span class="pricing__period">/mo</span></div>
+            </div>
+            <ul class="pricing__card-features" role="list">
+              <li>Everything in Business</li>
+              <li><span class="pricing__brain-icon">🧠</span> Brain access</li>
+              <li>3,000 AI credits/month</li>
+              <li>Full autonomous optimization</li>
+              <li>AI-driven winner promotion</li>
+              <li>Unlimited concurrent tests</li>
+            </ul>
+            <a href="https://app.siteamoeba.com" class="btn btn--primary btn--full" target="_blank" rel="noopener noreferrer">Get Started</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== ENTERPRISE (Dark) ========== -->
+    <section class="enterprise" id="enterprise">
+      <div class="noise-overlay"></div>
+      <div class="container">
+        <div class="enterprise__inner reveal">
+          <div class="enterprise__content">
+            <span class="section-label section-label--dark">Enterprise</span>
+            <h2 class="section-title section-title--dark">Enterprise-grade optimization, <span class="gradient-text">completely private</span></h2>
+            <ul class="enterprise__list" role="list">
+              <li><strong>Data isolation</strong> — your tests never train the shared Brain</li>
+              <li><strong>One-way Brain access</strong> — benefit from collective intelligence without contributing your data</li>
+              <li><strong>Custom brand guidelines</strong> for Autopilot</li>
+              <li><strong>Dedicated account management</strong></li>
+              <li><strong>SOC 2 / compliance ready</strong></li>
+            </ul>
+            <a href="mailto:stephenson.travis@gmail.com" class="btn btn--white btn--lg" target="_blank" rel="noopener noreferrer">Book a Demo</a>
+          </div>
+          <div class="enterprise__visual">
+            <svg viewBox="0 0 280 280" fill="none" aria-hidden="true">
+              <rect x="40" y="40" width="200" height="200" rx="16" stroke="rgba(255,255,255,0.1)" stroke-width="1" fill="none"/>
+              <rect x="70" y="70" width="140" height="140" rx="12" stroke="rgba(255,255,255,0.07)" stroke-width="1" fill="none"/>
+              <circle cx="140" cy="140" r="30" fill="rgba(14,165,233,0.08)" stroke="rgba(14,165,233,0.25)" stroke-width="1"/>
+              <path d="M130 140l5 5 10-12" stroke="url(#entGrad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              <circle cx="90" cy="90" r="6" fill="rgba(14,165,233,0.1)"/>
+              <circle cx="190" cy="90" r="6" fill="rgba(16,185,129,0.1)"/>
+              <circle cx="90" cy="190" r="6" fill="rgba(16,185,129,0.1)"/>
+              <circle cx="190" cy="190" r="6" fill="rgba(14,165,233,0.1)"/>
+              <line x1="90" y1="96" x2="90" y2="184" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+              <line x1="190" y1="96" x2="190" y2="184" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+              <line x1="96" y1="90" x2="184" y2="90" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+              <line x1="96" y1="190" x2="184" y2="190" stroke="rgba(255,255,255,0.04)" stroke-width="1"/>
+              <defs><linearGradient id="entGrad" x1="130" y1="128" x2="145" y2="145"><stop stop-color="#0EA5E9"/><stop offset="1" stop-color="#10B981"/></linearGradient></defs>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== FAQ (Light) ========== -->
+    <section class="faq" id="faq">
+      <div class="container">
+        <span class="section-label reveal">FAQ</span>
+        <h2 class="section-title reveal">Common questions</h2>
+        <div class="faq__list">
+          <details class="faq__item reveal">
+            <summary class="faq__question">What kind of pages does this work with?</summary>
+            <div class="faq__answer"><p>SiteAmoeba works with any web page — sales pages, landing pages, lead gen pages, e-commerce product pages, webinar registration pages, free trial pages, checkout pages. If it has a URL and you want more conversions, it works. Compatible with GoHighLevel, WordPress, Shopify, Webflow, Unbounce, ClickFunnels, Kartra, custom HTML, and anything else with a &lt;head&gt; tag.</p></div>
+          </details>
+          <details class="faq__item reveal">
+            <summary class="faq__question">How many tests can I run?</summary>
+            <div class="faq__answer"><p>All plans include unlimited campaigns. Free tier runs 1 concurrent test at a time. Pro runs 3, Business runs 5, and Autopilot has no limit — run as many simultaneous tests as you want.</p></div>
+          </details>
+          <details class="faq__item reveal">
+            <summary class="faq__question">What does the tracking actually capture?</summary>
+            <div class="faq__answer"><p>Everything. Scroll depth (25%, 50%, 75%, 100%), individual section visibility (which sections each visitor actually sees), every click with element identification, video play and completion events, time-on-page down to the second, and device type. All of this is captured automatically with a single script tag — no configuration needed.</p></div>
+          </details>
+          <details class="faq__item reveal">
+            <summary class="faq__question">What's BYOK?</summary>
+            <div class="faq__answer"><p>Bring Your Own Key. Connect your own API keys from OpenAI (GPT-4), Anthropic (Claude), Google (Gemini), Mistral, xAI (Grok), or Meta (Llama). The free tier lets you use your own keys for unlimited testing at zero cost. Your tests still contribute to the Brain's learning (unless you're on Enterprise), and you still get full behavioral tracking and analytics.</p></div>
+          </details>
+          <details class="faq__item reveal">
+            <summary class="faq__question">What makes the Brain different from ChatGPT?</summary>
+            <div class="faq__answer"><p>ChatGPT generates generic copy. The Brain is purpose-built for conversion optimization. It's trained on real sales psychology — offer architecture, unique mechanisms, psychological triggers, proven headline frameworks, section-specific strategies. It knows which techniques work for which page types. And critically, it learns from every test running on the platform. When a variant wins anywhere in the system, that pattern gets incorporated. The more tests that run, the smarter your suggestions get.</p></div>
+          </details>
+          <details class="faq__item reveal">
+            <summary class="faq__question">Can I change plans anytime?</summary>
+            <div class="faq__answer"><p>Yes. You can upgrade, downgrade, or cancel at any time from your billing settings. Changes take effect at the start of your next billing cycle. No contracts, no commitments.</p></div>
+          </details>
+          <details class="faq__item reveal">
+            <summary class="faq__question">How does Autopilot work?</summary>
+            <div class="faq__answer"><p>Autopilot monitors your running tests continuously. When a variant reaches statistical significance (typically 90%+ confidence), it automatically promotes the winner, retires losing variants, and generates new challengers. This creates an always-improving optimization loop — your page gets better every week without you touching it.</p></div>
+          </details>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== BOTTOM CTA (Dark) ========== -->
+    <section class="cta-bottom">
+      <div class="noise-overlay"></div>
+      <div class="container">
+        <div class="cta-bottom__inner reveal">
+          <h2 class="cta-bottom__headline">Your competitors are still guessing. <span class="gradient-text">Start knowing.</span></h2>
+          <a href="https://app.siteamoeba.com" class="btn btn--primary btn--lg" target="_blank" rel="noopener noreferrer">Start Free — No Credit Card Required</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ========== FOOTER (Dark) ========== -->
+  <footer class="footer">
+    <div class="container footer__inner">
+      <div class="footer__brand">
+        <div class="footer__logo">
+          <svg width="28" height="28" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+            <circle cx="20" cy="20" r="14" stroke="currentColor" stroke-width="1.5" opacity="0.3"/>
+            <circle cx="20" cy="20" r="5" fill="url(#fLogoGrad)"/>
+            <circle cx="12" cy="12" r="3" fill="url(#fLogoGrad)" opacity="0.7"/>
+            <circle cx="29" cy="13" r="2.5" fill="url(#fLogoGrad)" opacity="0.6"/>
+            <circle cx="28" cy="28" r="2" fill="url(#fLogoGrad)" opacity="0.5"/>
+            <circle cx="10" cy="26" r="2.5" fill="url(#fLogoGrad)" opacity="0.55"/>
+            <line x1="20" y1="20" x2="12" y2="12" stroke="url(#fLogoGrad)" stroke-width="1" opacity="0.4"/>
+            <line x1="20" y1="20" x2="29" y2="13" stroke="url(#fLogoGrad)" stroke-width="1" opacity="0.4"/>
+            <line x1="20" y1="20" x2="28" y2="28" stroke="url(#fLogoGrad)" stroke-width="1" opacity="0.4"/>
+            <line x1="20" y1="20" x2="10" y2="26" stroke="url(#fLogoGrad)" stroke-width="1" opacity="0.4"/>
+            <defs><linearGradient id="fLogoGrad" x1="0" y1="0" x2="40" y2="40"><stop stop-color="#0EA5E9"/><stop offset="1" stop-color="#10B981"/></linearGradient></defs>
+          </svg>
+          <span>SiteAmoeba</span>
+        </div>
+        <p class="footer__tagline">Site Intelligence And Performance Improvement Engine</p>
+      </div>
+      <nav class="footer__links" aria-label="Footer navigation">
+        <a href="#features">Features</a>
+        <a href="#autopilot">Autopilot</a>
+        <a href="#pricing">Pricing</a>
+        <a href="#faq">FAQ</a>
+        <a href="#enterprise">Enterprise</a>
+      </nav>
+      <p class="footer__copy">&copy; 2026 SiteAmoeba</p>
+    </div>
+  </footer>
+
+  <script src="./app.js" defer></script>
+</body>
+</html>

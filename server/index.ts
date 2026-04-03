@@ -110,8 +110,9 @@ app.use((req, res, next) => {
     return res.status(status).json({ message });
   });
 
-  // Serve the /beta landing page as static files
+  // Serve the landing pages as static files
   app.use("/beta", express.static(path.join(process.cwd(), "public/beta"), { index: "index.html" }));
+  app.use("/home", express.static(path.join(process.cwd(), "public/home"), { index: "index.html" }));
 
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
