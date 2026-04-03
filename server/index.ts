@@ -113,6 +113,23 @@ app.use((req, res, next) => {
   // Serve the landing pages as static files
   app.use("/beta", express.static(path.join(process.cwd(), "public/beta"), { index: "index.html" }));
   app.use("/home", express.static(path.join(process.cwd(), "public/home"), { index: "index.html" }));
+  // Also serve the home page at root / for the main domain
+  app.get("/", (req, res, next) => {
+    // Only serve landing page if request is for the root domain (not app subdomain)
+    const host = req.get("host") || "";
+    if (host.includes("app.")) return next(); // Let the SPA catch-all handle app.siteamoeba.com
+    res.sendFile(path.join(process.cwd(), "public/home/index.html"));
+  });
+  app.get("/style.css", (req, res, next) => {
+    const host = req.get("host") || "";
+    if (host.includes("app.")) return next();
+    res.sendFile(path.join(process.cwd(), "public/home/style.css"));
+  });
+  app.get("/app.js", (req, res, next) => {
+    const host = req.get("host") || "";
+    if (host.includes("app.")) return next();
+    res.sendFile(path.join(process.cwd(), "public/home/app.js"));
+  });
 
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
