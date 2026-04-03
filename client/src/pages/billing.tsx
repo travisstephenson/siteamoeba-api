@@ -1,0 +1,365 @@
+import { useMutation } from "@tanstack/react-query";
+import { useLocation } from "wouter";
+import { Check, CreditCard, ExternalLink, Zap, Brain, Rocket, Crown } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useAuth } from "@/hooks/use-auth";
+import { apiRequest, queryClient } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
+// New plan data with updated pricing structure
+const NEW_PLANS = [
+  {
+    id: "free",
+    name: "Free",
+    price: 0,
+    icon: Zap,
+    tagline: "BYOK — bring your own AI key",
+    highlight: false,
+    badge: null as string | null,
+    features: [
+      "BYOK — connect your own AI key",
+      "Unlimited campaigns & visitors",
+      "Headlines & subheadlines testing",
+      "AI variant generation (your key)",
+      "Analytics dashboard",
+      "Embed widget & conversion pixel",
+      "1 concurrent test",
+    ],
+  },
+  {
+    id: "pro",
+    name: "Pro",
+    price: 47,
+    icon: Brain,
+    tagline: "Brain-powered testing",
+    highlight: false,
+    badge: null as string | null,
+    features: [
+      "Everything in Free",
+      "Brain access — AI trained on real tests",
+      "500 AI credits for generation & analysis",
+      "All page sections (CTAs, social proof, body copy)",
+      "Brain Chat for guided optimization",
+      "Unlimited visitor tracking",
+      "Priority email support",
+      "3 concurrent tests",
+    ],
+  },
+  {
+    id: "business",
+    name: "Business",
+    price: 97,
+    icon: Crown,
+    tagline: "Scale your testing program",
+    highlight: false,
+    badge: null as string | null,
+    features: [
+      "Everything in Pro",
+      "1,200 AI credits for generation & analysis",
+      "Multi-seat team access",
+      "Advanced analytics & CSV exports",
+      "Priority support & onboarding",
+      "Custom webhook integrations",
+      "5 concurrent tests",
+    ],
+  },
+  {
+    id: "autopilot",
+    name: "Autopilot",
+    price: 299,
+    icon: Rocket,
+    tagline: "Full autonomous optimization",
+    highlight: true,
+    badge: "Most Popular",
+    features: [
+      "Everything in Business",
+      "3,000 AI credits for generation & analysis",
+      "Autonomous page optimization — no manual work",
+      "Continuous multi-section testing",
+      "AI-driven winner promotion",
+      "Dedicated success manager",
+      "Unlimited concurrent tests",
+    ],
+  },
+];
+
+export default function BillingPage() {
+  const { user, isAuthenticated, isLoading: authLoading } = useAuth();
+  const [, navigate] = useLocation();
+  const { toast } = useToast();
+
+  if (!authLoading && !isAuthenticated) {
+    navigate("/auth");
+    return null;
+  }
+
+  const checkoutMutation = useMutation({
+    mutationFn: async (planId: string) => {
+      const res = await apiRequest("POST", "/api/billing/checkout", { plan: planId });
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.url) {
+        window.location.href = data.url;
+      }
+    },
+    onError: (err: Error) => {
+      toast({
+        title: "Checkout failed",
+        description: err.message.replace(/^\d+:\s*/, ""),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const portalMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/billing/portal");
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.url) {
+        window.location.href = data.url;
+      }
+    },
+    onError: (err: Error) => {
+      toast({
+        title: "Portal error",
+        description: err.message.replace(/^\d+:\s*/, ""),
+        variant: "destructive",
+      });
+    },
+  });
+
+  const currentPlan = user?.plan ?? "free";
+  const creditsUsed = user?.creditsUsed ?? 0;
+  const creditsLimit = user?.creditsLimit ?? 10;
+  const creditsPct = creditsLimit > 0 ? Math.min(100, (creditsUsed / creditsLimit) * 100) : 0;
+  const visitorsUsed = creditsUsed * 100;
+  const visitorsLimit = creditsLimit * 100;
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Header */}
+      <div className="flex items-center justify-between gap-4 px-6 py-5 border-b border-border">
+        <div>
+          <h1 className="text-lg font-semibold">Billing</h1>
+          <p className="text-sm text-muted-foreground">Manage your plan and usage</p>
+        </div>
+        {currentPlan !== "free" && (
+          <Button
+            variant="outline"
+            onClick={() => portalMutation.mutate()}
+            disabled={portalMutation.isPending}
+            data-testid="button-manage-billing"
+          >
+            <ExternalLink className="w-4 h-4 mr-2" />
+            {portalMutation.isPending ? "Redirecting…" : "Manage Billing"}
+          </Button>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+
+        {/* Current plan card */}
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="text-sm font-semibold flex items-center gap-2">
+                <CreditCard className="w-4 h-4" />
+                Current Plan
+              </CardTitle>
+              <Badge
+                variant="default"
+                className="capitalize"
+                data-testid="badge-current-plan"
+              >
+                {currentPlan}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div>
+              <div className="flex items-center justify-between text-xs text-muted-foreground mb-1.5">
+                <span>Visitor credits used</span>
+                <span className="tabular-nums" data-testid="text-credits-usage">
+                  {visitorsUsed.toLocaleString()} / {visitorsLimit.toLocaleString()} visitors
+                </span>
+              </div>
+              <Progress
+                value={creditsPct}
+                className="h-2"
+                data-testid="progress-credits"
+              />
+              {creditsPct >= 90 && (
+                <p className="text-xs text-destructive mt-1.5 flex items-center gap-1">
+                  <Zap className="w-3 h-3" />
+                  You're close to your limit. Upgrade to avoid interruptions.
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-4 text-xs">
+              <div>
+                <div className="text-muted-foreground">Credits used</div>
+                <div className="font-semibold tabular-nums" data-testid="text-credits-used">{creditsUsed}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Credits limit</div>
+                <div className="font-semibold tabular-nums" data-testid="text-credits-limit">{creditsLimit}</div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Plan comparison */}
+        <div>
+          <h2 className="text-sm font-semibold mb-3">Choose a plan</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+            {NEW_PLANS.map((plan) => {
+              const isCurrent = plan.id === currentPlan;
+              const PlanIcon = plan.icon;
+              return (
+                <div
+                  key={plan.id}
+                  className="relative"
+                  data-testid={`card-plan-${plan.id}`}
+                >
+                  {/* Autopilot gradient border wrapper */}
+                  {plan.highlight ? (
+                    <div
+                      className="rounded-xl p-[2px]"
+                      style={{
+                        background: "linear-gradient(135deg, hsl(160 84% 36%) 0%, hsl(152 76% 50%) 100%)",
+                      }}
+                    >
+                      <Card className="rounded-[10px] h-full">
+                        <CardHeader className="pb-3">
+                          <div className="flex items-center justify-between gap-1">
+                            <div className="flex items-center gap-1.5">
+                              <PlanIcon className="w-4 h-4" style={{ color: "hsl(160 84% 36%)" }} />
+                              <CardTitle className="text-sm font-semibold">{plan.name}</CardTitle>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              {isCurrent && (
+                                <Badge variant="default" className="text-xs" data-testid={`badge-plan-current-${plan.id}`}>
+                                  Current
+                                </Badge>
+                              )}
+                              {plan.badge && !isCurrent && (
+                                <Badge
+                                  className="text-xs"
+                                  style={{ background: "hsl(160 84% 36%)", color: "white" }}
+                                >
+                                  {plan.badge}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
+                          <CardDescription className="text-xs">{plan.tagline}</CardDescription>
+                          <div className="mt-1">
+                            <span className="text-xl font-bold tabular-nums">
+                              ${plan.price}
+                              <span className="text-xs font-normal text-muted-foreground">/mo</span>
+                            </span>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          <ul className="space-y-1.5">
+                            {plan.features.map((feature) => (
+                              <li key={feature} className="flex items-start gap-2 text-xs">
+                                <Check className="w-3.5 h-3.5 text-primary mt-0.5 shrink-0" />
+                                <span>{feature}</span>
+                              </li>
+                            ))}
+                          </ul>
+                          <Button
+                            className="w-full"
+                            variant={isCurrent ? "outline" : "default"}
+                            disabled={isCurrent || checkoutMutation.isPending}
+                            onClick={() => !isCurrent && checkoutMutation.mutate(plan.id)}
+                            data-testid={`button-plan-${plan.id}`}
+                            style={isCurrent ? {} : { background: "hsl(160 84% 36%)" }}
+                          >
+                            {isCurrent
+                              ? "Current plan"
+                              : checkoutMutation.isPending
+                              ? "Redirecting…"
+                              : "Upgrade"}
+                          </Button>
+                        </CardContent>
+                      </Card>
+                    </div>
+                  ) : (
+                    <Card className={isCurrent ? "ring-2 ring-primary h-full" : "h-full"}>
+                      <CardHeader className="pb-3">
+                        <div className="flex items-center justify-between gap-1">
+                          <div className="flex items-center gap-1.5">
+                            <PlanIcon className="w-4 h-4 text-muted-foreground" />
+                            <CardTitle className="text-sm font-semibold">{plan.name}</CardTitle>
+                          </div>
+                          {isCurrent && (
+                            <Badge variant="default" className="text-xs" data-testid={`badge-plan-current-${plan.id}`}>
+                              Current
+                            </Badge>
+                          )}
+                        </div>
+                        <CardDescription className="text-xs">{plan.tagline}</CardDescription>
+                        <div className="mt-1">
+                          {plan.price === 0 ? (
+                            <span className="text-xl font-bold">Free</span>
+                          ) : (
+                            <span className="text-xl font-bold tabular-nums">
+                              ${plan.price}
+                              <span className="text-xs font-normal text-muted-foreground">/mo</span>
+                            </span>
+                          )}
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <ul className="space-y-1.5">
+                          {plan.features.map((feature) => (
+                            <li key={feature} className="flex items-start gap-2 text-xs">
+                              <Check className="w-3.5 h-3.5 text-primary mt-0.5 shrink-0" />
+                              <span>{feature}</span>
+                            </li>
+                          ))}
+                        </ul>
+                        {plan.price === 0 ? (
+                          <Button
+                            variant="outline"
+                            className="w-full"
+                            disabled={isCurrent}
+                            data-testid={`button-plan-${plan.id}`}
+                          >
+                            {isCurrent ? "Current plan" : "Downgrade"}
+                          </Button>
+                        ) : (
+                          <Button
+                            className="w-full"
+                            variant={isCurrent ? "outline" : "default"}
+                            disabled={isCurrent || checkoutMutation.isPending}
+                            onClick={() => checkoutMutation.mutate(plan.id)}
+                            data-testid={`button-plan-${plan.id}`}
+                          >
+                            {isCurrent
+                              ? "Current plan"
+                              : checkoutMutation.isPending
+                              ? "Redirecting…"
+                              : "Upgrade"}
+                          </Button>
+                        )}
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
