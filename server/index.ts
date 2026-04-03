@@ -19,6 +19,7 @@ declare module "http" {
 app.use(helmet({
   contentSecurityPolicy: false,   // disabled: we serve a SPA
   crossOriginEmbedderPolicy: false, // allow embedding
+  crossOriginResourcePolicy: { policy: "cross-origin" }, // widget script must load on third-party sites
 }));
 
 // Global rate limit: 100 requests per minute per IP
