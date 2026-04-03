@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+import path from "path";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
@@ -108,6 +109,9 @@ app.use((req, res, next) => {
 
     return res.status(status).json({ message });
   });
+
+  // Serve the /beta landing page as static files
+  app.use("/beta", express.static(path.join(process.cwd(), "public/beta"), { index: "index.html" }));
 
   // importantly only setup vite in development and after
   // setting up all the other routes so the catch-all route
