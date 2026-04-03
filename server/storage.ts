@@ -944,44 +944,60 @@ class StorageImpl implements IStorage {
   }
 
   async getVisitorFeed(campaignId: number, limit: number = 20): Promise<any[]> {
+    // Combine visitors (from assign) with session data (from behavioral events)
+    // This ensures we show visitors even before they send scroll/click events
     const result = await pool.query(
       `SELECT
-        vs.visitor_id,
+        v.id as visitor_id,
+        v.converted,
+        v.converted_at,
+        v.revenue,
+        v.user_agent,
+        v.referrer,
+        v.first_seen,
+        var.text as headline_variant,
+        var.is_control,
         vs.device_type,
         vs.max_scroll_depth,
         vs.time_on_page,
         vs.click_count,
         vs.sections_viewed,
         vs.video_played,
-        vs.converted,
-        vs.created_at,
-        v.converted_at,
-        v.revenue,
-        var.text as headline_variant,
-        var.is_control
-       FROM visitor_sessions vs
-       LEFT JOIN visitors v ON v.id = vs.visitor_id AND v.campaign_id = vs.campaign_id
+        vs.video_completed
+       FROM visitors v
        LEFT JOIN variants var ON var.id = v.headline_variant_id
-       WHERE vs.campaign_id = $1
-       ORDER BY vs.created_at DESC
+       LEFT JOIN visitor_sessions vs ON vs.visitor_id = v.id AND vs.campaign_id = v.campaign_id
+       WHERE v.campaign_id = $1
+       ORDER BY v.first_seen DESC
        LIMIT $2`,
       [campaignId, limit]
     );
-    return result.rows.map((r: any) => ({
-      visitorId: r.visitor_id,
-      device: r.device_type || "desktop",
-      maxScrollDepth: parseInt(r.max_scroll_depth) || 0,
-      timeOnPage: parseInt(r.time_on_page) || 0,
-      clickCount: parseInt(r.click_count) || 0,
-      sectionsViewed: r.sections_viewed ? (() => { try { return JSON.parse(r.sections_viewed); } catch { return []; } })() : [],
-      videoPlayed: r.video_played || false,
-      converted: r.converted || false,
-      convertedAt: r.converted_at || null,
-      revenue: r.revenue ? parseFloat(r.revenue) : 0,
-      createdAt: r.created_at,
-      headlineVariant: r.headline_variant || null,
-      isControl: r.is_control || false,
-    }));
+    return result.rows.map((r: any) => {
+      // Detect device from user agent if session doesn't have it
+      let device = r.device_type || "desktop";
+      if (!r.device_type && r.user_agent) {
+        const ua = r.user_agent.toLowerCase();
+        if (ua.includes("mobile") || ua.includes("iphone") || ua.includes("android")) device = "mobile";
+        else if (ua.includes("tablet") || ua.includes("ipad")) device = "tablet";
+      }
+      return {
+        visitorId: r.visitor_id,
+        device,
+        maxScrollDepth: parseInt(r.max_scroll_depth) || 0,
+        timeOnPage: parseInt(r.time_on_page) || 0,
+        clickCount: parseInt(r.click_count) || 0,
+        sectionsViewed: r.sections_viewed ? (() => { try { return JSON.parse(r.sections_viewed); } catch { return []; } })() : [],
+        videoPlayed: r.video_played || false,
+        converted: r.converted || false,
+        convertedAt: r.converted_at || null,
+        revenue: r.revenue ? parseFloat(r.revenue) : 0,
+        createdAt: r.first_seen,
+        headlineVariant: r.headline_variant || null,
+        isControl: r.is_control || false,
+        referrer: r.referrer || null,
+        hasSessionData: !!r.max_scroll_depth,
+      };
+    });
   }
 
   async getSessionStats(campaignId: number): Promise<{
