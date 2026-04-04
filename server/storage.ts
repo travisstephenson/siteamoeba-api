@@ -943,10 +943,9 @@ class StorageImpl implements IStorage {
     return rows;
   }
 
-  async getVisitorFeed(campaignId: number, limit: number = 20): Promise<any[]> {
-    // Combine visitors (from assign) with session data (from behavioral events)
-    // This ensures we show visitors even before they send scroll/click events
-    const result = await pool.query(
+  async getVisitorFeed(campaignId: number, limit: number = 20): Promise<any> {
+    // Get 5 most recent conversions with their variant info
+    const conversionsResult = await pool.query(
       `SELECT
         v.id as visitor_id,
         v.converted,
@@ -955,25 +954,47 @@ class StorageImpl implements IStorage {
         v.user_agent,
         v.referrer,
         v.first_seen,
-        var.text as headline_variant,
-        var.is_control,
+        hv.text as headline_variant,
+        hv.is_control as headline_is_control,
+        hv.id as headline_variant_id,
+        sv.text as subheadline_variant,
+        sv.is_control as subheadline_is_control,
         vs.device_type,
         vs.max_scroll_depth,
         vs.time_on_page,
         vs.click_count,
-        vs.sections_viewed,
-        vs.video_played,
-        vs.video_completed
+        vs.sections_viewed
        FROM visitors v
-       LEFT JOIN variants var ON var.id = v.headline_variant_id
+       LEFT JOIN variants hv ON hv.id = v.headline_variant_id
+       LEFT JOIN variants sv ON sv.id = v.subheadline_variant_id
        LEFT JOIN visitor_sessions vs ON vs.visitor_id = v.id AND vs.campaign_id = v.campaign_id
-       WHERE v.campaign_id = $1
-       ORDER BY v.first_seen DESC
-       LIMIT $2`,
-      [campaignId, limit]
+       WHERE v.campaign_id = $1 AND v.converted = true
+       ORDER BY v.converted_at DESC
+       LIMIT 5`,
+      [campaignId]
     );
-    return result.rows.map((r: any) => {
-      // Detect device from user agent if session doesn't have it
+
+    // Get aggregate summary: total visitors, buyers, avg scroll for each
+    const summaryResult = await pool.query(
+      `SELECT
+        COUNT(*) as total_visitors,
+        COUNT(CASE WHEN v.converted = true THEN 1 END) as total_buyers,
+        COALESCE(SUM(CASE WHEN v.converted = true THEN v.revenue ELSE 0 END), 0) as total_revenue,
+        ROUND(AVG(CASE WHEN v.converted = true THEN vs.max_scroll_depth END)) as buyer_avg_scroll,
+        ROUND(AVG(CASE WHEN v.converted = false THEN vs.max_scroll_depth END)) as visitor_avg_scroll,
+        ROUND(AVG(CASE WHEN v.converted = true THEN vs.time_on_page END)) as buyer_avg_time,
+        ROUND(AVG(CASE WHEN v.converted = false THEN vs.time_on_page END)) as visitor_avg_time,
+        ROUND(AVG(CASE WHEN v.converted = true THEN vs.click_count END)) as buyer_avg_clicks,
+        ROUND(AVG(CASE WHEN v.converted = false THEN vs.click_count END)) as visitor_avg_clicks
+       FROM visitors v
+       LEFT JOIN visitor_sessions vs ON vs.visitor_id = v.id AND vs.campaign_id = v.campaign_id
+       WHERE v.campaign_id = $1`,
+      [campaignId]
+    );
+
+    const summary = summaryResult.rows[0] || {};
+
+    const mapRow = (r: any) => {
       let device = r.device_type || "desktop";
       if (!r.device_type && r.user_agent) {
         const ua = r.user_agent.toLowerCase();
@@ -987,17 +1008,32 @@ class StorageImpl implements IStorage {
         timeOnPage: parseInt(r.time_on_page) || 0,
         clickCount: parseInt(r.click_count) || 0,
         sectionsViewed: r.sections_viewed ? (() => { try { return JSON.parse(r.sections_viewed); } catch { return []; } })() : [],
-        videoPlayed: r.video_played || false,
         converted: r.converted || false,
         convertedAt: r.converted_at || null,
         revenue: r.revenue ? parseFloat(r.revenue) : 0,
         createdAt: r.first_seen,
         headlineVariant: r.headline_variant || null,
-        isControl: r.is_control || false,
+        headlineIsControl: r.headline_is_control || false,
+        subheadlineVariant: r.subheadline_variant || null,
+        subheadlineIsControl: r.subheadline_is_control || false,
         referrer: r.referrer || null,
-        hasSessionData: !!r.max_scroll_depth,
       };
-    });
+    };
+
+    return {
+      recentConversions: conversionsResult.rows.map(mapRow),
+      summary: {
+        totalVisitors: parseInt(summary.total_visitors) || 0,
+        totalBuyers: parseInt(summary.total_buyers) || 0,
+        totalRevenue: parseFloat(summary.total_revenue) || 0,
+        buyerAvgScroll: parseInt(summary.buyer_avg_scroll) || 0,
+        visitorAvgScroll: parseInt(summary.visitor_avg_scroll) || 0,
+        buyerAvgTime: parseInt(summary.buyer_avg_time) || 0,
+        visitorAvgTime: parseInt(summary.visitor_avg_time) || 0,
+        buyerAvgClicks: parseInt(summary.buyer_avg_clicks) || 0,
+        visitorAvgClicks: parseInt(summary.visitor_avg_clicks) || 0,
+      },
+    };
   }
 
   async getSessionStats(campaignId: number): Promise<{

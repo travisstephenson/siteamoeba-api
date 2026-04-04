@@ -1981,29 +1981,45 @@ function generateEmbedCodeClient(apiBase: string, campaignId: number, headlineSe
 }
 
 // ---- Visitor Feed Panel ----
-interface VisitorFeedEntry {
+interface ConversionEntry {
   visitorId: string;
   device: string;
   maxScrollDepth: number;
   timeOnPage: number;
   clickCount: number;
   sectionsViewed: string[];
-  videoPlayed: boolean;
   converted: boolean;
   convertedAt: string | null;
   revenue: number;
   createdAt: string;
   headlineVariant: string | null;
-  isControl: boolean;
+  headlineIsControl: boolean;
+  subheadlineVariant: string | null;
+  subheadlineIsControl: boolean;
+  referrer: string | null;
 }
 
-const ALL_SECTIONS = ["hero", "social_proof", "features", "pricing", "cta", "faq", "testimonials"];
+interface VisitorFeedData {
+  recentConversions: ConversionEntry[];
+  summary: {
+    totalVisitors: number;
+    totalBuyers: number;
+    totalRevenue: number;
+    buyerAvgScroll: number;
+    visitorAvgScroll: number;
+    buyerAvgTime: number;
+    visitorAvgTime: number;
+    buyerAvgClicks: number;
+    visitorAvgClicks: number;
+  };
+}
 
 function VisitorFeedPanel({ campaignId }: { campaignId: number }) {
   const [expanded, setExpanded] = useState(true);
+  const [expandedBuyer, setExpandedBuyer] = useState<string | null>(null);
 
-  const { data: feed = [], isLoading } = useQuery<VisitorFeedEntry[]>({
-    queryKey: [`/api/campaigns/${campaignId}/visitor-feed`],
+  const { data, isLoading } = useQuery<VisitorFeedData>({
+    queryKey: ["/api/campaigns", campaignId, "visitor-feed"],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/campaigns/${campaignId}/visitor-feed`);
       return res.json();
@@ -2011,23 +2027,21 @@ function VisitorFeedPanel({ campaignId }: { campaignId: number }) {
     refetchInterval: 30000,
   });
 
-  const buyers = feed.filter((v) => v.converted);
-  const nonBuyers = feed.filter((v) => !v.converted);
-  const avgBuyerScroll = buyers.length > 0
-    ? Math.round(buyers.reduce((s, v) => s + v.maxScrollDepth, 0) / buyers.length)
-    : 0;
-  const avgVisitorScroll = nonBuyers.length > 0
-    ? Math.round(nonBuyers.reduce((s, v) => s + v.maxScrollDepth, 0) / nonBuyers.length)
-    : 0;
+  const conversions = data?.recentConversions ?? [];
+  const s = data?.summary ?? { totalVisitors: 0, totalBuyers: 0, totalRevenue: 0, buyerAvgScroll: 0, visitorAvgScroll: 0, buyerAvgTime: 0, visitorAvgTime: 0, buyerAvgClicks: 0, visitorAvgClicks: 0 };
+  const convRate = s.totalVisitors > 0 ? ((s.totalBuyers / s.totalVisitors) * 100).toFixed(1) : "0";
 
-  // Find top engaged section
-  const sectionCounts: Record<string, number> = {};
-  for (const v of buyers) {
-    for (const s of v.sectionsViewed) {
-      sectionCounts[s] = (sectionCounts[s] || 0) + 1;
-    }
+  function timeAgo(dateStr: string | null): string {
+    if (!dateStr) return "";
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ago`;
   }
-  const topSection = Object.entries(sectionCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "hero";
 
   return (
     <Card data-testid="visitor-feed-panel">
@@ -2040,10 +2054,12 @@ function VisitorFeedPanel({ campaignId }: { campaignId: number }) {
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500" />
           </span>
-          Live Visitor Feed
-          <Badge variant="secondary" className="text-xs ml-auto">
-            {feed.length} recent
-          </Badge>
+          Live Activity
+          {s.totalBuyers > 0 && (
+            <Badge variant="default" className="text-[10px] bg-green-600 hover:bg-green-600 ml-auto">
+              {s.totalBuyers} buyer{s.totalBuyers !== 1 ? "s" : ""}
+            </Badge>
+          )}
           {expanded ? (
             <ChevronUp className="w-4 h-4 text-muted-foreground" />
           ) : (
@@ -2053,97 +2069,148 @@ function VisitorFeedPanel({ campaignId }: { campaignId: number }) {
       </CardHeader>
 
       {expanded && (
-        <CardContent className="pt-0">
+        <CardContent className="pt-0 space-y-4">
           {isLoading ? (
-            <div className="space-y-3">
-              {[1, 2, 3].map((i) => (
-                <Skeleton key={i} className="h-24 w-full" />
-              ))}
-            </div>
-          ) : feed.length === 0 ? (
-            <p className="text-xs text-muted-foreground text-center py-6">
-              No visitor sessions yet. Data will appear once visitors interact with your page.
-            </p>
-          ) : (
             <div className="space-y-2">
-              {feed.map((v, i) => (
-                <div
-                  key={v.visitorId + "-" + i}
-                  className="rounded-lg border p-3 space-y-2"
-                  data-testid={`visitor-row-${i}`}
-                >
-                  {/* Top row: avatar + label + status */}
-                  <div className="flex items-center gap-2">
-                    <div
-                      className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0 ${
-                        v.converted
-                          ? "bg-gradient-to-br from-teal-400 to-teal-600"
-                          : "bg-gray-400"
-                      }`}
-                    >
-                      {v.converted ? "B" : "V"}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <span className="text-sm font-medium">
-                        {v.converted ? "Buyer" : "Visitor"}
-                      </span>
-                      {v.converted ? (
-                        <Badge variant="default" className="ml-2 text-[10px] bg-green-600 hover:bg-green-600">
-                          ✓ Converted{v.revenue > 0 ? ` · $${v.revenue}` : ""}
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary" className="ml-2 text-[10px]">
-                          Browsing
-                        </Badge>
-                      )}
-                    </div>
-                    <Badge variant="outline" className="text-[10px] capitalize">
-                      {v.device}
-                    </Badge>
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          ) : (
+            <>
+              {/* Buyer vs Visitor Summary */}
+              {s.totalVisitors > 0 && (
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-lg border p-2">
+                    <div className="text-lg font-bold text-foreground">{s.totalVisitors}</div>
+                    <div className="text-[10px] text-muted-foreground">Visitors</div>
                   </div>
-
-                  {/* Metrics row */}
-                  <div className="flex gap-4 text-xs text-muted-foreground">
-                    <span title="Scroll depth">↕ {v.maxScrollDepth}%</span>
-                    <span title="Time on page">⏱ {v.timeOnPage}s</span>
-                    <span title="Clicks">🖱 {v.clickCount} clicks</span>
+                  <div className="rounded-lg border p-2 border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-950/20">
+                    <div className="text-lg font-bold text-green-600">{s.totalBuyers}</div>
+                    <div className="text-[10px] text-muted-foreground">Buyers</div>
                   </div>
-
-                  {/* Section pills */}
-                  <div className="flex flex-wrap gap-1">
-                    {ALL_SECTIONS.map((section) => {
-                      const viewed = v.sectionsViewed.includes(section);
-                      return (
-                        <span
-                          key={section}
-                          className={`text-[10px] px-1.5 py-0.5 rounded ${
-                            viewed
-                              ? "bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300"
-                              : "bg-gray-100 text-gray-400 dark:bg-gray-800/50 dark:text-gray-500"
-                          }`}
-                        >
-                          {section.replace(/_/g, " ")}
-                        </span>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))}
-
-              {/* Brain Insight summary */}
-              {feed.length > 0 && (
-                <div className="mt-3 p-3 rounded-lg bg-gradient-to-r from-teal-50 to-emerald-50 dark:from-teal-950/20 dark:to-emerald-950/20 border border-teal-200 dark:border-teal-800">
-                  <div className="flex items-start gap-2">
-                    <Brain className="w-4 h-4 text-teal-600 mt-0.5 shrink-0" />
-                    <p className="text-xs text-teal-800 dark:text-teal-200">
-                      <span className="font-semibold">Brain Insight:</span>{" "}
-                      Buyers average {avgBuyerScroll}% scroll depth vs {avgVisitorScroll}% for non-buyers.
-                      Top engaged section: <span className="font-medium">{topSection.replace(/_/g, " ")}</span>.
-                    </p>
+                  <div className="rounded-lg border p-2">
+                    <div className="text-lg font-bold text-foreground">{convRate}%</div>
+                    <div className="text-[10px] text-muted-foreground">Conv. Rate</div>
                   </div>
                 </div>
               )}
-            </div>
+
+              {/* Behavior comparison: buyers vs non-buyers */}
+              {s.totalBuyers > 0 && s.totalVisitors > s.totalBuyers && (
+                <div className="rounded-lg border p-3 space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Buyer vs Visitor Behavior</div>
+                  <div className="grid grid-cols-3 gap-3 text-xs">
+                    <div>
+                      <div className="text-muted-foreground mb-1">Avg Scroll</div>
+                      <div className="font-medium text-green-600">{s.buyerAvgScroll}%</div>
+                      <div className="text-muted-foreground">{s.visitorAvgScroll}%</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground mb-1">Avg Time</div>
+                      <div className="font-medium text-green-600">{s.buyerAvgTime}s</div>
+                      <div className="text-muted-foreground">{s.visitorAvgTime}s</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground mb-1">Avg Clicks</div>
+                      <div className="font-medium text-green-600">{s.buyerAvgClicks}</div>
+                      <div className="text-muted-foreground">{s.visitorAvgClicks}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 text-[10px] text-muted-foreground pt-1">
+                    <span className="w-2 h-2 rounded-full bg-green-500 inline-block" /> Buyers
+                    <span className="w-2 h-2 rounded-full bg-gray-300 dark:bg-gray-600 inline-block ml-2" /> Non-buyers
+                  </div>
+                </div>
+              )}
+
+              {/* Recent Conversions */}
+              {conversions.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Recent Conversions
+                  </div>
+                  {conversions.map((v, i) => {
+                    const isExpanded = expandedBuyer === v.visitorId;
+                    return (
+                      <div
+                        key={v.visitorId + "-" + i}
+                        className="rounded-lg border border-green-200 dark:border-green-800/50 overflow-hidden"
+                        data-testid={`conversion-row-${i}`}
+                      >
+                        <div
+                          className="flex items-center gap-2 p-3 cursor-pointer hover:bg-muted/30 transition-colors"
+                          onClick={() => setExpandedBuyer(isExpanded ? null : v.visitorId)}
+                        >
+                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold text-white shrink-0 bg-gradient-to-br from-teal-400 to-teal-600">
+                            $
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium">${v.revenue}</span>
+                              <span className="text-xs text-muted-foreground">{timeAgo(v.convertedAt)}</span>
+                            </div>
+                            <div className="text-[10px] text-muted-foreground truncate">
+                              {v.headlineIsControl ? "Control" : "Variant"} headline · {v.device}
+                            </div>
+                          </div>
+                          {isExpanded ? (
+                            <ChevronUp className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                          ) : (
+                            <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                          )}
+                        </div>
+
+                        {/* Expanded: show variant details + behavior */}
+                        {isExpanded && (
+                          <div className="px-3 pb-3 pt-0 space-y-2 border-t border-green-100 dark:border-green-900/30">
+                            {/* Variant assignments */}
+                            <div className="space-y-1.5 pt-2">
+                              {v.headlineVariant && (
+                                <div className="text-xs">
+                                  <span className="text-muted-foreground">Headline: </span>
+                                  <span className="font-medium">
+                                    {v.headlineVariant.replace(/<[^>]*>/g, "").slice(0, 60)}{v.headlineVariant.replace(/<[^>]*>/g, "").length > 60 ? "…" : ""}
+                                  </span>
+                                  {v.headlineIsControl && <Badge variant="secondary" className="ml-1 text-[9px] py-0">Control</Badge>}
+                                </div>
+                              )}
+                              {v.subheadlineVariant && (
+                                <div className="text-xs">
+                                  <span className="text-muted-foreground">Sub: </span>
+                                  <span className="font-medium">
+                                    {v.subheadlineVariant.replace(/<[^>]*>/g, "").slice(0, 60)}{v.subheadlineVariant.replace(/<[^>]*>/g, "").length > 60 ? "…" : ""}
+                                  </span>
+                                  {v.subheadlineIsControl && <Badge variant="secondary" className="ml-1 text-[9px] py-0">Control</Badge>}
+                                </div>
+                              )}
+                            </div>
+                            {/* Behavior */}
+                            <div className="flex gap-4 text-xs text-muted-foreground">
+                              <span>↕ {v.maxScrollDepth}% scroll</span>
+                              <span>⏱ {v.timeOnPage}s on page</span>
+                              <span>{v.clickCount} clicks</span>
+                            </div>
+                            {v.referrer && (
+                              <div className="text-[10px] text-muted-foreground truncate">
+                                From: {v.referrer}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : s.totalVisitors > 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-4">
+                  No conversions yet. Buyers will appear here with the variants they saw.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground text-center py-4">
+                  No visitor data yet. Activity will appear once visitors interact with your page.
+                </p>
+              )}
+            </>
           )}
         </CardContent>
       )}
@@ -3018,6 +3085,7 @@ function DailyObservationCard({ campaignId, isPaidUser }: { campaignId: number; 
   const historyObservations = observations.slice(1, 6);
   const today = new Date().toISOString().slice(0, 10);
   const hasTodayObservation = latestObservation?.createdAt?.slice(0, 10) === today;
+  const isStale = latestObservation && !hasTodayObservation;
   const effectiveIsPaid = data?.isPaidUser ?? isPaidUser;
 
   // --- Locked / upgrade state (free non-BYOK users) ---
@@ -3119,8 +3187,15 @@ function DailyObservationCard({ campaignId, isPaidUser }: { campaignId: number; 
 
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-2">
-              <span className="text-sm font-semibold text-foreground">Today's Insight</span>
+              <span className="text-sm font-semibold text-foreground">
+                {hasTodayObservation ? "Today's Insight" : "Daily Insight"}
+              </span>
               {latestObservation && <CategoryBadge category={latestObservation.category} />}
+              {isStale && (
+                <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-300 dark:text-amber-400 dark:border-amber-700">
+                  {latestObservation.createdAt?.slice(0, 10)}
+                </Badge>
+              )}
               {!latestObservation && (
                 <span className="text-xs text-muted-foreground">No observations yet</span>
               )}
@@ -3128,12 +3203,19 @@ function DailyObservationCard({ campaignId, isPaidUser }: { campaignId: number; 
 
             {/* Observation text */}
             {latestObservation ? (
-              <p
-                className="text-sm text-foreground leading-relaxed"
-                data-testid="text-observation-content"
-              >
-                {latestObservation.observation}
-              </p>
+              <div>
+                {isStale && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mb-1.5">
+                    This insight is from a previous day. Generate a fresh one.
+                  </p>
+                )}
+                <p
+                  className={`text-sm leading-relaxed ${isStale ? "text-muted-foreground" : "text-foreground"}`}
+                  data-testid="text-observation-content"
+                >
+                  {latestObservation.observation}
+                </p>
+              </div>
             ) : (
               <p className="text-sm text-muted-foreground">
                 Generate your first behavioral insight. Uses 1 credit.
