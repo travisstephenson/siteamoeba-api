@@ -246,19 +246,41 @@ function VariantComparisonChart({
 }) {
   const TEAL = "hsl(160, 84%, 36%)";
   const TEAL_LIGHT = "hsl(160, 60%, 72%)";
+  const TEAL_MUTED = "hsl(160, 30%, 80%)";
+  const isMobile = typeof window !== "undefined" && window.innerWidth < 640;
 
-  // Build section groups dynamically from testSections when available
-  // Otherwise fall back to grouping by variant.type for legacy campaigns
+  // Build section groups — show ALL variants with data, grouped by section
   const sectionGroups = useMemo(() => {
     const groups: { key: string; label: string; variants: VariantStats[] }[] = [];
+    const placed = new Set<number>();
+
+    const typeLabels: Record<string, string> = {
+      headline: "Headlines",
+      subheadline: "Sub-Headlines",
+      cta: "Calls to Action",
+      social_proof: "Social Proof",
+      faq: "FAQ",
+      features: "Features",
+      pricing: "Pricing",
+      image: "Images",
+      nav: "Navigation",
+      body_copy: "Body Copy",
+      bonus: "Bonus",
+      guarantee: "Guarantee",
+      testimonials: "Testimonials",
+    };
 
     if (testSections.length > 0) {
-      // Scanner-based campaigns — group by actual test sections (active ones only)
-      const activeSections = testSections
-        .filter((s) => s.isActive)
-        .sort((a, b) => (a.testPriority ?? 99) - (b.testPriority ?? 99));
+      // Scanner-based campaigns — group by ALL test sections (active and inactive)
+      // Active sections first, then inactive, each sorted by priority
+      const allSections = [...testSections]
+        .sort((a, b) => {
+          // Active first, then by priority
+          if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+          return (a.testPriority ?? 99) - (b.testPriority ?? 99);
+        });
 
-      for (const section of activeSections) {
+      for (const section of allSections) {
         const sectionVars = variants
           .filter((v) => {
             if (v.testSectionId) return v.testSectionId === section.id;
@@ -269,13 +291,33 @@ function VariantComparisonChart({
           })
           .sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
 
-        if (sectionVars.length > 0) {
+        // Only show sections that have multiple variants (something to compare)
+        if (sectionVars.length > 1) {
+          sectionVars.forEach((v) => placed.add(v.id));
           groups.push({
             key: `section-${section.id}`,
             label: section.label,
             variants: sectionVars,
           });
         }
+      }
+
+      // Also group remaining unplaced variants by type (those without testSectionId)
+      const unplaced = variants.filter((v) => !placed.has(v.id));
+      const typeMap = new Map<string, VariantStats[]>();
+      for (const v of unplaced) {
+        const list = typeMap.get(v.type) || [];
+        list.push(v);
+        typeMap.set(v.type, list);
+      }
+      for (const [type, vars] of typeMap) {
+        if (vars.length <= 1) continue; // Need 2+ to compare
+        vars.sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
+        groups.push({
+          key: `type-${type}`,
+          label: typeLabels[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+          variants: vars,
+        });
       }
     } else {
       // Legacy campaigns — group by variant type
@@ -285,17 +327,6 @@ function VariantComparisonChart({
         list.push(v);
         typeMap.set(v.type, list);
       }
-      const typeLabels: Record<string, string> = {
-        headline: "Headlines",
-        subheadline: "Sub-Headlines",
-        cta: "Calls to Action",
-        social_proof: "Social Proof",
-        faq: "FAQ",
-        features: "Features",
-        pricing: "Pricing",
-        image: "Images",
-        nav: "Navigation",
-      };
       for (const [type, vars] of typeMap) {
         vars.sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
         groups.push({
@@ -309,17 +340,20 @@ function VariantComparisonChart({
     return groups;
   }, [variants, testSections]);
 
+  const nameMaxLen = isMobile ? 22 : 40;
   function makeChartData(list: VariantStats[]) {
-    return list.map((v, i) => ({
-      name:
-        v.text.replace(/<[^>]*>/g, "").slice(0, 40) +
-        (v.text.replace(/<[^>]*>/g, "").length > 40 ? "…" : ""),
-      rate: parseFloat((v.conversionRate ?? 0).toFixed(2)),
-      isLeader: i === 0 && list.length > 1,
-      id: v.id,
-      confidence: v.confidence ?? 0,
-      isControl: v.isControl,
-    }));
+    return list.map((v, i) => {
+      const plain = v.text.replace(/<[^>]*>/g, "");
+      return {
+        name: plain.slice(0, nameMaxLen) + (plain.length > nameMaxLen ? "…" : ""),
+        rate: parseFloat((v.conversionRate ?? 0).toFixed(2)),
+        isLeader: i === 0 && list.length > 1,
+        id: v.id,
+        confidence: v.confidence ?? 0,
+        isControl: v.isControl,
+        isActive: v.isActive,
+      };
+    });
   }
 
   const allChartData = sectionGroups.map((g) => ({
@@ -360,7 +394,7 @@ function VariantComparisonChart({
         </CardHeader>
         <CardContent>
           <div className="py-8 text-center text-sm text-muted-foreground">
-            No variants to compare yet.
+            No variants to compare yet. Activate a test section and generate variants to see performance data.
           </div>
         </CardContent>
       </Card>
@@ -371,11 +405,12 @@ function VariantComparisonChart({
     data,
     label,
   }: {
-    data: { name: string; rate: number; isLeader: boolean; id: number; isControl: boolean; confidence: number }[];
+    data: { name: string; rate: number; isLeader: boolean; id: number; isControl: boolean; confidence: number; isActive: boolean }[];
     label: string;
   }) {
     if (data.length === 0) return null;
-    if (allZero) {
+    const sectionAllZero = data.every((d) => d.rate === 0);
+    if (sectionAllZero) {
       return (
         <div>
           <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">{label}</div>
@@ -385,13 +420,14 @@ function VariantComparisonChart({
     }
     const barHeight = 36;
     const chartHeight = data.length * barHeight + 16;
+    const yAxisWidth = isMobile ? 100 : 180;
     return (
       <div>
-        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-2">
+        <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2 flex items-center gap-2 flex-wrap">
           {label}
           {data[0]?.isLeader && (
-            <Badge className="text-xs gap-1 bg-green-600 text-white py-0">
-              <Crown className="w-2.5 h-2.5" /> Leader: {data[0].name}
+            <Badge className="text-xs gap-1 bg-green-600 text-white py-0 max-w-[200px] truncate">
+              <Crown className="w-2.5 h-2.5 shrink-0" /> Leader: {data[0].name}
             </Badge>
           )}
         </div>
@@ -399,7 +435,7 @@ function VariantComparisonChart({
           <BarChart
             data={data}
             layout="vertical"
-            margin={{ top: 0, right: 40, bottom: 0, left: 8 }}
+            margin={{ top: 0, right: 40, bottom: 0, left: 0 }}
           >
             <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="hsl(var(--border))" />
             <XAxis
@@ -413,8 +449,8 @@ function VariantComparisonChart({
             <YAxis
               type="category"
               dataKey="name"
-              width={180}
-              tick={{ fontSize: 11 }}
+              width={yAxisWidth}
+              tick={{ fontSize: isMobile ? 10 : 11 }}
               axisLine={false}
               tickLine={false}
             />
@@ -422,15 +458,15 @@ function VariantComparisonChart({
               formatter={(value: number) => [`${value}%`, "Conv. Rate"]}
               contentStyle={{ fontSize: 12, borderRadius: 8 }}
             />
-                    <Bar dataKey="rate" radius={[0, 4, 4, 0]} barSize={20} label={{ position: "right", formatter: (v: number, _: any, i: number) => {
-                const entry = data[i];
-                const confStr = entry && !entry.isControl && entry.confidence > 0 ? ` (${entry.confidence.toFixed(0)}%)` : "";
-                return `${v}%${confStr}`;
-              }, fontSize: 11 }}>
+            <Bar dataKey="rate" radius={[0, 4, 4, 0]} barSize={20} label={{ position: "right", formatter: (v: number, _: any, i: number) => {
+              const entry = data[i];
+              const confStr = entry && !entry.isControl && entry.confidence > 0 ? ` (${entry.confidence.toFixed(0)}%)` : "";
+              return `${v}%${confStr}`;
+            }, fontSize: 11 }}>
               {data.map((entry) => (
                 <Cell
                   key={entry.id}
-                  fill={entry.isLeader ? TEAL : TEAL_LIGHT}
+                  fill={entry.isLeader ? TEAL : !entry.isActive ? TEAL_MUTED : TEAL_LIGHT}
                 />
               ))}
             </Bar>
@@ -3679,6 +3715,9 @@ export default function CampaignDetailPage() {
         {/* Daily chart */}
         <DailyChart campaignId={campaignId} />
 
+        {/* Live Visitor Feed — positioned high for visibility */}
+        <VisitorFeedPanel campaignId={campaignId} />
+
         {/* Variant sections — dynamic (scanner campaigns) or legacy (old campaigns) */}
         {testSections.length > 0 ? (
           <div className="space-y-3">
@@ -3736,9 +3775,6 @@ export default function CampaignDetailPage() {
             />
           </>
         )}
-
-        {/* Live Visitor Feed */}
-        <VisitorFeedPanel campaignId={campaignId} />
 
         {/* Embed code */}
         <EmbedCodeSection campaignId={campaignId} headlineSelector={campaign?.headlineSelector || "h1"} subheadlineSelector={campaign?.subheadlineSelector || "h2"} />
