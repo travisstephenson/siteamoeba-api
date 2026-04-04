@@ -237,20 +237,77 @@ function sampleSizeNeeded(visitors: number, conversionRate: number): number | nu
 // ---- Variant Comparison Chart ----
 function VariantComparisonChart({
   variants,
+  testSections,
   isLoading,
 }: {
   variants: VariantStats[];
+  testSections: TestSection[];
   isLoading: boolean;
 }) {
-  const headlineVariants = variants
-    .filter((v) => v.type === "headline")
-    .sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
-  const subheadlineVariants = variants
-    .filter((v) => v.type === "subheadline")
-    .sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
-
   const TEAL = "hsl(160, 84%, 36%)";
   const TEAL_LIGHT = "hsl(160, 60%, 72%)";
+
+  // Build section groups dynamically from testSections when available
+  // Otherwise fall back to grouping by variant.type for legacy campaigns
+  const sectionGroups = useMemo(() => {
+    const groups: { key: string; label: string; variants: VariantStats[] }[] = [];
+
+    if (testSections.length > 0) {
+      // Scanner-based campaigns — group by actual test sections (active ones only)
+      const activeSections = testSections
+        .filter((s) => s.isActive)
+        .sort((a, b) => (a.testPriority ?? 99) - (b.testPriority ?? 99));
+
+      for (const section of activeSections) {
+        const sectionVars = variants
+          .filter((v) => {
+            if (v.testSectionId) return v.testSectionId === section.id;
+            // Legacy fallback: match by type only if there's one section of this category
+            const sameCatSections = testSections.filter((s2) => s2.category === section.category);
+            if (sameCatSections.length <= 1) return v.type === section.category;
+            return false;
+          })
+          .sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
+
+        if (sectionVars.length > 0) {
+          groups.push({
+            key: `section-${section.id}`,
+            label: section.label,
+            variants: sectionVars,
+          });
+        }
+      }
+    } else {
+      // Legacy campaigns — group by variant type
+      const typeMap = new Map<string, VariantStats[]>();
+      for (const v of variants) {
+        const list = typeMap.get(v.type) || [];
+        list.push(v);
+        typeMap.set(v.type, list);
+      }
+      const typeLabels: Record<string, string> = {
+        headline: "Headlines",
+        subheadline: "Sub-Headlines",
+        cta: "Calls to Action",
+        social_proof: "Social Proof",
+        faq: "FAQ",
+        features: "Features",
+        pricing: "Pricing",
+        image: "Images",
+        nav: "Navigation",
+      };
+      for (const [type, vars] of typeMap) {
+        vars.sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
+        groups.push({
+          key: `type-${type}`,
+          label: typeLabels[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+          variants: vars,
+        });
+      }
+    }
+
+    return groups;
+  }, [variants, testSections]);
 
   function makeChartData(list: VariantStats[]) {
     return list.map((v, i) => ({
@@ -265,10 +322,12 @@ function VariantComparisonChart({
     }));
   }
 
-  const headlineData = makeChartData(headlineVariants);
-  const subheadlineData = makeChartData(subheadlineVariants);
+  const allChartData = sectionGroups.map((g) => ({
+    ...g,
+    data: makeChartData(g.variants),
+  }));
 
-  const allZero = [...headlineData, ...subheadlineData].every((d) => d.rate === 0);
+  const allZero = allChartData.every((g) => g.data.every((d) => d.rate === 0));
 
   if (isLoading) {
     return (
@@ -290,7 +349,7 @@ function VariantComparisonChart({
     );
   }
 
-  if (headlineData.length === 0 && subheadlineData.length === 0) {
+  if (allChartData.length === 0) {
     return (
       <Card>
         <CardHeader className="pb-2">
@@ -391,8 +450,9 @@ function VariantComparisonChart({
         <p className="text-xs text-muted-foreground">Conversion rate by variant — teal bar is the current leader.</p>
       </CardHeader>
       <CardContent className="space-y-6">
-        <VariantBarChart data={headlineData} label="Headlines" />
-        <VariantBarChart data={subheadlineData} label="Sub-Headlines" />
+        {allChartData.map((group) => (
+          <VariantBarChart key={group.key} data={group.data} label={group.label} />
+        ))}
       </CardContent>
     </Card>
   );
@@ -3614,7 +3674,7 @@ export default function CampaignDetailPage() {
         />
 
         {/* Variant comparison chart */}
-        <VariantComparisonChart variants={variants} isLoading={statsLoading} />
+        <VariantComparisonChart variants={variants} testSections={testSections} isLoading={statsLoading} />
 
         {/* Daily chart */}
         <DailyChart campaignId={campaignId} />
