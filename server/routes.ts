@@ -69,9 +69,9 @@ function sanitizeInput(input: string): string {
 // Plan config — Stripe price IDs for beta pricing (half off)
 const PLANS: Record<string, { credits: number; campaigns: number; priceId: string | null }> = {
   free:      { credits: 0,    campaigns: 999, priceId: null },
-  pro:       { credits: 500,  campaigns: 999, priceId: "price_1TICnfLj5hhothOuz2yfIWZi" },
-  business:  { credits: 1200, campaigns: 999, priceId: "price_1TICngLj5hhothOuPEzJ9Nwa" },
-  autopilot: { credits: 3000, campaigns: 999, priceId: "price_1TICngLj5hhothOuIYr4AGgK" },
+  pro:       { credits: 1000,  campaigns: 999, priceId: "price_1TICnfLj5hhothOuz2yfIWZi" },
+  business:  { credits: 2400, campaigns: 999, priceId: "price_1TICngLj5hhothOuPEzJ9Nwa" },
+  autopilot: { credits: 6000, campaigns: 999, priceId: "price_1TICngLj5hhothOuIYr4AGgK" },
 };
 
 const PLAN_LIMITS: Record<string, { concurrentTests: number }> = {
@@ -290,9 +290,9 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({
       plans: [
         { id: "free", name: "Free", price: 0, betaPrice: 0, credits: 0, features: ["BYOK — use your own AI keys", "Unlimited campaigns", "Behavioral tracking", "Analytics dashboard"] },
-        { id: "pro", name: "Pro", price: 47, betaPrice: 23.50, credits: 500, features: ["Brain access", "500 AI credits", "Daily observations", "Brain Chat", "All page sections"] },
-        { id: "business", name: "Business", price: 97, betaPrice: 48.50, credits: 1200, features: ["1,200 AI credits", "Multi-seat access", "Advanced analytics", "Custom webhooks"] },
-        { id: "autopilot", name: "Autopilot", price: 299, betaPrice: 149.50, credits: 3000, features: ["3,000 AI credits", "Autonomous optimization", "AI-driven winner promotion", "Unlimited concurrent tests"] },
+        { id: "pro", name: "Pro", price: 47, betaPrice: 23.50, credits: 1000, features: ["Brain access", "1,000 AI credits", "Daily observations", "Brain Chat", "All page sections"] },
+        { id: "business", name: "Business", price: 97, betaPrice: 48.50, credits: 2400, features: ["2,400 AI credits", "Multi-seat access", "Advanced analytics", "Custom webhooks"] },
+        { id: "autopilot", name: "Autopilot", price: 299, betaPrice: 149.50, credits: 6000, features: ["6,000 AI credits", "Autonomous optimization", "AI-driven winner promotion", "Unlimited concurrent tests"] },
       ],
     });
   });
@@ -3202,6 +3202,138 @@ export async function registerRoutes(server: Server, app: Express) {
     }
     await storage.markAllAnomaliesRead(campaignId);
     return res.json({ ok: true });
+  });
+
+  // GET /api/campaigns/:id/preview/:variantId — fetch actual page HTML and inject variant
+  // Supports both Authorization header and ?token= query param (needed for iframe loads)
+  app.get("/api/campaigns/:id/preview/:variantId", async (req: Request, res: Response) => {
+    // Auth: accept Bearer header OR ?token= query param
+    let userId: number | undefined;
+    const authHeader = req.headers.authorization;
+    const queryToken = req.query.token as string | undefined;
+    const tokenStr = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : queryToken;
+    if (!tokenStr) return res.status(401).send("Not authenticated");
+    try {
+      const payload = jwt.verify(tokenStr, JWT_SECRET) as { userId: number };
+      userId = payload.userId;
+    } catch {
+      return res.status(401).send("Invalid or expired token");
+    }
+
+    const campaignId = paramId(req.params.id);
+    const variantId = paramId(req.params.variantId);
+
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== userId) return res.status(404).send("Not found");
+
+    const variants = await storage.getVariantsByCampaign(campaignId);
+    const variant = variants.find((v) => v.id === variantId);
+    if (!variant) return res.status(404).send("Variant not found");
+
+    // Fetch the actual page
+    let html: string;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 10000);
+      const resp = await fetch(campaign.url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "SiteAmoeba-Preview/1.0" },
+      });
+      clearTimeout(timeout);
+      html = await resp.text();
+    } catch {
+      return res.status(502).send(`<html><body style="font-family:system-ui;padding:2rem;background:#0f172a;color:#f8fafc"><h2>Could not load page</h2><p>The page at <code>${campaign.url}</code> could not be fetched for preview. Make sure the URL is publicly accessible.</p></body></html>`);
+    }
+
+    // Get the test section for this variant to find the CSS selector
+    const testSections = await storage.getTestSectionsByCampaign(campaignId);
+    const section = testSections.find((s) => s.id === variant.testSectionId);
+    const selector = section?.cssSelector || "";
+
+    // Inject the variant replacement script before </body>
+    const injectionScript = `
+<script>
+(function() {
+  var selector = ${JSON.stringify(selector)};
+  var variantText = ${JSON.stringify(variant.text)};
+  var isHtmlSwap = ${JSON.stringify(variant.testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(variant.text))};
+
+  function applyVariant(el) {
+    if (isHtmlSwap) {
+      el.innerHTML = variantText;
+    } else {
+      el.textContent = variantText.replace(/<[^>]*>/g, "");
+    }
+    el.style.outline = "2px solid #10b981";
+    el.style.outlineOffset = "4px";
+    el.style.borderRadius = "4px";
+    el.style.transition = "outline-color 1s ease-in-out";
+    setInterval(function() {
+      el.style.outlineColor = el.style.outlineColor === "rgb(16, 185, 129)" ? "#34d399" : "#10b981";
+    }, 1000);
+  }
+
+  function tryApply() {
+    if (selector) {
+      var el = document.querySelector(selector);
+      if (el) { applyVariant(el); return; }
+    }
+    // Fallback: try common headline selectors
+    var headlineSelectors = ["h1", ".hero h1", "[class*='heading'] h1", "[class*='headline']"];
+    for (var i = 0; i < headlineSelectors.length; i++) {
+      var h = document.querySelector(headlineSelectors[i]);
+      if (h && h.textContent.length > 10) {
+        applyVariant(h);
+        break;
+      }
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", tryApply);
+  } else {
+    tryApply();
+  }
+
+  // Disable all links and forms to prevent navigation
+  document.addEventListener("click", function(e) { e.preventDefault(); e.stopPropagation(); }, true);
+  document.addEventListener("DOMContentLoaded", function() {
+    document.querySelectorAll("form").forEach(function(f) { f.addEventListener("submit", function(e) { e.preventDefault(); }); });
+  });
+})();
+</script>
+<style>
+  body::before {
+    content: "SiteAmoeba Preview — Variant Applied";
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 999999;
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white;
+    text-align: center;
+    padding: 6px 0;
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+  }
+  body { padding-top: 30px !important; }
+</style>`;
+
+    // Inject before </body>, or append if no </body> tag
+    if (html.includes("</body>")) {
+      html = html.replace("</body>", injectionScript + "</body>");
+    } else {
+      html = html + injectionScript;
+    }
+
+    res.set("Content-Type", "text/html; charset=utf-8");
+    res.set("X-Frame-Options", "ALLOWALL");
+    res.set("Content-Security-Policy", "");
+    res.send(html);
   });
 }
 

@@ -91,12 +91,13 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/use-auth";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, API_BASE, getAuthToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, Area, Line, Legend, CartesianGrid, ComposedChart } from "recharts";
 import type { Campaign, Variant, TestSection, DailyObservation } from "@shared/schema";
@@ -1894,6 +1895,7 @@ function VariantCard({
   controlVariant,
   sectionType,
   elementStyles,
+  campaignType,
 }: {
   variant: VariantStats;
   rank: number;
@@ -1903,8 +1905,9 @@ function VariantCard({
   controlVariant?: VariantStats;
   sectionType: string;
   elementStyles?: string | null;
+  campaignType?: string;
 }) {
-  const [showPreview, setShowPreview] = useState(false);
+  const isLeadGen = campaignType === "lead_gen";
   const [showDeclareDialog, setShowDeclareDialog] = useState(false);
   const [declaredWinner, setDeclaredWinner] = useState<VariantStats | null>(null);
   const { toast } = useToast();
@@ -1997,15 +2000,31 @@ function VariantCard({
           )}
         </div>
         <div className="flex items-center gap-1">
-          <Button
-            size="icon"
-            variant="ghost"
-            onClick={() => setShowPreview((v) => !v)}
-            data-testid={`button-preview-variant-${variant.id}`}
-            aria-label="Toggle preview"
-          >
-            {showPreview ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-          </Button>
+          <Dialog>
+            <DialogTrigger asChild>
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-1.5 h-7 text-xs px-2"
+                data-testid={`button-preview-variant-${variant.id}`}
+              >
+                <Eye className="w-3.5 h-3.5" /> Preview on Site
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-5xl h-[85vh] p-0 gap-0">
+              <div className="flex flex-col h-full">
+                <div className="px-4 py-2.5 border-b flex items-center justify-between bg-gradient-to-r from-teal-500 to-emerald-500 text-white rounded-t-lg shrink-0">
+                  <span className="text-sm font-medium">Live Preview — variant applied to your actual page</span>
+                </div>
+                <iframe
+                  src={`${PUBLIC_API_URL}/api/campaigns/${campaignId}/preview/${variant.id}${getAuthToken() ? `?token=${encodeURIComponent(getAuthToken()!)}` : ""}`}
+                  className="flex-1 w-full border-0 min-h-0"
+                  sandbox="allow-same-origin allow-scripts"
+                  title="Variant preview"
+                />
+              </div>
+            </DialogContent>
+          </Dialog>
           <Button
             size="icon"
             variant="ghost"
@@ -2085,16 +2104,16 @@ function VariantCard({
           <div className="font-semibold tabular-nums">{(variant.visitors ?? 0).toLocaleString()}</div>
         </div>
         <div>
-          <div className="text-muted-foreground">Conversions</div>
+          <div className="text-muted-foreground">{isLeadGen ? "Opt-ins" : "Conversions"}</div>
           <div className="font-semibold tabular-nums">{(variant.conversions ?? 0).toLocaleString()}</div>
         </div>
         <div>
-          <div className="text-muted-foreground">Conv. Rate</div>
+          <div className="text-muted-foreground">{isLeadGen ? "Opt-in Rate" : "Conv. Rate"}</div>
           <div className="font-semibold tabular-nums">{(variant.conversionRate ?? 0).toFixed(1)}%</div>
         </div>
         <div>
-          <div className="text-muted-foreground">Revenue</div>
-          <div className="font-semibold tabular-nums">${(variant.revenue ?? 0).toFixed(0)}</div>
+          <div className="text-muted-foreground">{isLeadGen ? "Leads" : "Revenue"}</div>
+          <div className="font-semibold tabular-nums">{isLeadGen ? (variant.conversions ?? 0).toLocaleString() : `$${(variant.revenue ?? 0).toFixed(0)}`}</div>
         </div>
       </div>
 
@@ -2143,15 +2162,6 @@ function VariantCard({
           )}
         </Button>
       </div>
-
-      {/* Preview */}
-      {showPreview && (
-        <HeroPreview
-          headline={variant.text}
-          subheadline={controlVariant?.text}
-          url={campaignUrl}
-        />
-      )}
 
       {/* Declare Winner Dialog */}
       <DeclareWinnerDialog
@@ -3294,6 +3304,7 @@ function TestSectionCard({
   allSections,
   statsLoading,
   userPlan,
+  campaignType,
 }: {
   section: TestSection;
   campaignId: number;
@@ -3302,6 +3313,7 @@ function TestSectionCard({
   allSections?: TestSection[];
   statsLoading: boolean;
   userPlan: string;
+  campaignType?: string;
 }) {
   const [expanded, setExpanded] = useState(section.isActive);
   const [showFullControlText, setShowFullControlText] = useState(false);
@@ -3526,6 +3538,7 @@ function TestSectionCard({
                       controlVariant={controlVariant}
                       sectionType={section.category}
                       elementStyles={section.elementStyles}
+                      campaignType={campaignType}
                     />
                   ));
                 })()}
@@ -3576,6 +3589,7 @@ function VariantSection({
   variants,
   isLoading,
   userPlan,
+  campaignType,
 }: {
   title: string;
   icon: React.ElementType;
@@ -3585,6 +3599,7 @@ function VariantSection({
   variants: VariantStats[];
   isLoading: boolean;
   userPlan: string;
+  campaignType?: string;
 }) {
   const typeVariants = variants
     .filter((v) => v.type === type)
@@ -3626,6 +3641,7 @@ function VariantSection({
                 campaignUrl={campaignUrl}
                 controlVariant={type === "subheadline" ? undefined : controlVariant}
                 sectionType={type}
+                campaignType={campaignType}
               />
             ))}
           </div>
@@ -4776,6 +4792,7 @@ export default function CampaignDetailPage() {
                 allSections={testSections}
                 statsLoading={statsLoading}
                 userPlan={userPlan}
+                campaignType={stats?.campaignType}
               />
             ))}
           </div>
@@ -4790,6 +4807,7 @@ export default function CampaignDetailPage() {
               variants={variants}
               isLoading={statsLoading}
               userPlan={userPlan}
+              campaignType={stats?.campaignType}
             />
 
             <VariantSection
@@ -4801,6 +4819,7 @@ export default function CampaignDetailPage() {
               variants={variants}
               isLoading={statsLoading}
               userPlan={userPlan}
+              campaignType={stats?.campaignType}
             />
           </>
         )}
