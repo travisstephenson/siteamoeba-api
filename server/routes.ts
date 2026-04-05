@@ -1784,6 +1784,30 @@ export async function registerRoutes(server: Server, app: Express) {
       }
     }
 
+    // Helper: resolve variant → test section selector/testMethod
+    // Returns { id, text, selector, testMethod } or null
+    async function resolveVariantPayload(variant: any) {
+      if (!variant) return null;
+      const payload: any = { id: variant.id, text: variant.text };
+      // Look up selector from the test section linked to this variant
+      if (variant.testSectionId) {
+        const section = await storage.getTestSectionById(variant.testSectionId);
+        if (section) {
+          payload.selector = section.selector;
+          payload.testMethod = section.testMethod || "text_swap";
+        }
+      }
+      // Fallback: use campaign-level selectors if no test section
+      if (!payload.selector) {
+        if (variant.type === "headline" && campaign.headlineSelector) {
+          payload.selector = campaign.headlineSelector;
+        } else if (variant.type === "subheadline" && campaign.subheadlineSelector) {
+          payload.selector = campaign.subheadlineSelector;
+        }
+      }
+      return payload;
+    }
+
     // Check for existing visitor
     const existing = await storage.getVisitor(visitorId);
     if (existing && existing.campaignId === campaignId) {
@@ -1791,8 +1815,8 @@ export async function registerRoutes(server: Server, app: Express) {
       const s = await storage.getVariant(existing.subheadlineVariantId);
       return res.json({
         visitorId: existing.id,
-        headline: h ? { id: h.id, text: h.text } : null,
-        subheadline: s ? { id: s.id, text: s.text } : null,
+        headline: await resolveVariantPayload(h),
+        subheadline: await resolveVariantPayload(s),
       });
     }
 
@@ -1859,8 +1883,8 @@ export async function registerRoutes(server: Server, app: Express) {
 
     res.json({
       visitorId: visitor.id,
-      headline: hVariant ? { id: hVariant.id, text: hVariant.text } : null,
-      subheadline: sVariant ? { id: sVariant.id, text: sVariant.text } : null,
+      headline: await resolveVariantPayload(hVariant),
+      subheadline: await resolveVariantPayload(sVariant),
     });
 
     // Fire-and-forget anomaly detection (throttled to once per 5 min per campaign)

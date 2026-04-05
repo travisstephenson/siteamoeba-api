@@ -59,14 +59,89 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     return params;
   })();
 
-  // === HELPER: Apply variant text to element ===
-  // Uses innerHTML when text contains HTML tags (html_swap), textContent otherwise (text_swap)
-  function applyVariantText(el, text, testMethod) {
-    if (!el || !text) return;
+  // === HELPER: Apply variant text to a section ===
+  // Handles comma-separated selectors (multi-element headlines):
+  //   - Puts variant text into the FIRST matched element
+  //   - HIDES all other matched elements so there's no duplication
+  //   - Preserves original styling on the surviving element
+  function applySectionVariant(selector, text, testMethod) {
+    if (!selector || !text) return;
+
+    // Split comma-separated selectors into individual parts
+    var parts = selector.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+    var allElements = [];
+
+    // Collect all matching elements across all selector parts, in order
+    for (var i = 0; i < parts.length; i++) {
+      try {
+        var matches = document.querySelectorAll(parts[i]);
+        for (var j = 0; j < matches.length; j++) {
+          // Avoid duplicates (same element matched by multiple selectors)
+          if (allElements.indexOf(matches[j]) === -1) {
+            allElements.push(matches[j]);
+          }
+        }
+      } catch(e) {
+        console.log("SiteAmoeba: invalid selector part", parts[i], e);
+      }
+    }
+
+    if (allElements.length === 0) {
+      console.log("SiteAmoeba: no elements found for selector", selector);
+      return;
+    }
+
+    // First element gets the variant text
+    var primary = allElements[0];
+    if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
+      primary.innerHTML = text;
+    } else {
+      primary.textContent = text;
+    }
+
+    // Hide all remaining sibling elements that were part of the same visual headline
+    // This prevents duplication (e.g., 3 H1s that visually form one headline)
+    for (var k = 1; k < allElements.length; k++) {
+      allElements[k].style.display = "none";
+      allElements[k].setAttribute("data-sa-hidden", "true");
+    }
+  }
+
+  // === HELPER: Fallback for legacy responses without selector ===
+  function applyLegacyVariant(tagName, text, testMethod) {
+    if (!text) return;
+    var el = document.querySelector(tagName);
+    if (!el) return;
     if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
       el.innerHTML = text;
     } else {
       el.textContent = text;
+    }
+  }
+
+  // === POST-REPLACEMENT INTEGRITY CHECK ===
+  // After applying all variants, scan for duplicate visible text that would look broken
+  function postReplacementCheck() {
+    // Gather all visible H1 text on the page
+    var h1s = document.querySelectorAll("h1");
+    var visibleTexts = [];
+    for (var i = 0; i < h1s.length; i++) {
+      if (h1s[i].offsetParent !== null && !h1s[i].getAttribute("data-sa-hidden")) {
+        var t = (h1s[i].textContent || "").trim();
+        if (t.length > 10) visibleTexts.push({ el: h1s[i], text: t });
+      }
+    }
+    // Check for substantial text overlap between visible H1s
+    for (var a = 0; a < visibleTexts.length; a++) {
+      for (var b = a + 1; b < visibleTexts.length; b++) {
+        // If one H1's text contains or substantially overlaps another's, hide the duplicate
+        if (visibleTexts[a].text.indexOf(visibleTexts[b].text) !== -1 ||
+            visibleTexts[b].text.indexOf(visibleTexts[a].text) !== -1) {
+          // Hide the shorter/later one
+          visibleTexts[b].el.style.display = "none";
+          visibleTexts[b].el.setAttribute("data-sa-hidden", "true");
+        }
+      }
     }
   }
 
@@ -80,22 +155,33 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   fetch(assignUrl)
     .then(function(r) { return r.json(); })
     .then(function(data) {
+      // Apply headline variant
       if (data.headline && data.headline.text) {
-        var h1 = document.querySelector("h1");
-        if (h1) applyVariantText(h1, data.headline.text, "text_swap");
+        if (data.headline.selector) {
+          applySectionVariant(data.headline.selector, data.headline.text, data.headline.testMethod || "text_swap");
+        } else {
+          applyLegacyVariant("h1", data.headline.text, "text_swap");
+        }
       }
+      // Apply subheadline variant
       if (data.subheadline && data.subheadline.text) {
-        var sub = document.querySelector("h2");
-        if (sub) applyVariantText(sub, data.subheadline.text, "text_swap");
+        if (data.subheadline.selector) {
+          applySectionVariant(data.subheadline.selector, data.subheadline.text, data.subheadline.testMethod || "text_swap");
+        } else {
+          applyLegacyVariant("h2", data.subheadline.text, "text_swap");
+        }
       }
       // Apply section variants (body_copy, CTAs, etc.) when returned by the assign endpoint
       if (data.sections && Array.isArray(data.sections)) {
         data.sections.forEach(function(sv) {
-          if (!sv || !sv.selector || !sv.text) return;
-          var el = document.querySelector(sv.selector);
-          if (el) applyVariantText(el, sv.text, sv.testMethod || "text_swap");
+          if (!sv || !sv.text) return;
+          if (sv.selector) {
+            applySectionVariant(sv.selector, sv.text, sv.testMethod || "text_swap");
+          }
         });
       }
+      // Final page integrity check — catch any remaining duplicate text
+      postReplacementCheck();
     })
     .catch(function(e) { console.log("SiteAmoeba: using defaults", e); });
 
