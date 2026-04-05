@@ -91,12 +91,36 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       return;
     }
 
+    // Capture computed styles from ALL original elements BEFORE making changes
+    // We'll use the element with the most text as the style donor (it's usually the "main" piece)
+    var styleDonor = allElements[0];
+    var maxLen = (allElements[0].textContent || "").length;
+    for (var d = 1; d < allElements.length; d++) {
+      var len = (allElements[d].textContent || "").length;
+      if (len > maxLen) { maxLen = len; styleDonor = allElements[d]; }
+    }
+    var donorStyles = window.getComputedStyle(styleDonor);
+    var preserveProps = ["fontSize", "fontWeight", "fontFamily", "color", "lineHeight", "letterSpacing", "textTransform", "textAlign"];
+    var capturedStyles = {};
+    for (var p = 0; p < preserveProps.length; p++) {
+      capturedStyles[preserveProps[p]] = donorStyles[preserveProps[p]];
+    }
+
     // First element gets the variant text
     var primary = allElements[0];
     if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
       primary.innerHTML = text;
     } else {
       primary.textContent = text;
+    }
+
+    // Apply captured styles to the primary element to preserve the original look
+    // (the primary may have had different styling than the "main" visual piece)
+    for (var sp = 0; sp < preserveProps.length; sp++) {
+      var prop = preserveProps[sp];
+      // Convert camelCase to kebab-case for style.setProperty
+      var cssProp = prop.replace(/([A-Z])/g, "-$1").toLowerCase();
+      primary.style.setProperty(cssProp, capturedStyles[prop], "important");
     }
 
     // Hide all remaining sibling elements that were part of the same visual headline
@@ -155,33 +179,34 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   fetch(assignUrl)
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      // Apply headline variant
-      if (data.headline && data.headline.text) {
+      // Apply headline variant — SKIP if control (let original page be the control)
+      if (data.headline && data.headline.text && !data.headline.isControl) {
         if (data.headline.selector) {
           applySectionVariant(data.headline.selector, data.headline.text, data.headline.testMethod || "text_swap");
         } else {
           applyLegacyVariant("h1", data.headline.text, "text_swap");
         }
       }
-      // Apply subheadline variant
-      if (data.subheadline && data.subheadline.text) {
+      // Apply subheadline variant — SKIP if control
+      if (data.subheadline && data.subheadline.text && !data.subheadline.isControl) {
         if (data.subheadline.selector) {
           applySectionVariant(data.subheadline.selector, data.subheadline.text, data.subheadline.testMethod || "text_swap");
         } else {
           applyLegacyVariant("h2", data.subheadline.text, "text_swap");
         }
       }
-      // Apply section variants (body_copy, CTAs, etc.) when returned by the assign endpoint
+      // Apply section variants (body_copy, CTAs, etc.) — SKIP controls
       if (data.sections && Array.isArray(data.sections)) {
         data.sections.forEach(function(sv) {
-          if (!sv || !sv.text) return;
+          if (!sv || !sv.text || sv.isControl) return;
           if (sv.selector) {
             applySectionVariant(sv.selector, sv.text, sv.testMethod || "text_swap");
           }
         });
       }
-      // Final page integrity check — catch any remaining duplicate text
-      postReplacementCheck();
+      // Final page integrity check — only if any non-control variants were applied
+      var anyApplied = (data.headline && !data.headline.isControl) || (data.subheadline && !data.subheadline.isControl);
+      if (anyApplied) postReplacementCheck();
     })
     .catch(function(e) { console.log("SiteAmoeba: using defaults", e); });
 

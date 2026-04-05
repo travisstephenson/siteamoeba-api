@@ -1791,7 +1791,7 @@ export async function registerRoutes(server: Server, app: Express) {
     const _testSectionsCache: Record<number, any> = {};
     async function resolveVariantPayload(variant: any) {
       if (!variant) return null;
-      const payload: any = { id: variant.id, text: variant.text };
+      const payload: any = { id: variant.id, text: variant.text, isControl: !!variant.isControl };
 
       // Strategy 1: Direct link — variant has testSectionId
       if (variant.testSectionId) {
@@ -3292,9 +3292,15 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     // Get the test section for this variant to find the CSS selector
+    // Strategy: direct link first, then find by campaign+category
     const testSections = await storage.getTestSectionsByCampaign(campaignId);
-    const section = testSections.find((s) => s.id === variant.testSectionId);
+    let section = testSections.find((s) => s.id === variant.testSectionId);
+    if (!section) {
+      section = testSections.find((s) => s.isActive && s.category === variant.type) || undefined;
+    }
     const selector = section?.selector || "";
+    const testMethod = section?.testMethod || "text_swap";
+    const isControlVariant = !!variant.isControl;
 
     // Inject the variant replacement script before </body>
     const injectionScript = `
@@ -3302,14 +3308,11 @@ export async function registerRoutes(server: Server, app: Express) {
 (function() {
   var selector = ${JSON.stringify(selector)};
   var variantText = ${JSON.stringify(variant.text)};
-  var isHtmlSwap = ${JSON.stringify(variant.testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(variant.text))};
+  var isHtmlSwap = ${JSON.stringify(testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(variant.text))};
+  var isControl = ${JSON.stringify(isControlVariant)};
 
-  function applyVariant(el) {
-    if (isHtmlSwap) {
-      el.innerHTML = variantText;
-    } else {
-      el.textContent = variantText.replace(/<[^>]*>/g, "");
-    }
+  // For control variants: don't change text, just highlight the original element
+  function highlightElement(el) {
     el.style.outline = "2px solid #10b981";
     el.style.outlineOffset = "4px";
     el.style.borderRadius = "4px";
@@ -3319,28 +3322,73 @@ export async function registerRoutes(server: Server, app: Express) {
     }, 1000);
   }
 
+  function applyVariant(allEls) {
+    if (allEls.length === 0) return;
+
+    if (isControl) {
+      // Control: just highlight the first element, don't change anything
+      highlightElement(allEls[0]);
+      return;
+    }
+
+    // Capture styles from the element with the most text (the "main" visual piece)
+    var styleDonor = allEls[0];
+    var maxLen = (allEls[0].textContent || "").length;
+    for (var d = 1; d < allEls.length; d++) {
+      var len = (allEls[d].textContent || "").length;
+      if (len > maxLen) { maxLen = len; styleDonor = allEls[d]; }
+    }
+    var donorCS = window.getComputedStyle(styleDonor);
+    var props = ["fontSize", "fontWeight", "fontFamily", "color", "lineHeight", "letterSpacing", "textTransform", "textAlign"];
+    var saved = {};
+    for (var p = 0; p < props.length; p++) saved[props[p]] = donorCS[props[p]];
+
+    // Apply variant text to first element
+    var primary = allEls[0];
+    if (isHtmlSwap) {
+      primary.innerHTML = variantText;
+    } else {
+      primary.textContent = variantText.replace(/<[^>]*>/g, "");
+    }
+
+    // Preserve original styling on the primary
+    for (var sp = 0; sp < props.length; sp++) {
+      var cssProp = props[sp].replace(/([A-Z])/g, "-$1").toLowerCase();
+      primary.style.setProperty(cssProp, saved[props[sp]], "important");
+    }
+
+    // Highlight it
+    highlightElement(primary);
+
+    // Hide remaining elements
+    for (var k = 1; k < allEls.length; k++) {
+      allEls[k].style.display = "none";
+    }
+  }
+
   function tryApply() {
-    var applied = false;
+    var allElements = [];
     if (selector) {
-      // Handle comma-separated selectors
-      var selectors = selector.split(",").map(function(s) { return s.trim(); });
-      for (var s = 0; s < selectors.length; s++) {
+      var parts = selector.split(",").map(function(s) { return s.trim(); });
+      for (var i = 0; i < parts.length; i++) {
         try {
-          var el = document.querySelector(selectors[s]);
-          if (el) { applyVariant(el); applied = true; break; }
+          var matches = document.querySelectorAll(parts[i]);
+          for (var j = 0; j < matches.length; j++) {
+            if (allElements.indexOf(matches[j]) === -1) allElements.push(matches[j]);
+          }
         } catch(e) {}
       }
-      if (applied) return;
     }
-    // Fallback: try common headline selectors — but only for headline variants
-    var headlineSelectors = ["h1", ".hero h1", "[class*='heading'] h1", "[class*='headline']"];
-    for (var i = 0; i < headlineSelectors.length; i++) {
-      var h = document.querySelector(headlineSelectors[i]);
-      if (h && h.textContent.length > 10) {
-        applyVariant(h);
-        break;
-      }
+    if (allElements.length === 0) {
+      // Fallback for legacy
+      var h = document.querySelector("h1");
+      if (h && h.textContent.length > 10) allElements.push(h);
     }
+    if (allElements.length > 0) {
+      applyVariant(allElements);
+      return true;
+    }
+    return false;
   }
 
   // Try immediately, then retry with increasing delays for dynamic pages (GHL, etc.)
@@ -3348,10 +3396,7 @@ export async function registerRoutes(server: Server, app: Express) {
   var variantApplied = false;
   function attemptApply() {
     if (variantApplied) return;
-    tryApply();
-    // Check if it worked by looking for our outline
-    var styled = document.querySelector('[style*="outline"]');
-    if (styled) variantApplied = true;
+    if (tryApply()) variantApplied = true;
   }
   
   if (document.readyState === "loading") {
@@ -3375,7 +3420,7 @@ export async function registerRoutes(server: Server, app: Express) {
 </script>
 <style>
   body::before {
-    content: "SiteAmoeba Preview — Variant Applied";
+    content: "SiteAmoeba Preview — ${isControlVariant ? 'Control (Original Page)' : 'Variant Applied'}";
     display: block;
     position: fixed;
     top: 0;
