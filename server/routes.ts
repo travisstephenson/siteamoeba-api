@@ -1786,10 +1786,14 @@ export async function registerRoutes(server: Server, app: Express) {
 
     // Helper: resolve variant → test section selector/testMethod
     // Returns { id, text, selector, testMethod } or null
+    // CRITICAL: Every variant MUST get a selector so the widget targets the right elements.
+    // Without a selector, the widget falls back to generic h1/h2 which breaks multi-element pages.
+    const _testSectionsCache: Record<number, any> = {};
     async function resolveVariantPayload(variant: any) {
       if (!variant) return null;
       const payload: any = { id: variant.id, text: variant.text };
-      // Look up selector from the test section linked to this variant
+
+      // Strategy 1: Direct link — variant has testSectionId
       if (variant.testSectionId) {
         const section = await storage.getTestSectionById(variant.testSectionId);
         if (section) {
@@ -1797,7 +1801,24 @@ export async function registerRoutes(server: Server, app: Express) {
           payload.testMethod = section.testMethod || "text_swap";
         }
       }
-      // Fallback: use campaign-level selectors if no test section
+
+      // Strategy 2: Find an active test section for this campaign+category
+      // (handles control variants that weren't linked to a test section)
+      if (!payload.selector) {
+        if (!_testSectionsCache[campaignId]) {
+          _testSectionsCache[campaignId] = await storage.getTestSectionsByCampaign(campaignId);
+        }
+        const sections = _testSectionsCache[campaignId] as any[];
+        const matchingSection = sections.find((s: any) =>
+          s.isActive && s.category === variant.type
+        );
+        if (matchingSection) {
+          payload.selector = matchingSection.selector;
+          payload.testMethod = matchingSection.testMethod || "text_swap";
+        }
+      }
+
+      // Strategy 3: Campaign-level selector fallback
       if (!payload.selector) {
         if (variant.type === "headline" && campaign.headlineSelector) {
           payload.selector = campaign.headlineSelector;
@@ -1805,6 +1826,7 @@ export async function registerRoutes(server: Server, app: Express) {
           payload.selector = campaign.subheadlineSelector;
         }
       }
+
       return payload;
     }
 
