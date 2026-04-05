@@ -145,6 +145,13 @@ export const visitors = pgTable("visitors", {
   revenue: real("revenue"),
   userAgent: text("user_agent"),
   referrer: text("referrer"),
+  utmSource: text("utm_source"),
+  utmMedium: text("utm_medium"),
+  utmCampaign: text("utm_campaign"),
+  utmContent: text("utm_content"),
+  utmTerm: text("utm_term"),
+  trafficSource: text("traffic_source"),
+  deviceCategory: text("device_category"),
   firstSeen: text("first_seen").notNull().$defaultFn(() => new Date().toISOString()),
 });
 

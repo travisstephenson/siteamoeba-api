@@ -207,6 +207,47 @@ export interface IStorage {
   // Pixel verification
   updatePixelVerification(campaignId: number, field: "pixel" | "conversion_pixel", verified: boolean, url?: string): Promise<void>;
 
+  // Revenue events + LTV
+  addRevenueEvent(data: {
+    visitorId?: string;
+    campaignId: number;
+    source: string;
+    eventType: string;
+    amount: number;
+    currency?: string;
+    externalId?: string;
+    customerEmail?: string;
+    metadata?: string;
+  }): Promise<void>;
+  getRevenueEventsByVisitor(visitorId: string): Promise<any[]>;
+  getLTVByCampaign(campaignId: number): Promise<{
+    totalRevenue: number;
+    totalTransactions: number;
+    averageLTV: number;
+    revenueBySource: Record<string, number>;
+    ltv30Day: number;
+    ltv90Day: number;
+  }>;
+
+  // Traffic Anomalies
+  createAnomaly(data: {
+    campaignId: number;
+    anomalyType: string;
+    source: string | null;
+    title: string;
+    description: string;
+    severity: string;
+    metricValue: number | null;
+    baselineValue: number | null;
+  }): Promise<any>;
+  getUnreadAnomalies(campaignId: number): Promise<any[]>;
+  getAllAnomalies(campaignId: number, limit?: number): Promise<any[]>;
+  getUnreadAnomalyCount(campaignId: number): Promise<number>;
+  getUnreadAnomalyCountsByUser(userId: number): Promise<Record<number, number>>;
+  markAnomalyRead(anomalyId: number): Promise<void>;
+  markAllAnomaliesRead(campaignId: number): Promise<void>;
+  checkRecentAnomaly(campaignId: number, anomalyType: string, source: string | null, sinceDate: string): Promise<boolean>;
+
   // Init
   pushSchema(): Promise<void>;
 }
@@ -442,10 +483,21 @@ class StorageImpl implements IStorage {
       ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS conversion_pixel_verified BOOLEAN NOT NULL DEFAULT false;
       ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS conversion_pixel_verified_at TEXT;
     `);
+    // UTM + traffic source columns on visitors
+    await pool.query(`
+      ALTER TABLE visitors ADD COLUMN IF NOT EXISTS utm_source TEXT;
+      ALTER TABLE visitors ADD COLUMN IF NOT EXISTS utm_medium TEXT;
+      ALTER TABLE visitors ADD COLUMN IF NOT EXISTS utm_campaign TEXT;
+      ALTER TABLE visitors ADD COLUMN IF NOT EXISTS utm_content TEXT;
+      ALTER TABLE visitors ADD COLUMN IF NOT EXISTS utm_term TEXT;
+      ALTER TABLE visitors ADD COLUMN IF NOT EXISTS traffic_source TEXT;
+      ALTER TABLE visitors ADD COLUMN IF NOT EXISTS device_category TEXT;
+    `);
     // Performance indexes for high-traffic query paths
     await pool.query(`
       CREATE INDEX IF NOT EXISTS idx_visitors_campaign_id ON visitors(campaign_id);
       CREATE INDEX IF NOT EXISTS idx_visitors_campaign_converted ON visitors(campaign_id, converted);
+      CREATE INDEX IF NOT EXISTS idx_visitors_traffic_source ON visitors(campaign_id, traffic_source);
       CREATE INDEX IF NOT EXISTS idx_variants_campaign_id ON variants(campaign_id);
       CREATE INDEX IF NOT EXISTS idx_variants_campaign_type ON variants(campaign_id, type);
       CREATE INDEX IF NOT EXISTS idx_test_sections_campaign_id ON test_sections(campaign_id);
@@ -456,6 +508,49 @@ class StorageImpl implements IStorage {
       CREATE INDEX IF NOT EXISTS idx_impressions_campaign_id ON impressions(campaign_id);
       CREATE INDEX IF NOT EXISTS idx_test_lessons_page_type ON test_lessons(page_type, section_type);
       CREATE INDEX IF NOT EXISTS idx_feedback_user_id ON feedback(user_id);
+    `);
+    // Revenue events table for multi-touch LTV tracking
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS revenue_events (
+        id SERIAL PRIMARY KEY,
+        visitor_id TEXT,
+        campaign_id INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        amount REAL NOT NULL DEFAULT 0,
+        currency TEXT DEFAULT 'USD',
+        external_id TEXT,
+        customer_email TEXT,
+        metadata TEXT,
+        created_at TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_revenue_events_visitor ON revenue_events(visitor_id);
+      CREATE INDEX IF NOT EXISTS idx_revenue_events_campaign ON revenue_events(campaign_id);
+      CREATE INDEX IF NOT EXISTS idx_revenue_events_email ON revenue_events(customer_email);
+    `);
+    // Webhook / integration columns on campaigns
+    await pool.query(`
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS stripe_connected BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS shopify_connected BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
+    `);
+    // Traffic anomalies for lightbulb intelligence alerts
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS traffic_anomalies (
+        id SERIAL PRIMARY KEY,
+        campaign_id INTEGER NOT NULL,
+        anomaly_type TEXT NOT NULL,
+        source TEXT,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        severity TEXT DEFAULT 'info',
+        metric_value REAL,
+        baseline_value REAL,
+        is_read BOOLEAN NOT NULL DEFAULT false,
+        detected_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_anomalies_campaign ON traffic_anomalies(campaign_id, is_read);
     `);
   }
 
@@ -1426,6 +1521,213 @@ class StorageImpl implements IStorage {
         [verified, verified ? now : null, url || null, campaignId]
       );
     }
+  }
+
+  // ===== Revenue Events + LTV =====
+  async addRevenueEvent(data: {
+    visitorId?: string;
+    campaignId: number;
+    source: string;
+    eventType: string;
+    amount: number;
+    currency?: string;
+    externalId?: string;
+    customerEmail?: string;
+    metadata?: string;
+  }): Promise<void> {
+    await pool.query(
+      `INSERT INTO revenue_events
+        (visitor_id, campaign_id, source, event_type, amount, currency, external_id, customer_email, metadata, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        data.visitorId || null,
+        data.campaignId,
+        data.source,
+        data.eventType,
+        data.amount,
+        data.currency || 'USD',
+        data.externalId || null,
+        data.customerEmail || null,
+        data.metadata || null,
+        new Date().toISOString(),
+      ]
+    );
+  }
+
+  async getRevenueEventsByVisitor(visitorId: string): Promise<any[]> {
+    const result = await pool.query(
+      `SELECT * FROM revenue_events WHERE visitor_id = $1 ORDER BY created_at DESC`,
+      [visitorId]
+    );
+    return result.rows;
+  }
+
+  async getLTVByCampaign(campaignId: number): Promise<{
+    totalRevenue: number;
+    totalTransactions: number;
+    averageLTV: number;
+    revenueBySource: Record<string, number>;
+    ltv30Day: number;
+    ltv90Day: number;
+  }> {
+    const now = new Date();
+    const d30 = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const d90 = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
+
+    const totalResult = await pool.query(
+      `SELECT
+         COALESCE(SUM(amount), 0) AS total_revenue,
+         COUNT(*) AS total_transactions
+       FROM revenue_events
+       WHERE campaign_id = $1 AND event_type != 'refund'`,
+      [campaignId]
+    );
+
+    const sourceResult = await pool.query(
+      `SELECT source, COALESCE(SUM(amount), 0) AS revenue
+       FROM revenue_events
+       WHERE campaign_id = $1 AND event_type != 'refund'
+       GROUP BY source`,
+      [campaignId]
+    );
+
+    // Count distinct customers (by visitor_id or customer_email) for average LTV
+    const customerResult = await pool.query(
+      `SELECT COUNT(DISTINCT COALESCE(visitor_id, customer_email)) AS customer_count
+       FROM revenue_events
+       WHERE campaign_id = $1 AND event_type != 'refund'`,
+      [campaignId]
+    );
+
+    const ltv30Result = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS revenue,
+              COUNT(DISTINCT COALESCE(visitor_id, customer_email)) AS customers
+       FROM revenue_events
+       WHERE campaign_id = $1 AND event_type != 'refund' AND created_at >= $2`,
+      [campaignId, d30]
+    );
+
+    const ltv90Result = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS revenue,
+              COUNT(DISTINCT COALESCE(visitor_id, customer_email)) AS customers
+       FROM revenue_events
+       WHERE campaign_id = $1 AND event_type != 'refund' AND created_at >= $2`,
+      [campaignId, d90]
+    );
+
+    const totalRevenue = parseFloat(totalResult.rows[0]?.total_revenue) || 0;
+    const totalTransactions = parseInt(totalResult.rows[0]?.total_transactions) || 0;
+    const customerCount = parseInt(customerResult.rows[0]?.customer_count) || 1;
+    const averageLTV = totalRevenue / customerCount;
+
+    const ltv30Customers = parseInt(ltv30Result.rows[0]?.customers) || 1;
+    const ltv30Revenue = parseFloat(ltv30Result.rows[0]?.revenue) || 0;
+    const ltv30Day = ltv30Revenue / ltv30Customers;
+
+    const ltv90Customers = parseInt(ltv90Result.rows[0]?.customers) || 1;
+    const ltv90Revenue = parseFloat(ltv90Result.rows[0]?.revenue) || 0;
+    const ltv90Day = ltv90Revenue / ltv90Customers;
+
+    const revenueBySource: Record<string, number> = {};
+    for (const row of sourceResult.rows) {
+      revenueBySource[row.source] = parseFloat(row.revenue) || 0;
+    }
+
+    return {
+      totalRevenue: parseFloat(totalRevenue.toFixed(2)),
+      totalTransactions,
+      averageLTV: parseFloat(averageLTV.toFixed(2)),
+      revenueBySource,
+      ltv30Day: parseFloat(ltv30Day.toFixed(2)),
+      ltv90Day: parseFloat(ltv90Day.toFixed(2)),
+    };
+  }
+  // ===== Traffic Anomalies =====
+  async createAnomaly(data: {
+    campaignId: number;
+    anomalyType: string;
+    source: string | null;
+    title: string;
+    description: string;
+    severity: string;
+    metricValue: number | null;
+    baselineValue: number | null;
+  }): Promise<any> {
+    const now = new Date().toISOString();
+    const result = await pool.query(
+      `INSERT INTO traffic_anomalies
+        (campaign_id, anomaly_type, source, title, description, severity, metric_value, baseline_value, is_read, detected_at, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false, $9, $9)
+       RETURNING *`,
+      [data.campaignId, data.anomalyType, data.source, data.title, data.description,
+       data.severity, data.metricValue, data.baselineValue, now]
+    );
+    return result.rows[0];
+  }
+
+  async getUnreadAnomalies(campaignId: number): Promise<any[]> {
+    const result = await pool.query(
+      `SELECT * FROM traffic_anomalies WHERE campaign_id = $1 AND is_read = false ORDER BY created_at DESC`,
+      [campaignId]
+    );
+    return result.rows;
+  }
+
+  async getAllAnomalies(campaignId: number, limit: number = 20): Promise<any[]> {
+    const result = await pool.query(
+      `SELECT * FROM traffic_anomalies WHERE campaign_id = $1 ORDER BY created_at DESC LIMIT $2`,
+      [campaignId, limit]
+    );
+    return result.rows;
+  }
+
+  async getUnreadAnomalyCount(campaignId: number): Promise<number> {
+    const result = await pool.query(
+      `SELECT COUNT(*) as cnt FROM traffic_anomalies WHERE campaign_id = $1 AND is_read = false`,
+      [campaignId]
+    );
+    return parseInt(result.rows[0]?.cnt) || 0;
+  }
+
+  async getUnreadAnomalyCountsByUser(userId: number): Promise<Record<number, number>> {
+    const result = await pool.query(
+      `SELECT ta.campaign_id, COUNT(*) as cnt
+       FROM traffic_anomalies ta
+       JOIN campaigns c ON c.id = ta.campaign_id
+       WHERE c.user_id = $1 AND ta.is_read = false
+       GROUP BY ta.campaign_id`,
+      [userId]
+    );
+    const counts: Record<number, number> = {};
+    for (const row of result.rows) {
+      counts[row.campaign_id] = parseInt(row.cnt) || 0;
+    }
+    return counts;
+  }
+
+  async markAnomalyRead(anomalyId: number): Promise<void> {
+    await pool.query(
+      `UPDATE traffic_anomalies SET is_read = true WHERE id = $1`,
+      [anomalyId]
+    );
+  }
+
+  async markAllAnomaliesRead(campaignId: number): Promise<void> {
+    await pool.query(
+      `UPDATE traffic_anomalies SET is_read = true WHERE campaign_id = $1`,
+      [campaignId]
+    );
+  }
+
+  async checkRecentAnomaly(campaignId: number, anomalyType: string, source: string | null, sinceDate: string): Promise<boolean> {
+    const result = await pool.query(
+      `SELECT 1 FROM traffic_anomalies
+       WHERE campaign_id = $1 AND anomaly_type = $2 AND (source = $3 OR ($3 IS NULL AND source IS NULL))
+         AND created_at >= $4
+       LIMIT 1`,
+      [campaignId, anomalyType, source, sinceDate]
+    );
+    return result.rows.length > 0;
   }
 }
 

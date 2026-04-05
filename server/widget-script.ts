@@ -15,8 +15,31 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     localStorage.setItem("sa_vid", vid);
   }
 
+  // === UTM PARAMETERS ===
+  var utmParams = (function() {
+    var params = {};
+    var search = window.location.search;
+    if (search) {
+      var keys = ["utm_source", "utm_medium", "utm_campaign", "utm_content", "utm_term"];
+      var pairs = search.substring(1).split("&");
+      for (var i = 0; i < pairs.length; i++) {
+        var pair = pairs[i].split("=");
+        if (pair.length === 2 && keys.indexOf(pair[0]) !== -1) {
+          params[pair[0]] = decodeURIComponent(pair[1].replace(/\+/g, " "));
+        }
+      }
+    }
+    return params;
+  })();
+
   // === VARIANT ASSIGNMENT ===
-  fetch(API + "/api/widget/assign?vid=" + vid + "&cid=" + CID + "&ref=" + encodeURIComponent(document.referrer))
+  var assignUrl = API + "/api/widget/assign?vid=" + vid + "&cid=" + CID + "&ref=" + encodeURIComponent(document.referrer);
+  if (utmParams.utm_source)   assignUrl += "&utm_source="   + encodeURIComponent(utmParams.utm_source);
+  if (utmParams.utm_medium)   assignUrl += "&utm_medium="   + encodeURIComponent(utmParams.utm_medium);
+  if (utmParams.utm_campaign) assignUrl += "&utm_campaign=" + encodeURIComponent(utmParams.utm_campaign);
+  if (utmParams.utm_content)  assignUrl += "&utm_content="  + encodeURIComponent(utmParams.utm_content);
+  if (utmParams.utm_term)     assignUrl += "&utm_term="     + encodeURIComponent(utmParams.utm_term);
+  fetch(assignUrl)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.headline && data.headline.text) {

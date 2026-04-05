@@ -15,6 +15,7 @@ import {
   MessageSquarePlus,
   Gift,
   Zap,
+  Lightbulb,
 } from "lucide-react";
 import {
   Sidebar,
@@ -367,6 +368,16 @@ export function AppSidebar() {
     enabled: isAuthenticated,
   });
 
+  const { data: anomalyCounts = {} } = useQuery<Record<number, number>>({
+    queryKey: ["/api/campaigns/anomaly-counts"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/campaigns/anomaly-counts");
+      return res.json();
+    },
+    enabled: isAuthenticated,
+    refetchInterval: 60000,
+  });
+
   return (
     <>
     <Sidebar>
@@ -404,6 +415,13 @@ export function AppSidebar() {
                         }}
                       />
                       <span className="flex-1 truncate text-sm">{campaign.name}</span>
+                      {(anomalyCounts[campaign.id] ?? 0) > 0 && (
+                        <span
+                          className="flex-shrink-0 w-2 h-2 rounded-full bg-amber-400"
+                          title={`${anomalyCounts[campaign.id]} new insight${anomalyCounts[campaign.id] !== 1 ? "s" : ""}`}
+                          data-testid={`dot-anomaly-${campaign.id}`}
+                        />
+                      )}
                       <Badge
                         variant="secondary"
                         className="text-xs font-mono tabular-nums ml-auto"

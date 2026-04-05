@@ -2180,6 +2180,183 @@ function generateEmbedCodeClient(apiBase: string, campaignId: number, headlineSe
   return lines.join("\n");
 }
 
+// ---- Traffic Sources Panel ----
+interface TrafficSourceRow {
+  source: string;
+  visitors: number;
+  conversions: number;
+  conversionRate: number;
+  revenue: number;
+  revenuePerVisitor: number;
+}
+
+interface DeviceRow {
+  device: string;
+  visitors: number;
+  conversions: number;
+  conversionRate: number;
+  revenue: number;
+  revenuePerVisitor: number;
+}
+
+interface TrafficSourcesData {
+  sources: TrafficSourceRow[];
+  devices: DeviceRow[];
+  topInsight: string;
+}
+
+const SOURCE_LABELS: Record<string, string> = {
+  instagram: "Instagram",
+  facebook: "Facebook",
+  google_organic: "Google Organic",
+  google_ads: "Google Ads",
+  email: "Email",
+  tiktok: "TikTok",
+  youtube: "YouTube",
+  twitter: "Twitter / X",
+  linkedin: "LinkedIn",
+  direct: "Direct",
+  other: "Other",
+};
+
+const DEVICE_LABELS: Record<string, string> = {
+  ios: "iOS",
+  android: "Android",
+  desktop_mac: "Mac",
+  desktop_windows: "Windows",
+  tablet: "Tablet",
+  other: "Other",
+};
+
+const SOURCE_COLORS: Record<string, string> = {
+  instagram: "hsl(290 70% 55%)",
+  facebook: "hsl(220 80% 55%)",
+  google_organic: "hsl(25 90% 55%)",
+  google_ads: "hsl(200 80% 50%)",
+  email: "hsl(160 70% 42%)",
+  tiktok: "hsl(340 80% 50%)",
+  youtube: "hsl(0 80% 52%)",
+  twitter: "hsl(205 80% 50%)",
+  linkedin: "hsl(210 90% 44%)",
+  direct: "hsl(240 5% 55%)",
+  other: "hsl(240 5% 65%)",
+};
+
+function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
+  const { data, isLoading } = useQuery<TrafficSourcesData>({
+    queryKey: ["/api/campaigns", campaignId, "traffic-sources"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/campaigns/${campaignId}/traffic-sources`);
+      return res.json();
+    },
+    refetchInterval: 60000,
+  });
+
+  const sources = data?.sources ?? [];
+  const devices = data?.devices ?? [];
+  const topInsight = data?.topInsight ?? "";
+  const maxSourceVisitors = sources.length > 0 ? Math.max(...sources.map((s) => s.visitors)) : 1;
+  const maxDeviceVisitors = devices.length > 0 ? Math.max(...devices.map((d) => d.visitors)) : 1;
+
+  return (
+    <Card data-testid="traffic-sources-panel">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Share2 className="w-4 h-4" />
+          Traffic Sources
+        </CardTitle>
+        <p className="text-xs text-muted-foreground">Conversion rate and revenue by traffic origin.</p>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        {isLoading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-6 w-full" />
+            <Skeleton className="h-6 w-4/5" />
+            <Skeleton className="h-6 w-3/5" />
+          </div>
+        ) : sources.length === 0 ? (
+          <p className="text-xs text-muted-foreground py-2">No traffic data yet — visitors will appear here once the widget receives traffic.</p>
+        ) : (
+          <>
+            {/* Top Insight */}
+            {topInsight && (
+              <div
+                className="rounded-md px-3 py-2 text-xs"
+                style={{ background: "hsl(160 84% 36% / 0.07)", color: "hsl(160 84% 36%)", border: "1px solid hsl(160 84% 36% / 0.18)" }}
+                data-testid="traffic-insight"
+              >
+                <span className="font-medium">Insight:</span> {topInsight}
+              </div>
+            )}
+
+            {/* Sources bar chart */}
+            <div className="space-y-2">
+              <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Sources</p>
+              {sources.map((row) => {
+                const pct = maxSourceVisitors > 0 ? (row.visitors / maxSourceVisitors) * 100 : 0;
+                const color = SOURCE_COLORS[row.source] ?? SOURCE_COLORS.other;
+                const label = SOURCE_LABELS[row.source] ?? row.source;
+                return (
+                  <div key={row.source} className="space-y-0.5" data-testid={`traffic-source-row-${row.source}`}>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-medium text-foreground">{label}</span>
+                      <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                        <span>{row.visitors.toLocaleString()} visitors</span>
+                        <span className="font-semibold" style={{ color }}>{row.conversionRate}% CVR</span>
+                        {row.revenue > 0 && (
+                          <span>${row.revenue.toLocaleString()}</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="h-2 rounded-full bg-muted overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all duration-500"
+                        style={{ width: `${pct}%`, background: color }}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Device breakdown */}
+            {devices.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Devices</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {devices.map((row) => {
+                    const label = DEVICE_LABELS[row.device] ?? row.device;
+                    const pct = maxDeviceVisitors > 0 ? (row.visitors / maxDeviceVisitors) * 100 : 0;
+                    return (
+                      <div
+                        key={row.device}
+                        className="rounded-md border border-border p-2 space-y-1"
+                        data-testid={`traffic-device-row-${row.device}`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-medium text-foreground">{label}</span>
+                          <span className="text-[11px] text-muted-foreground">{row.conversionRate}% CVR</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-primary transition-all duration-500"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">{row.visitors.toLocaleString()} visitors</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ---- Visitor Feed Panel ----
 interface ConversionEntry {
   visitorId: string;
@@ -2717,6 +2894,304 @@ function ConversionPixelSection({ campaignId }: { campaignId: number }) {
 }
 
 // ---- Stripe Webhook Section ----
+// ---- Integration Settings (Revenue Webhooks + LTV) ----
+interface LTVData {
+  totalRevenue: number;
+  totalTransactions: number;
+  averageLTV: number;
+  revenueBySource: Record<string, number>;
+  ltv30Day: number;
+  ltv90Day: number;
+}
+
+function IntegrationSettings({ campaignId }: { campaignId: number }) {
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
+  const [secretLoading, setSecretLoading] = useState(false);
+  const { toast } = useToast();
+
+  const PROD_BASE = "https://api.siteamoeba.com";
+  const stripeUrl = `${PROD_BASE}/api/webhooks/stripe/${campaignId}`;
+  const shopifyUrl = `${PROD_BASE}/api/webhooks/shopify/${campaignId}`;
+  const genericUrl = `${PROD_BASE}/api/webhooks/generic/${campaignId}`;
+
+  const { data: ltv, isLoading: ltvLoading } = useQuery<LTVData>({
+    queryKey: ["/api/campaigns", campaignId, "ltv"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/campaigns/${campaignId}/ltv`);
+      return res.json();
+    },
+    refetchInterval: 60000,
+  });
+
+  const handleCopy = (text: string, key: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey(null), 2000);
+    });
+  };
+
+  const handleGenerateSecret = async () => {
+    setSecretLoading(true);
+    try {
+      const res = await apiRequest("POST", `/api/campaigns/${campaignId}/webhook-secret`);
+      const data = await res.json();
+      setWebhookSecret(data.secret);
+    } catch {
+      toast({ title: "Failed to generate secret", variant: "destructive" });
+    } finally {
+      setSecretLoading(false);
+    }
+  };
+
+  const totalRevenue = ltv?.totalRevenue ?? 0;
+  const revenueBySource = ltv?.revenueBySource ?? {};
+  const sourceEntries = Object.entries(revenueBySource).sort((a, b) => b[1] - a[1]);
+  const maxSourceRevenue = sourceEntries.length > 0 ? sourceEntries[0][1] : 1;
+
+  const SOURCE_COLORS: Record<string, string> = {
+    stripe: "#635bff",
+    shopify: "#96bf48",
+    gohighlevel: "#f97316",
+    whop: "#a855f7",
+    webhook: "#0ea5e9",
+    manual: "#6b7280",
+  };
+
+  const CopyButton = ({ text, id }: { text: string; id: string }) => (
+    <Button
+      size="icon"
+      variant="ghost"
+      className="h-7 w-7 shrink-0"
+      onClick={() => handleCopy(text, id)}
+      data-testid={`button-copy-${id}`}
+    >
+      {copiedKey === id ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+    </Button>
+  );
+
+  const UrlRow = ({ url, id }: { url: string; id: string }) => (
+    <div className="flex items-center gap-2 mt-2">
+      <code
+        className="flex-1 bg-muted rounded-md px-3 py-2 text-xs font-mono text-foreground truncate"
+        data-testid={`text-${id}`}
+      >
+        {url}
+      </code>
+      <CopyButton text={url} id={id} />
+    </div>
+  );
+
+  return (
+    <div className="space-y-4">
+      {/* Section header */}
+      <div className="flex items-center gap-2 pt-2">
+        <DollarSign className="w-4 h-4 text-primary" />
+        <h3 className="text-sm font-semibold text-foreground">Revenue Integrations</h3>
+        <span className="text-xs text-muted-foreground">Track every purchase, subscription, and refund</span>
+      </div>
+
+      {/* Stripe card */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#635bff]" />
+            Stripe
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Add this as a Stripe webhook endpoint. Events: <code className="text-xs bg-muted rounded px-1">checkout.session.completed</code>, <code className="text-xs bg-muted rounded px-1">payment_intent.succeeded</code>, <code className="text-xs bg-muted rounded px-1">charge.refunded</code>
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Webhook URL</p>
+            <UrlRow url={stripeUrl} id="stripe-webhook-url" />
+          </div>
+          <div className="bg-muted/40 rounded-md p-3 text-xs text-muted-foreground">
+            <strong className="text-foreground">Setup:</strong> Stripe Dashboard → Developers → Webhooks → Add endpoint → paste URL above → select events above
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Shopify card */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#96bf48]" />
+            Shopify
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Notifies SiteAmoeba on every paid order so revenue is attributed to the correct A/B variant.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Webhook URL</p>
+            <UrlRow url={shopifyUrl} id="shopify-webhook-url" />
+          </div>
+          <div className="bg-muted/40 rounded-md p-3 text-xs text-muted-foreground">
+            <strong className="text-foreground">Setup:</strong> Shopify Admin → Settings → Notifications → Webhooks → Create webhook → Event: <em>Order payment</em> → paste URL above
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* GoHighLevel / Whop / Generic card */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#0ea5e9]" />
+            GoHighLevel / Whop / Other
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">
+            Universal JSON webhook. Works with any platform that can POST JSON on purchase.
+          </p>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Webhook URL</p>
+            <UrlRow url={genericUrl} id="generic-webhook-url" />
+          </div>
+
+          {/* Webhook secret */}
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Webhook Secret <span className="text-xs">(add as <code className="bg-muted rounded px-1">x-webhook-secret</code> header)</span></p>
+            {webhookSecret ? (
+              <div className="flex items-center gap-2">
+                <code className="flex-1 bg-muted rounded-md px-3 py-2 text-xs font-mono text-foreground truncate" data-testid="text-webhook-secret">
+                  {webhookSecret}
+                </code>
+                <CopyButton text={webhookSecret} id="webhook-secret" />
+              </div>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs h-8"
+                onClick={handleGenerateSecret}
+                disabled={secretLoading}
+                data-testid="button-generate-secret"
+              >
+                {secretLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Zap className="w-3.5 h-3.5 mr-1" />}
+                Generate Secret
+              </Button>
+            )}
+          </div>
+
+          {/* Payload format */}
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">JSON payload format</p>
+            <div className="bg-muted rounded-md p-3">
+              <pre className="text-xs font-mono text-foreground whitespace-pre-wrap">{`{
+  "email": "customer@example.com",
+  "amount": 97.00,
+  "event_type": "purchase",
+  "currency": "USD",
+  "external_id": "order_123",
+  "source": "gohighlevel"
+}`}</pre>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* LTV Dashboard */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <TrendingUp className="w-4 h-4" />
+            LTV Dashboard
+          </CardTitle>
+          <p className="text-xs text-muted-foreground">Revenue events tracked across all integrations</p>
+        </CardHeader>
+        <CardContent>
+          {ltvLoading ? (
+            <div className="space-y-2">
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-3/4" />
+              <Skeleton className="h-8 w-1/2" />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* KPI row */}
+              <div className="grid grid-cols-3 gap-3">
+                <div className="bg-muted/40 rounded-lg p-3 text-center">
+                  <p className="text-xs text-muted-foreground">Total Revenue</p>
+                  <p className="text-lg font-bold text-foreground tabular-nums" data-testid="text-ltv-total-revenue">
+                    ${totalRevenue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+                <div className="bg-muted/40 rounded-lg p-3 text-center">
+                  <p className="text-xs text-muted-foreground">Transactions</p>
+                  <p className="text-lg font-bold text-foreground tabular-nums" data-testid="text-ltv-transactions">
+                    {ltv?.totalTransactions ?? 0}
+                  </p>
+                </div>
+                <div className="bg-muted/40 rounded-lg p-3 text-center">
+                  <p className="text-xs text-muted-foreground">Avg LTV</p>
+                  <p className="text-lg font-bold text-foreground tabular-nums" data-testid="text-ltv-avg">
+                    ${(ltv?.averageLTV ?? 0).toFixed(2)}
+                  </p>
+                </div>
+              </div>
+
+              {/* 30d / 90d LTV */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-muted/40 rounded-lg p-3">
+                  <p className="text-xs text-muted-foreground">30-Day LTV</p>
+                  <p className="text-base font-semibold text-foreground tabular-nums" data-testid="text-ltv-30d">
+                    ${(ltv?.ltv30Day ?? 0).toFixed(2)}
+                  </p>
+                </div>
+                <div className="bg-muted/40 rounded-lg p-3">
+                  <p className="text-xs text-muted-foreground">90-Day LTV</p>
+                  <p className="text-base font-semibold text-foreground tabular-nums" data-testid="text-ltv-90d">
+                    ${(ltv?.ltv90Day ?? 0).toFixed(2)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Revenue by source bars */}
+              {sourceEntries.length > 0 ? (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Revenue by Source</p>
+                  <div className="space-y-2">
+                    {sourceEntries.map(([src, rev]) => (
+                      <div key={src} className="flex items-center gap-2">
+                        <span
+                          className="text-xs font-medium capitalize w-24 shrink-0"
+                          style={{ color: SOURCE_COLORS[src] || "hsl(var(--foreground))" }}
+                        >
+                          {src}
+                        </span>
+                        <div className="flex-1 bg-muted rounded-full h-2 overflow-hidden">
+                          <div
+                            className="h-full rounded-full transition-all"
+                            style={{
+                              width: `${maxSourceRevenue > 0 ? (rev / maxSourceRevenue) * 100 : 0}%`,
+                              background: SOURCE_COLORS[src] || "hsl(var(--primary))",
+                            }}
+                          />
+                        </div>
+                        <span className="text-xs tabular-nums text-muted-foreground w-20 text-right">
+                          ${rev.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-4 text-xs text-muted-foreground">
+                  No revenue events yet. Connect an integration above to start tracking LTV.
+                </div>
+              )}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function WebhookSection({ campaignId }: { campaignId: number }) {
   const [copied, setCopied] = useState(false);
   const apiBase = getApiBaseUrl();
@@ -3260,9 +3735,17 @@ function VariantSection({
 
 // ---- Brain Chat ----
 
+interface SpecialistAnalysis {
+  role: string;
+  name: string;
+  analysis: string;
+}
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+  isCounsel?: boolean;
+  specialists?: SpecialistAnalysis[];
 }
 
 const SUGGESTED_PROMPTS = [
@@ -3569,6 +4052,34 @@ function DailyObservationCard({ campaignId, isPaidUser }: { campaignId: number; 
   );
 }
 
+function SpecialistCard({ specialist, defaultOpen = false }: { specialist: SpecialistAnalysis; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const roleColors: Record<string, string> = {
+    copywriter: "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-300",
+    psychologist: "bg-purple-50 dark:bg-purple-950/30 border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300",
+    analyst: "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300",
+  };
+  const colorClass = roleColors[specialist.role] || "bg-muted border-border text-foreground";
+  return (
+    <div className={`rounded-lg border text-xs mt-2 overflow-hidden ${colorClass}`}>
+      <button
+        className="w-full flex items-center justify-between px-3 py-2 font-medium text-left"
+        onClick={() => setOpen(v => !v)}
+        data-testid={`specialist-card-toggle-${specialist.role}`}
+      >
+        <span>{specialist.name}</span>
+        <ChevronDown className={`w-3.5 h-3.5 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div
+          className="px-3 pb-3 pt-1 leading-relaxed opacity-90"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(specialist.analysis) }}
+        />
+      )}
+    </div>
+  );
+}
+
 function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfigured: boolean }) {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -3579,6 +4090,8 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
   ]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
+  const [useCounsel, setUseCounsel] = useState(false);
+  const [expandedCounsel, setExpandedCounsel] = useState<Record<number, boolean>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { toast } = useToast();
@@ -3614,6 +4127,7 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
         campaignId,
         message: text,
         history: newMessages.slice(1, -1).map(m => ({ role: m.role, content: m.content })),
+        useCounsel,
       });
 
       if (!res.ok) {
@@ -3622,7 +4136,13 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
       }
 
       const data = await res.json();
-      setMessages(prev => [...prev, { role: "assistant", content: data.response }]);
+      const assistantMsg: ChatMessage = {
+        role: "assistant",
+        content: data.response,
+        isCounsel: !!data.counsel,
+        specialists: data.counsel?.specialists,
+      };
+      setMessages(prev => [...prev, assistantMsg]);
     } catch (err: any) {
       toast({
         title: "Brain Chat Error",
@@ -3726,10 +4246,44 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
                     }`}
                   >
                     {msg.role === "assistant" ? (
-                      <div
-                        className="max-w-none"
-                        dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
-                      />
+                      <>
+                        {/* Counsel badge */}
+                        {msg.isCounsel && (
+                          <div className="flex items-center gap-1 mb-1.5">
+                            <span
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide"
+                              style={{ background: "hsl(160, 84%, 36%, 0.15)", color: "hsl(160, 84%, 28%)" }}
+                              data-testid={`badge-counsel-${i}`}
+                            >
+                              <Users className="w-2.5 h-2.5" />
+                              Counsel
+                            </span>
+                          </div>
+                        )}
+                        <div
+                          className="max-w-none"
+                          dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
+                        />
+                        {/* Specialist analyses accordion */}
+                        {msg.isCounsel && msg.specialists && msg.specialists.length > 0 && (
+                          <div className="mt-2">
+                            <button
+                              className="text-[11px] text-primary/70 hover:text-primary underline underline-offset-2 transition-colors"
+                              onClick={() => setExpandedCounsel(prev => ({ ...prev, [i]: !prev[i] }))}
+                              data-testid={`button-expand-specialists-${i}`}
+                            >
+                              {expandedCounsel[i] ? "Hide" : "View"} specialist analyses
+                            </button>
+                            {expandedCounsel[i] && (
+                              <div className="mt-1 space-y-1" data-testid={`specialists-panel-${i}`}>
+                                {msg.specialists.map((spec) => (
+                                  <SpecialistCard key={spec.role} specialist={spec} />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </>
                     ) : (
                       msg.content
                     )}
@@ -3747,9 +4301,15 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
                     <Bot className="w-3.5 h-3.5 text-white" />
                   </div>
                   <div className="bg-muted rounded-lg rounded-tl-sm px-3 py-2 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "0ms" }} />
-                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "150ms" }} />
-                    <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "300ms" }} />
+                    {useCounsel ? (
+                      <span className="text-[11px] text-muted-foreground animate-pulse">3 specialists deliberating…</span>
+                    ) : (
+                      <>
+                        <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "0ms" }} />
+                        <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "150ms" }} />
+                        <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce" style={{ animationDelay: "300ms" }} />
+                      </>
+                    )}
                   </div>
                 </div>
               )}
@@ -3779,13 +4339,37 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
 
           {/* Input area */}
           <div className="border-t border-border p-3">
+            {/* Deep Analysis toggle */}
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="counsel-toggle"
+                  checked={useCounsel}
+                  onCheckedChange={setUseCounsel}
+                  data-testid="switch-counsel-mode"
+                />
+                <label
+                  htmlFor="counsel-toggle"
+                  className="text-xs font-medium cursor-pointer select-none"
+                  title="Uses 3 AI specialists to deliberate before answering. Higher quality, uses 5 credits."
+                >
+                  Deep Analysis
+                </label>
+                {useCounsel && (
+                  <span className="text-[10px] text-muted-foreground">(5 credits)</span>
+                )}
+              </div>
+              {!useCounsel && (
+                <span className="text-[10px] text-muted-foreground">1 credit</span>
+              )}
+            </div>
             <div className="flex items-end gap-2">
               <Textarea
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask the Brain anything..."
+                placeholder={useCounsel ? "Ask for deep expert analysis…" : "Ask the Brain anything…"}
                 className="flex-1 min-h-[44px] max-h-32 resize-none text-sm border border-border bg-background text-foreground placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-primary"
                 rows={1}
                 data-testid="input-brain-chat"
@@ -3836,6 +4420,7 @@ export default function CampaignDetailPage() {
   const [, navigate] = useLocation();
   const [brainBannerDismissed, setBrainBannerDismissed] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
+  const [showAnomalyPanel, setShowAnomalyPanel] = useState(false);
   const userPlan = user?.plan ?? "free";
   const { toast } = useToast();
 
@@ -3895,6 +4480,41 @@ export default function CampaignDetailPage() {
     queryClient.invalidateQueries({ queryKey: ["/api/campaigns"] });
   };
 
+  // ---- Anomaly detection queries ----
+  const { data: anomalyData } = useQuery<{ anomalies: any[]; unreadCount: number }>({
+    queryKey: ["/api/campaigns", campaignId, "anomalies"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/campaigns/${campaignId}/anomalies`);
+      return res.json();
+    },
+    enabled: isAuthenticated && !isNaN(campaignId),
+    refetchInterval: 60000,
+  });
+  const anomalies = anomalyData?.anomalies ?? [];
+  const unreadAnomalyCount = anomalyData?.unreadCount ?? 0;
+
+  const markAnomalyReadMutation = useMutation({
+    mutationFn: async (anomalyId: number) => {
+      const res = await apiRequest("POST", `/api/campaigns/${campaignId}/anomalies/${anomalyId}/read`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "anomalies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns/anomaly-counts"] });
+    },
+  });
+
+  const markAllReadMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/campaigns/${campaignId}/anomalies/read-all`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "anomalies"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns/anomaly-counts"] });
+    },
+  });
+
   if (campaignLoading || authLoading) {
     return <PageSkeleton />;
   }
@@ -3932,6 +4552,27 @@ export default function CampaignDetailPage() {
           </BreadcrumbList>
         </Breadcrumb>
         <div className="flex items-center gap-2">
+          {/* Lightbulb anomaly alert button */}
+          <div className="relative">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowAnomalyPanel((v) => !v)}
+              data-testid="button-anomaly-panel"
+              className={`gap-1.5 relative ${showAnomalyPanel ? "border-amber-500/60 bg-amber-500/5" : ""}`}
+            >
+              <Lightbulb className={`w-3.5 h-3.5 ${unreadAnomalyCount > 0 ? "text-amber-500" : ""}`} />
+              Insights
+              {unreadAnomalyCount > 0 && (
+                <span
+                  className="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-amber-500 text-[10px] font-bold text-white leading-none"
+                  data-testid="badge-unread-anomaly-count"
+                >
+                  {unreadAnomalyCount > 9 ? "9+" : unreadAnomalyCount}
+                </span>
+              )}
+            </Button>
+          </div>
           <Button
             variant="outline"
             size="sm"
@@ -3955,6 +4596,119 @@ export default function CampaignDetailPage() {
           </Button>
         </div>
       </div>
+
+      {/* Anomaly Panel */}
+      {showAnomalyPanel && (
+        <div
+          className="mx-6 mt-4 mb-2 rounded-xl border border-amber-500/20 bg-amber-500/5 overflow-hidden"
+          data-testid="panel-anomalies"
+        >
+          {/* Panel header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-amber-500/15">
+            <div className="flex items-center gap-2">
+              <Lightbulb className="w-4 h-4 text-amber-500" />
+              <span className="text-sm font-semibold text-foreground">Traffic Insights</span>
+              {unreadAnomalyCount > 0 && (
+                <span className="text-xs text-amber-600 dark:text-amber-400">{unreadAnomalyCount} new</span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {unreadAnomalyCount > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => markAllReadMutation.mutate()}
+                  disabled={markAllReadMutation.isPending}
+                  data-testid="button-mark-all-read"
+                >
+                  Mark all as read
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => setShowAnomalyPanel(false)}
+                data-testid="button-close-anomaly-panel"
+              >
+                <X className="w-3.5 h-3.5" />
+              </Button>
+            </div>
+          </div>
+          {/* Anomaly list */}
+          <div className="max-h-80 overflow-y-auto">
+            {anomalies.length === 0 ? (
+              <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                No traffic insights yet. Insights appear when unusual patterns are detected.
+              </div>
+            ) : (
+              anomalies.map((anomaly: any) => {
+                const isUnread = !anomaly.is_read;
+                const severityIcon = anomaly.severity === "positive" ? (
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-emerald-500/10 flex items-center justify-center">
+                    <TrendingUp className="w-3.5 h-3.5 text-emerald-500" />
+                  </span>
+                ) : anomaly.severity === "warning" ? (
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-orange-500/10 flex items-center justify-center">
+                    <AlertCircle className="w-3.5 h-3.5 text-orange-500" />
+                  </span>
+                ) : (
+                  <span className="flex-shrink-0 w-6 h-6 rounded-full bg-amber-500/10 flex items-center justify-center">
+                    <Lightbulb className="w-3.5 h-3.5 text-amber-500" />
+                  </span>
+                );
+                const createdAt = anomaly.created_at ? new Date(anomaly.created_at) : null;
+                const timeAgo = createdAt ? (() => {
+                  const diffMs = Date.now() - createdAt.getTime();
+                  const diffMins = Math.floor(diffMs / 60000);
+                  const diffHrs = Math.floor(diffMins / 60);
+                  const diffDays = Math.floor(diffHrs / 24);
+                  if (diffDays > 0) return `${diffDays}d ago`;
+                  if (diffHrs > 0) return `${diffHrs}h ago`;
+                  if (diffMins > 0) return `${diffMins}m ago`;
+                  return "just now";
+                })() : "";
+                return (
+                  <div
+                    key={anomaly.id}
+                    className={`flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-muted/30 transition-colors border-b border-border/50 last:border-0 ${
+                      isUnread ? "bg-amber-500/5" : ""
+                    }`}
+                    onClick={() => {
+                      if (isUnread) markAnomalyReadMutation.mutate(anomaly.id);
+                    }}
+                    data-testid={`anomaly-card-${anomaly.id}`}
+                  >
+                    {severityIcon}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className={`text-sm font-semibold truncate ${isUnread ? "text-foreground" : "text-muted-foreground"}`}>
+                          {anomaly.title}
+                        </span>
+                        {isUnread && (
+                          <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-amber-500" />
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground leading-relaxed">
+                        {anomaly.description}
+                      </p>
+                      <div className="flex items-center gap-2 mt-1.5">
+                        {anomaly.source && (
+                          <span className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-muted text-muted-foreground border border-border/60">
+                            {anomaly.source.replace(/_/g, " ")}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-muted-foreground/70">{timeAgo}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Archive Confirmation Dialog */}
       <Dialog open={showArchiveDialog} onOpenChange={setShowArchiveDialog}>
@@ -4069,6 +4823,9 @@ export default function CampaignDetailPage() {
         {/* Daily chart */}
         <DailyChart campaignId={campaignId} />
 
+        {/* Traffic Sources — referrer + UTM breakdown */}
+        <TrafficSourcesPanel campaignId={campaignId} />
+
         {/* Live Visitor Feed — positioned high for visibility */}
         <VisitorFeedPanel campaignId={campaignId} />
 
@@ -4136,7 +4893,10 @@ export default function CampaignDetailPage() {
         {/* Conversion pixel */}
         <ConversionPixelSection campaignId={campaignId} />
 
-        {/* Webhook */}
+        {/* Revenue integrations + LTV */}
+        <IntegrationSettings campaignId={campaignId} />
+
+        {/* Webhook (legacy Stripe URL) */}
         <WebhookSection campaignId={campaignId} />
       </div>
 

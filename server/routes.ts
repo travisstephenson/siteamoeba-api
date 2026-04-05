@@ -7,6 +7,7 @@ import rateLimit from "express-rate-limit";
 import xss from "xss";
 import { storage } from "./storage";
 import { callLLM } from "./llm";
+import { runCounsel } from "./counsel";
 import { encryptApiKey, decryptApiKey } from "./encryption";
 import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildSectionGenerationPrompt, buildClassificationPrompt, buildPageScanPrompt, buildBrainChatPrompt, buildTestLessonPrompt, type GenerationContext } from "./prompts";
 import { getBrainPageAuditKnowledge, getRelevantTestLessons } from "./brain-selector";
@@ -1214,7 +1215,7 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(400).json({ error: "Please configure your AI provider in Settings to use Brain Chat" });
     }
 
-    const { campaignId, history } = req.body;
+    const { campaignId, history, useCounsel } = req.body;
     const message = typeof req.body.message === "string" ? sanitizeInput(req.body.message) : req.body.message;
     if (!campaignId || !message) {
       return res.status(400).json({ error: "campaignId and message are required" });
@@ -1323,13 +1324,53 @@ export async function registerRoutes(server: Server, app: Express) {
       testLessons: testLessonsText || undefined,
     };
 
-    const messages = buildBrainChatPrompt(chatContext, history || [], message);
-
     const llmConfig = {
       provider: user.llmProvider as any,
       apiKey: decryptApiKey(user.llmApiKey as string), // decrypt before use
       model: user.llmModel || undefined,
     };
+
+    // --- Counsel mode: 3 specialists + chairman synthesis ---
+    if (useCounsel) {
+      // Build a flat context string for the counsel engine
+      const contextString = [
+        `Campaign: ${chatContext.campaignName} (${chatContext.campaignUrl})`,
+        chatContext.pageType ? `Page type: ${chatContext.pageType}` : "",
+        chatContext.pageGoal ? `Page goal: ${chatContext.pageGoal}` : "",
+        chatContext.niche ? `Niche: ${chatContext.niche}` : "",
+        chatContext.pricePoint ? `Price point: ${chatContext.pricePoint}` : "",
+        `Total visitors: ${chatContext.totalVisitors}`,
+        `Total conversions: ${chatContext.totalConversions}`,
+        `Conversion rate: ${chatContext.conversionRate.toFixed(2)}%`,
+        chatContext.sections.length > 0
+          ? `\nActive sections:\n${chatContext.sections.map(s => `  - ${s.label} (${s.category}): "${(s.currentText || "").slice(0, 80)}"`).join("\n")}`
+          : "",
+        chatContext.variants.length > 0
+          ? `\nVariants:\n${chatContext.variants.map(v => `  - "${(v.text || "").slice(0, 60)}" | ${v.visitors} visitors | ${v.conversions} conversions | ${v.conversionRate.toFixed(2)}% CVR | ${v.confidence.toFixed(0)}% confidence${v.isControl ? " (control)" : ""}${v.isActive ? " [active]" : ""}`).join("\n")}`
+          : "",
+        chatContext.pageContent ? `\nPage content excerpt:\n${chatContext.pageContent.slice(0, 2000)}` : "",
+        chatContext.brainKnowledge ? `\n${chatContext.brainKnowledge.slice(0, 1500)}` : "",
+      ].filter(Boolean).join("\n");
+
+      let counselResult;
+      try {
+        counselResult = await runCounsel(llmConfig, message, contextString);
+      } catch (err: any) {
+        console.error("Counsel deliberation failed:", err);
+        return res.status(502).json({ error: err.message || "AI provider error. Check your API key in Settings." });
+      }
+
+      return res.json({
+        response: counselResult.synthesis,
+        counsel: {
+          specialists: counselResult.specialists,
+          synthesis: counselResult.synthesis,
+        },
+      });
+    }
+
+    // --- Standard single-model chat ---
+    const messages = buildBrainChatPrompt(chatContext, history || [], message);
 
     let response: string;
     try {
@@ -1341,6 +1382,35 @@ export async function registerRoutes(server: Server, app: Express) {
 
     res.json({ response });
   });
+
+  // ============== TRAFFIC SOURCE HELPERS ==============
+
+  function parseTrafficSource(referrer: string, utmSource: string, utmMedium: string): string {
+    const ref = (referrer || "").toLowerCase();
+    const src = (utmSource || "").toLowerCase();
+    const med = (utmMedium || "").toLowerCase();
+
+    if (src.includes("instagram") || ref.includes("instagram.com")) return "instagram";
+    if (src.includes("facebook") || src.includes("fb") || ref.includes("facebook.com") || ref.includes("fb.com")) return "facebook";
+    if (ref.includes("google") && (med === "cpc" || med === "ppc")) return "google_ads";
+    if (ref.includes("google")) return "google_organic";
+    if (med === "email" || ref.includes("mail.google") || ref.includes("mail.yahoo") || ref.includes("outlook.live") || ref.includes("outlook.com")) return "email";
+    if (ref.includes("tiktok") || src.includes("tiktok")) return "tiktok";
+    if (ref.includes("youtube") || src.includes("youtube")) return "youtube";
+    if (ref.includes("twitter") || ref.includes("x.com") || ref.includes("t.co") || src.includes("twitter") || src.includes("x")) return "twitter";
+    if (ref.includes("linkedin") || src.includes("linkedin")) return "linkedin";
+    if (!ref && !src) return "direct";
+    return "other";
+  }
+
+  function parseDeviceCategory(userAgent: string): string {
+    const ua = (userAgent || "").toLowerCase();
+    if (ua.includes("iphone") || ua.includes("ipad") || ua.includes("ipod")) return "ios";
+    if (ua.includes("android")) return "android";
+    if (ua.includes("macintosh") || ua.includes("mac os x")) return "desktop_mac";
+    if (ua.includes("windows")) return "desktop_windows";
+    return "other";
+  }
 
   // ============== WIDGET API (public, CORS) ==============
 
@@ -1402,6 +1472,16 @@ export async function registerRoutes(server: Server, app: Express) {
       ? subheadlineVariants[Math.floor(Math.random() * subheadlineVariants.length)]
       : null;
 
+    const utmSource   = (req.query.utm_source   as string) || null;
+    const utmMedium   = (req.query.utm_medium   as string) || null;
+    const utmCampaign = (req.query.utm_campaign as string) || null;
+    const utmContent  = (req.query.utm_content  as string) || null;
+    const utmTerm     = (req.query.utm_term     as string) || null;
+    const referrer    = (req.query.ref          as string) || null;
+    const ua          = req.headers["user-agent"] || null;
+    const trafficSource  = parseTrafficSource(referrer || "", utmSource || "", utmMedium || "");
+    const deviceCategory = parseDeviceCategory(ua || "");
+
     const visitor = await storage.createVisitor({
       id: visitorId,
       campaignId,
@@ -1411,8 +1491,15 @@ export async function registerRoutes(server: Server, app: Express) {
       convertedAt: null,
       stripePaymentId: null,
       revenue: null,
-      userAgent: req.headers["user-agent"] || null,
-      referrer: req.query.ref as string || null,
+      userAgent: ua,
+      referrer,
+      utmSource,
+      utmMedium,
+      utmCampaign,
+      utmContent,
+      utmTerm,
+      trafficSource,
+      deviceCategory,
     });
 
     await storage.createImpression({
@@ -1437,6 +1524,9 @@ export async function registerRoutes(server: Server, app: Express) {
       headline: hVariant ? { id: hVariant.id, text: hVariant.text } : null,
       subheadline: sVariant ? { id: sVariant.id, text: sVariant.text } : null,
     });
+
+    // Fire-and-forget anomaly detection (throttled to once per 5 min per campaign)
+    detectTrafficAnomalies(campaignId).catch(() => {});
   });
 
   // ============== CONVERSION PIXEL (public, CORS) ==============
@@ -1708,6 +1798,248 @@ export async function registerRoutes(server: Server, app: Express) {
       console.error("Webhook error:", error);
       res.status(422).json({ error: "Webhook processing failed" });
     }
+  });
+
+  // ============== REVENUE INTEGRATION WEBHOOKS (PUBLIC — no auth) ==============
+
+  // Helper: find a visitor in a campaign by email
+  async function matchVisitorByEmail(campaignId: number, email: string): Promise<string | null> {
+    const { Pool: PgPool } = require("pg");
+    const pgPool = new PgPool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false });
+    try {
+      const result = await pgPool.query(
+        `SELECT id FROM visitors WHERE campaign_id = $1 AND converted = false ORDER BY first_seen DESC LIMIT 1`,
+        [campaignId]
+      );
+      if (result.rows.length > 0) return result.rows[0].id as string;
+      // Also check visitor_sessions for email match (future: store email on visitor)
+      return null;
+    } finally {
+      await pgPool.end();
+    }
+  }
+
+  // A) Stripe webhook: POST /api/webhooks/stripe/:campaignId
+  app.post("/api/webhooks/stripe/:campaignId", async (req: Request, res: Response) => {
+    try {
+      const campaignId = paramId(req.params.campaignId);
+      const campaign = await storage.getCampaign(campaignId);
+      if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+
+      // Signature verification if campaign has a webhook secret and stripe is available
+      if (campaign.webhookSecret && stripe) {
+        const sig = req.headers["stripe-signature"] as string;
+        if (sig && req.rawBody) {
+          try {
+            stripe.webhooks.constructEvent(req.rawBody as Buffer, sig, campaign.webhookSecret);
+          } catch {
+            return res.status(400).json({ error: "Invalid signature" });
+          }
+        }
+      }
+
+      const event = req.body;
+      const eventType = event.type as string;
+
+      if (eventType === "checkout.session.completed" || eventType === "payment_intent.succeeded") {
+        const obj = event.data?.object || {};
+        const amountRaw = obj.amount_total ?? obj.amount_received ?? obj.amount ?? 0;
+        const amount = amountRaw / 100;
+        const customerEmail = obj.customer_details?.email || obj.receipt_email || obj.customer_email || null;
+        const externalId = obj.id || event.id;
+        const metadata = obj.metadata || {};
+        const visitorId = metadata.ab_visitor_id || obj.client_reference_id || null;
+
+        let resolvedVisitorId = visitorId;
+        if (!resolvedVisitorId && customerEmail) {
+          resolvedVisitorId = await matchVisitorByEmail(campaignId, customerEmail);
+        }
+
+        await storage.addRevenueEvent({
+          visitorId: resolvedVisitorId || undefined,
+          campaignId,
+          source: "stripe",
+          eventType: "purchase",
+          amount,
+          currency: obj.currency?.toUpperCase() || "USD",
+          externalId,
+          customerEmail: customerEmail || undefined,
+          metadata: JSON.stringify(metadata),
+        });
+
+        // Also mark converted if we have a visitor ID and they aren't already converted
+        if (resolvedVisitorId) {
+          const visitor = await storage.getVisitor(resolvedVisitorId);
+          if (visitor && !visitor.converted) {
+            await storage.markConverted(resolvedVisitorId, externalId, amount);
+          }
+        }
+
+        return res.json({ received: true, attributed: !!resolvedVisitorId });
+      }
+
+      if (eventType === "charge.refunded") {
+        const obj = event.data?.object || {};
+        const amount = (obj.amount_refunded || 0) / 100;
+        const externalId = obj.id || event.id;
+        const customerEmail = obj.receipt_email || null;
+        await storage.addRevenueEvent({
+          campaignId,
+          source: "stripe",
+          eventType: "refund",
+          amount: -amount,
+          externalId,
+          customerEmail: customerEmail || undefined,
+        });
+        return res.json({ received: true });
+      }
+
+      res.json({ received: true });
+    } catch (error) {
+      console.error("Stripe webhook error:", error);
+      res.status(422).json({ error: "Webhook processing failed" });
+    }
+  });
+
+  // B) Shopify webhook: POST /api/webhooks/shopify/:campaignId
+  app.post("/api/webhooks/shopify/:campaignId", async (req: Request, res: Response) => {
+    try {
+      const campaignId = paramId(req.params.campaignId);
+      const campaign = await storage.getCampaign(campaignId);
+      if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+
+      const order = req.body;
+      const topic = req.headers["x-shopify-topic"] as string | undefined;
+      if (topic && topic !== "orders/create" && topic !== "orders/paid") {
+        return res.json({ received: true, ignored: true });
+      }
+
+      const amount = parseFloat(order.total_price || "0");
+      const customerEmail = order.email || order.customer?.email || null;
+      const externalId = String(order.id || "");
+      const currency = (order.currency || "USD").toUpperCase();
+
+      let resolvedVisitorId: string | null = null;
+      if (customerEmail) {
+        resolvedVisitorId = await matchVisitorByEmail(campaignId, customerEmail);
+      }
+
+      await storage.addRevenueEvent({
+        visitorId: resolvedVisitorId || undefined,
+        campaignId,
+        source: "shopify",
+        eventType: "purchase",
+        amount,
+        currency,
+        externalId,
+        customerEmail: customerEmail || undefined,
+        metadata: JSON.stringify({ shopify_order_name: order.name, tags: order.tags }),
+      });
+
+      if (resolvedVisitorId) {
+        const visitor = await storage.getVisitor(resolvedVisitorId);
+        if (visitor && !visitor.converted) {
+          await storage.markConverted(resolvedVisitorId, externalId, amount);
+        }
+      }
+
+      res.json({ received: true, attributed: !!resolvedVisitorId });
+    } catch (error) {
+      console.error("Shopify webhook error:", error);
+      res.status(422).json({ error: "Webhook processing failed" });
+    }
+  });
+
+  // C) Generic webhook (GoHighLevel, Whop, etc.): POST /api/webhooks/generic/:campaignId
+  app.post("/api/webhooks/generic/:campaignId", async (req: Request, res: Response) => {
+    try {
+      const campaignId = paramId(req.params.campaignId);
+      const campaign = await storage.getCampaign(campaignId);
+      if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+
+      // Verify webhook secret if campaign has one
+      if (campaign.webhookSecret) {
+        const providedSecret = req.headers["x-webhook-secret"] as string | undefined;
+        if (providedSecret !== campaign.webhookSecret) {
+          return res.status(401).json({ error: "Invalid webhook secret" });
+        }
+      }
+
+      const body = req.body as {
+        email?: string;
+        amount?: number | string;
+        event_type?: string;
+        currency?: string;
+        external_id?: string;
+        source?: string;
+        visitor_id?: string;
+        metadata?: Record<string, unknown>;
+      };
+
+      const customerEmail = body.email || null;
+      const amount = parseFloat(String(body.amount || "0"));
+      const eventType = body.event_type || "purchase";
+      const currency = (body.currency || "USD").toUpperCase();
+      const externalId = body.external_id || null;
+      const source = body.source || "webhook";
+
+      let resolvedVisitorId = body.visitor_id || null;
+      if (!resolvedVisitorId && customerEmail) {
+        resolvedVisitorId = await matchVisitorByEmail(campaignId, customerEmail);
+      }
+
+      await storage.addRevenueEvent({
+        visitorId: resolvedVisitorId || undefined,
+        campaignId,
+        source,
+        eventType,
+        amount,
+        currency,
+        externalId: externalId || undefined,
+        customerEmail: customerEmail || undefined,
+        metadata: body.metadata ? JSON.stringify(body.metadata) : undefined,
+      });
+
+      if (resolvedVisitorId && eventType !== "refund") {
+        const visitor = await storage.getVisitor(resolvedVisitorId);
+        if (visitor && !visitor.converted) {
+          await storage.markConverted(resolvedVisitorId, externalId || "", amount);
+        }
+      }
+
+      res.json({ received: true, attributed: !!resolvedVisitorId });
+    } catch (error) {
+      console.error("Generic webhook error:", error);
+      res.status(422).json({ error: "Webhook processing failed" });
+    }
+  });
+
+  // Generate/retrieve webhook secret for a campaign
+  app.post("/api/campaigns/:id/webhook-secret", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    if (campaign.webhookSecret) {
+      return res.json({ secret: campaign.webhookSecret });
+    }
+    // Generate a random secret
+    const { randomBytes } = require("crypto");
+    const secret = "whsec_" + randomBytes(24).toString("hex");
+    await storage.updateCampaign(campaignId, { webhookSecret: secret } as any);
+    res.json({ secret });
+  });
+
+  // LTV dashboard data
+  app.get("/api/campaigns/:id/ltv", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    const ltv = await storage.getLTVByCampaign(campaignId);
+    res.json(ltv);
   });
 
   // Embed code generator
@@ -2023,6 +2355,319 @@ export async function registerRoutes(server: Server, app: Express) {
       });
     }
   });
+
+  // ============== TRAFFIC SOURCES ==============
+
+  app.get("/api/campaigns/:id/traffic-sources", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const { Pool: PgPool } = require("pg");
+    const pgPool = new PgPool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false });
+
+    try {
+      // Query grouped by traffic_source
+      const sourceRows = await pgPool.query(
+        `SELECT
+          COALESCE(traffic_source, 'direct') AS source,
+          COUNT(*) AS visitors,
+          SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) AS conversions,
+          COALESCE(SUM(CASE WHEN converted = true THEN revenue ELSE 0 END), 0) AS revenue
+        FROM visitors
+        WHERE campaign_id = $1
+        GROUP BY COALESCE(traffic_source, 'direct')
+        ORDER BY COUNT(*) DESC`,
+        [campaignId]
+      );
+
+      // Also query LTV from revenue_events per traffic source
+      const ltvRows = await pgPool.query(
+        `SELECT
+          COALESCE(v.traffic_source, 'direct') AS source,
+          COALESCE(SUM(re.amount), 0) AS ltv_revenue,
+          COUNT(DISTINCT COALESCE(re.visitor_id, re.customer_email)) AS ltv_customers
+        FROM revenue_events re
+        LEFT JOIN visitors v ON v.id = re.visitor_id
+        WHERE re.campaign_id = $1 AND re.event_type != 'refund'
+        GROUP BY COALESCE(v.traffic_source, 'direct')`,
+        [campaignId]
+      );
+      const ltvBySource: Record<string, { ltv: number }> = {};
+      for (const row of ltvRows.rows) {
+        const rev = parseFloat(row.ltv_revenue) || 0;
+        const cust = parseInt(row.ltv_customers) || 1;
+        ltvBySource[row.source] = { ltv: parseFloat((rev / cust).toFixed(2)) };
+      }
+
+      const sources = sourceRows.rows.map((r: any) => {
+        const vis = parseInt(r.visitors) || 0;
+        const conv = parseInt(r.conversions) || 0;
+        const rev = parseFloat(r.revenue) || 0;
+        const ltvData = ltvBySource[r.source];
+        return {
+          source: r.source,
+          visitors: vis,
+          conversions: conv,
+          conversionRate: vis > 0 ? parseFloat(((conv / vis) * 100).toFixed(1)) : 0,
+          revenue: parseFloat(rev.toFixed(2)),
+          revenuePerVisitor: vis > 0 ? parseFloat((rev / vis).toFixed(2)) : 0,
+          ltv: ltvData ? ltvData.ltv : 0,
+        };
+      });
+
+      // Query grouped by device_category
+      const deviceRows = await pgPool.query(
+        `SELECT
+          COALESCE(device_category, 'other') AS device,
+          COUNT(*) AS visitors,
+          SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) AS conversions,
+          COALESCE(SUM(CASE WHEN converted = true THEN revenue ELSE 0 END), 0) AS revenue
+        FROM visitors
+        WHERE campaign_id = $1
+        GROUP BY COALESCE(device_category, 'other')
+        ORDER BY COUNT(*) DESC`,
+        [campaignId]
+      );
+
+      const devices = deviceRows.rows.map((r: any) => {
+        const vis = parseInt(r.visitors) || 0;
+        const conv = parseInt(r.conversions) || 0;
+        const rev = parseFloat(r.revenue) || 0;
+        return {
+          device: r.device,
+          visitors: vis,
+          conversions: conv,
+          conversionRate: vis > 0 ? parseFloat(((conv / vis) * 100).toFixed(1)) : 0,
+          revenue: parseFloat(rev.toFixed(2)),
+          revenuePerVisitor: vis > 0 ? parseFloat((rev / vis).toFixed(2)) : 0,
+        };
+      });
+
+      // Build top insight: compare best source vs second
+      let topInsight = "";
+      if (sources.length >= 2) {
+        const best = sources[0];
+        const second = sources[1];
+        if (best.conversionRate > 0 && second.conversionRate > 0) {
+          const ratio = (best.conversionRate / second.conversionRate).toFixed(1);
+          const bestLabel = best.source.replace(/_/g, " ");
+          const secondLabel = second.source.replace(/_/g, " ");
+          topInsight = `${bestLabel.charAt(0).toUpperCase() + bestLabel.slice(1)} visitors convert at ${ratio}x the rate of ${secondLabel} visitors`;
+        } else if (best.visitors > 0) {
+          const bestLabel = best.source.replace(/_/g, " ");
+          topInsight = `${bestLabel.charAt(0).toUpperCase() + bestLabel.slice(1)} is your top traffic source with ${best.visitors} visitors`;
+        }
+      } else if (sources.length === 1) {
+        const src = sources[0];
+        const label = src.source.replace(/_/g, " ");
+        topInsight = `All traffic coming from ${label.charAt(0).toUpperCase() + label.slice(1)}`;
+      }
+
+      return res.json({ sources, devices, topInsight });
+    } finally {
+      await pgPool.end();
+    }
+  });
+
+  // ============== ANOMALY ENDPOINTS ==============
+
+  // GET /api/campaigns/anomaly-counts — unread counts for all user campaigns (for sidebar)
+  app.get("/api/campaigns/anomaly-counts", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const counts = await storage.getUnreadAnomalyCountsByUser(req.userId!);
+      return res.json(counts);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/campaigns/:id/anomalies
+  app.get("/api/campaigns/:id/anomalies", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    const anomalies = await storage.getAllAnomalies(campaignId, 20);
+    const unreadCount = await storage.getUnreadAnomalyCount(campaignId);
+    return res.json({ anomalies, unreadCount });
+  });
+
+  // POST /api/campaigns/:id/anomalies/:anomalyId/read
+  app.post("/api/campaigns/:id/anomalies/:anomalyId/read", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const anomalyId = paramId(req.params.anomalyId);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    await storage.markAnomalyRead(anomalyId);
+    return res.json({ ok: true });
+  });
+
+  // POST /api/campaigns/:id/anomalies/read-all
+  app.post("/api/campaigns/:id/anomalies/read-all", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    await storage.markAllAnomaliesRead(campaignId);
+    return res.json({ ok: true });
+  });
+}
+
+// ===== Traffic Anomaly Detection =====
+
+// In-memory throttle: campaignId -> last run timestamp
+const anomalyDetectionLastRun: Record<number, number> = {};
+const ANOMALY_THROTTLE_MS = 5 * 60 * 1000; // 5 minutes
+
+async function detectTrafficAnomalies(campaignId: number): Promise<void> {
+  const now = Date.now();
+  const last = anomalyDetectionLastRun[campaignId] || 0;
+  if (now - last < ANOMALY_THROTTLE_MS) return;
+  anomalyDetectionLastRun[campaignId] = now;
+
+  try {
+    const { Pool } = require("pg");
+    const pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+    });
+
+    // Query last 7 days of visitor data grouped by date + traffic_source
+    const result = await pool.query(
+      `SELECT
+        DATE(created_at::timestamp) AS day,
+        COALESCE(traffic_source, 'direct') AS source,
+        COUNT(*) AS visitors,
+        SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) AS conversions
+       FROM visitors
+       WHERE campaign_id = $1
+         AND created_at >= NOW() - INTERVAL '7 days'
+       GROUP BY DATE(created_at::timestamp), COALESCE(traffic_source, 'direct')
+       ORDER BY day DESC`,
+      [campaignId]
+    );
+    await pool.end();
+
+    // Organize data: source -> { today: {visitors, conversions}, history: [{day, visitors, conversions}] }
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+
+    type DayData = { visitors: number; conversions: number };
+    const bySource: Record<string, { today: DayData; history: DayData[] }> = {};
+    const allSources = new Set<string>();
+    const sourcesBeforeToday = new Set<string>();
+
+    for (const row of result.rows) {
+      const src: string = row.source;
+      const day: string = row.day instanceof Date ? row.day.toISOString().slice(0, 10) : String(row.day);
+      const visitors = parseInt(row.visitors) || 0;
+      const conversions = parseInt(row.conversions) || 0;
+
+      allSources.add(src);
+      if (!bySource[src]) bySource[src] = { today: { visitors: 0, conversions: 0 }, history: [] };
+
+      if (day === todayStr) {
+        bySource[src].today = { visitors, conversions };
+      } else {
+        bySource[src].history.push({ visitors, conversions });
+        sourcesBeforeToday.add(src);
+      }
+    }
+
+    const sinceDateToday = new Date();
+    sinceDateToday.setHours(0, 0, 0, 0);
+    const sinceDateIso = sinceDateToday.toISOString();
+
+    for (const src of allSources) {
+      const data = bySource[src];
+      const todayVisitors = data.today.visitors;
+      const todayConversions = data.today.conversions;
+      const todayConvRate = todayVisitors > 0 ? todayConversions / todayVisitors : 0;
+
+      const historyVisitors = data.history.map((d) => d.visitors);
+      const historyConvRates = data.history.map((d) =>
+        d.visitors > 0 ? d.conversions / d.visitors : 0
+      );
+
+      const avgVisitors =
+        historyVisitors.length > 0
+          ? historyVisitors.reduce((a, b) => a + b, 0) / historyVisitors.length
+          : 0;
+      const avgConvRate =
+        historyConvRates.length > 0
+          ? historyConvRates.reduce((a, b) => a + b, 0) / historyConvRates.length
+          : 0;
+
+      // New source: appeared today but not in past 6 days
+      if (todayVisitors > 0 && !sourcesBeforeToday.has(src)) {
+        const alreadyExists = await storage.checkRecentAnomaly(campaignId, "new_source", src, sinceDateIso);
+        if (!alreadyExists) {
+          const srcLabel = src.replace(/_/g, " ");
+          await storage.createAnomaly({
+            campaignId,
+            anomalyType: "new_source",
+            source: src,
+            title: `New traffic source: ${srcLabel}`,
+            description: `You're seeing traffic from ${srcLabel} for the first time. ${todayVisitors} visitor${todayVisitors !== 1 ? "s" : ""} so far today.`,
+            severity: "info",
+            metricValue: todayVisitors,
+            baselineValue: 0,
+          });
+        }
+        continue; // skip spike checks for brand-new sources
+      }
+
+      // Traffic spike: today >= 2x the 7-day average
+      if (todayVisitors >= 2 && avgVisitors > 0 && todayVisitors >= avgVisitors * 2) {
+        const alreadyExists = await storage.checkRecentAnomaly(campaignId, "traffic_spike", src, sinceDateIso);
+        if (!alreadyExists) {
+          const multiplier = (todayVisitors / avgVisitors).toFixed(1);
+          const srcLabel = src.charAt(0).toUpperCase() + src.slice(1).replace(/_/g, " ");
+          const convRateStr = (todayConvRate * 100).toFixed(1);
+          await storage.createAnomaly({
+            campaignId,
+            anomalyType: "traffic_spike",
+            source: src,
+            title: `${srcLabel} traffic spiked ${multiplier}x today`,
+            description: `${srcLabel} sent ${todayVisitors} visitors today — that's ${multiplier}x your 7-day average of ${Math.round(avgVisitors)}. Something you posted may be driving traffic. Your conversion rate from ${srcLabel} is ${convRateStr}%.`,
+            severity: "positive",
+            metricValue: todayVisitors,
+            baselineValue: parseFloat(avgVisitors.toFixed(1)),
+          });
+        }
+      }
+
+      // Conversion spike: today's conversion rate >= 1.5x the 7-day average
+      if (todayVisitors >= 5 && avgConvRate > 0 && todayConvRate >= avgConvRate * 1.5) {
+        const alreadyExists = await storage.checkRecentAnomaly(campaignId, "conversion_spike", src, sinceDateIso);
+        if (!alreadyExists) {
+          const srcLabel = src.charAt(0).toUpperCase() + src.slice(1).replace(/_/g, " ");
+          const todayRateStr = (todayConvRate * 100).toFixed(1);
+          const avgRateStr = (avgConvRate * 100).toFixed(1);
+          await storage.createAnomaly({
+            campaignId,
+            anomalyType: "conversion_spike",
+            source: src,
+            title: `${srcLabel} conversion rate spiked to ${todayRateStr}%`,
+            description: `Visitors from ${srcLabel} are converting at ${todayRateStr}% today vs your usual ${avgRateStr}%. If you're running a promotion or changed your targeting, it's working.`,
+            severity: "positive",
+            metricValue: parseFloat((todayConvRate * 100).toFixed(1)),
+            baselineValue: parseFloat((avgConvRate * 100).toFixed(1)),
+          });
+        }
+      }
+    }
+  } catch (err) {
+    // Fire-and-forget — silently log errors
+    console.error("[anomaly-detection] error:", err);
+  }
 }
 
 // Helper: count total visitors across all campaigns for a user
