@@ -60,6 +60,7 @@ import {
   Archive,
   Share2,
   FileText,
+  RotateCcw,
 } from "lucide-react";
 import {
   Breadcrumb,
@@ -4329,6 +4330,21 @@ export default function CampaignDetailPage() {
   const [, navigate] = useLocation();
   const [brainBannerDismissed, setBrainBannerDismissed] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
+  const [showRestartDialog, setShowRestartDialog] = useState(false);
+
+  const restartMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/campaigns/${campaignId}/restart-test`, {});
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "visitor-feed"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "traffic-sources"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats/daily"] });
+      setShowRestartDialog(false);
+    },
+  });
   const [showAnomalyPanel, setShowAnomalyPanel] = useState(false);
   const userPlan = user?.plan ?? "free";
   const { toast } = useToast();
@@ -4482,6 +4498,16 @@ export default function CampaignDetailPage() {
               )}
             </Button>
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowRestartDialog(true)}
+            data-testid="button-restart-test"
+            className="gap-1.5"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            Restart Test
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -4644,6 +4670,35 @@ export default function CampaignDetailPage() {
               data-testid="button-archive-confirm"
             >
               {archiveMutation.isPending ? "Archiving..." : "Archive"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Restart Test Dialog */}
+      <Dialog open={showRestartDialog} onOpenChange={setShowRestartDialog}>
+        <DialogContent data-testid="dialog-restart-test">
+          <DialogHeader>
+            <DialogTitle>Restart Test?</DialogTitle>
+            <DialogDescription>
+              This will clear all visitor data, conversions, and behavioral stats for this campaign. Your variants and test configuration will be preserved. New data will start collecting immediately from fresh visitors.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setShowRestartDialog(false)}
+              disabled={restartMutation.isPending}
+              data-testid="button-restart-cancel"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => restartMutation.mutate()}
+              disabled={restartMutation.isPending}
+              data-testid="button-restart-confirm"
+            >
+              {restartMutation.isPending ? "Restarting..." : "Restart Test"}
             </Button>
           </DialogFooter>
         </DialogContent>

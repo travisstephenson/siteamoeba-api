@@ -400,6 +400,42 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({ success: true, campaign: updated });
   });
 
+  // POST /api/campaigns/:id/restart-test — reset all visitor/impression/session/event data
+  // Keeps variants and config intact but gives a clean statistical slate
+  app.post("/api/campaigns/:id/restart-test", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    // Delete all test data for this campaign
+    const { Pool: PgPool } = require("pg");
+    const pgPool = new PgPool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
+    });
+
+    try {
+      // Order matters due to foreign key-like relationships
+      await pgPool.query('DELETE FROM behavioral_events WHERE campaign_id = $1', [campaignId]);
+      await pgPool.query('DELETE FROM visitor_sessions WHERE campaign_id = $1', [campaignId]);
+      await pgPool.query('DELETE FROM impressions WHERE campaign_id = $1', [campaignId]);
+      await pgPool.query('DELETE FROM visitors WHERE campaign_id = $1', [campaignId]);
+      // Also clear daily observations so stale insights don't persist
+      await pgPool.query('DELETE FROM daily_observations WHERE campaign_id = $1', [campaignId]);
+      await pgPool.end();
+
+      res.json({
+        success: true,
+        message: "Test restarted. All visitor data cleared. Variants and configuration preserved.",
+      });
+    } catch (err: any) {
+      await pgPool.end();
+      res.status(500).json({ error: "Failed to restart test: " + (err.message || "") });
+    }
+  });
+
   // ============== VARIANTS ==============
 
   app.get("/api/campaigns/:id/variants", requireAuth, async (req: Request, res: Response) => {
