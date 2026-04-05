@@ -553,6 +553,10 @@ class StorageImpl implements IStorage {
       ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS shopify_connected BOOLEAN NOT NULL DEFAULT false;
       ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
     `);
+    // Campaign type (purchase vs lead_gen)
+    await pool.query(`
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS campaign_type TEXT NOT NULL DEFAULT 'purchase';
+    `);
     // Traffic anomalies for lightbulb intelligence alerts
     await pool.query(`
       CREATE TABLE IF NOT EXISTS traffic_anomalies (

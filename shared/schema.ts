@@ -81,6 +81,8 @@ export const campaigns = pgTable("campaigns", {
   status: text("status").notNull().default("active"), // 'active' | 'archived' | 'completed'
   archivedAt: text("archived_at"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+  // Campaign type
+  campaignType: text("campaign_type").notNull().default("purchase"), // 'purchase' | 'lead_gen'
   // Autopilot
   autopilotEnabled: boolean("autopilot_enabled").notNull().default(false),
   autopilotStep: integer("autopilot_step").notNull().default(0),

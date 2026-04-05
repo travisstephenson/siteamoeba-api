@@ -523,6 +523,7 @@ export async function registerRoutes(server: Server, app: Express) {
       totalRevenue,
       conversionRate: conversionRate * 100,
       variants,
+      campaignType: campaign.campaignType || "purchase",
     });
   });
 

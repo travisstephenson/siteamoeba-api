@@ -76,6 +76,7 @@ import {
   FormDescription,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -670,6 +671,7 @@ function CampaignWizard({
   const [scanError, setScanError] = useState("");
   const [selectedSections, setSelectedSections] = useState<Set<string>>(new Set());
   const [campaignName, setCampaignName] = useState("");
+  const [campaignType, setCampaignType] = useState<"purchase" | "lead_gen">("purchase");
   const [creating, setCreating] = useState(false);
   const [showQuickCreate, setShowQuickCreate] = useState(false);
 
@@ -694,6 +696,7 @@ function CampaignWizard({
     setScanError("");
     setSelectedSections(new Set());
     setCampaignName("");
+    setCampaignType("purchase");
     setCreating(false);
     setCreatedCampaignId(null);
     setPixelVerified(false);
@@ -788,6 +791,7 @@ function CampaignWizard({
       const campaignRes = await apiRequest("POST", "/api/campaigns", {
         name: campaignName.trim(),
         url: url,
+        campaignType: campaignType,
       });
       if (!campaignRes.ok) {
         const err = await campaignRes.json();
@@ -1068,6 +1072,33 @@ function CampaignWizard({
                     data-testid="input-campaign-name-wizard"
                     autoFocus
                   />
+                </div>
+
+                {/* Campaign Type */}
+                <div className="space-y-2">
+                  <Label className="text-sm font-semibold">Campaign Type</Label>
+                  <div className="flex gap-2">
+                    <button
+                      className={`flex-1 p-3 rounded-lg border text-left transition-colors ${
+                        campaignType === "purchase" ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground"
+                      }`}
+                      onClick={() => setCampaignType("purchase")}
+                      data-testid="button-campaign-type-purchase"
+                    >
+                      <div className="text-sm font-medium">Purchase Page</div>
+                      <div className="text-xs text-muted-foreground">Track sales, revenue, and conversion value</div>
+                    </button>
+                    <button
+                      className={`flex-1 p-3 rounded-lg border text-left transition-colors ${
+                        campaignType === "lead_gen" ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground"
+                      }`}
+                      onClick={() => setCampaignType("lead_gen")}
+                      data-testid="button-campaign-type-lead-gen"
+                    >
+                      <div className="text-sm font-medium">Lead Generation</div>
+                      <div className="text-xs text-muted-foreground">Track opt-ins, registrations, and lead capture</div>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Summary */}

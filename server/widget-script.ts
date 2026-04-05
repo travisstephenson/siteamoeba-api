@@ -8,12 +8,39 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   var API = "${apiBase}";
   var CID = ${campaignId};
 
-  // === VISITOR ID ===
-  var vid = localStorage.getItem("sa_vid");
+  // === VISITOR ID (resilient fallback chain) ===
+  var vid = null;
+  var vidStore = "none";
+
+  // Try 1: localStorage (most common, survives page reloads)
+  try {
+    vid = localStorage.getItem("sa_vid");
+    if (vid) vidStore = "ls";
+  } catch(e) {}
+
+  // Try 2: sessionStorage (survives within same tab session)
+  if (!vid) {
+    try {
+      vid = sessionStorage.getItem("sa_vid");
+      if (vid) vidStore = "ss";
+    } catch(e) {}
+  }
+
+  // Try 3: Cookie fallback (works when storage APIs are blocked)
+  if (!vid) {
+    var match = document.cookie.match(/sa_vid=([^;]+)/);
+    if (match) { vid = match[1]; vidStore = "ck"; }
+  }
+
+  // Generate new ID if none found
   if (!vid) {
     vid = "v_" + Math.random().toString(36).substr(2, 9) + "_" + Date.now();
-    localStorage.setItem("sa_vid", vid);
   }
+
+  // Store in ALL available locations for maximum persistence
+  try { localStorage.setItem("sa_vid", vid); } catch(e) {}
+  try { sessionStorage.setItem("sa_vid", vid); } catch(e) {}
+  try { document.cookie = "sa_vid=" + vid + ";path=/;max-age=31536000;SameSite=Lax"; } catch(e) {}
 
   // === UTM PARAMETERS ===
   var utmParams = (function() {
