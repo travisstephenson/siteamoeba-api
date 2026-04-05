@@ -1424,7 +1424,7 @@ export async function registerRoutes(server: Server, app: Express) {
       try {
         const now = new Date().toISOString();
 
-        // Batch insert events
+        // Batch insert events (skip if empty heartbeat)
         if (Array.isArray(events) && events.length > 0) {
           for (const evt of events) {
             await storage.createBehavioralEvent({
@@ -1437,10 +1437,10 @@ export async function registerRoutes(server: Server, app: Express) {
           }
         }
 
-        // Build session update from the batch
+        // Always upsert session with scroll/time data — even on empty heartbeats
         const sessionUpdates: Parameters<typeof storage.upsertVisitorSession>[2] = {};
-        if (typeof maxScroll === "number") sessionUpdates.maxScrollDepth = maxScroll;
-        if (typeof timeOnPage === "number") sessionUpdates.timeOnPage = timeOnPage;
+        if (typeof maxScroll === "number" && maxScroll > 0) sessionUpdates.maxScrollDepth = maxScroll;
+        if (typeof timeOnPage === "number" && timeOnPage > 0) sessionUpdates.timeOnPage = timeOnPage;
         if (device) sessionUpdates.deviceType = device;
 
         // Aggregate from events

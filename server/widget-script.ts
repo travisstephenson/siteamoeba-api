@@ -109,18 +109,23 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   var maxScroll = 0;
   var device = window.innerWidth < 768 ? "mobile" : window.innerWidth < 1024 ? "tablet" : "desktop";
 
-  // Scroll tracking (throttled)
+  // Scroll tracking (throttled) — always update maxScroll, push events at milestones
   var scrollTimeout;
+  var scrollMilestones = {};
   window.addEventListener("scroll", function() {
     clearTimeout(scrollTimeout);
     scrollTimeout = setTimeout(function() {
       var depth = Math.round((window.scrollY + window.innerHeight) / document.documentElement.scrollHeight * 100);
       if (depth > maxScroll) {
         maxScroll = depth;
-        if (depth >= 25 && depth < 50) events.push({type: "scroll", data: JSON.stringify({depth: 25}), ts: Date.now()});
-        else if (depth >= 50 && depth < 75) events.push({type: "scroll", data: JSON.stringify({depth: 50}), ts: Date.now()});
-        else if (depth >= 75 && depth < 100) events.push({type: "scroll", data: JSON.stringify({depth: 75}), ts: Date.now()});
-        else if (depth >= 100) events.push({type: "scroll", data: JSON.stringify({depth: 100}), ts: Date.now()});
+        // Push milestone events for key thresholds (only once each)
+        var milestones = [25, 50, 75, 100];
+        for (var m = 0; m < milestones.length; m++) {
+          if (depth >= milestones[m] && !scrollMilestones[milestones[m]]) {
+            scrollMilestones[milestones[m]] = true;
+            events.push({type: "scroll", data: JSON.stringify({depth: milestones[m]}), ts: Date.now()});
+          }
+        }
       }
     }, 200);
   });
@@ -168,13 +173,19 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     }
   }
 
-  // Batch send every 30 seconds
-  setInterval(function() {
-    if (events.length === 0) return;
+  // Send initial heartbeat after 5 seconds (captures early scroll + device)
+  setTimeout(function() {
     var batch = events.splice(0, events.length);
     var timeOnPage = Math.round((Date.now() - startTime) / 1000);
     sendBatch(batch, timeOnPage);
-  }, 30000);
+  }, 5000);
+
+  // Heartbeat every 15 seconds — always sends scroll/time even if no events
+  setInterval(function() {
+    var batch = events.splice(0, events.length);
+    var timeOnPage = Math.round((Date.now() - startTime) / 1000);
+    sendBatch(batch, timeOnPage);
+  }, 15000);
 
   // Send on page exit
   window.addEventListener("beforeunload", function() {
@@ -182,6 +193,15 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     events.push({type: "page_exit", data: JSON.stringify({maxScroll: maxScroll, timeOnPage: timeOnPage}), ts: Date.now()});
     var batch = events.splice(0, events.length);
     sendBatch(batch, timeOnPage);
+  });
+
+  // Also send on visibility change (handles mobile tab switches / app backgrounding)
+  document.addEventListener("visibilitychange", function() {
+    if (document.visibilityState === "hidden") {
+      var timeOnPage = Math.round((Date.now() - startTime) / 1000);
+      var batch = events.splice(0, events.length);
+      sendBatch(batch, timeOnPage);
+    }
   });
 })();`;
 }

@@ -2327,27 +2327,65 @@ function ConversionPixelSection({ campaignId }: { campaignId: number }) {
   const [copied, setCopied] = useState(false);
   const [revenue, setRevenue] = useState("27");
   const [pixelType, setPixelType] = useState<"sale" | "lead">("sale");
+  const [revenueMode, setRevenueMode] = useState<"fixed" | "dynamic">("fixed");
   const { toast } = useToast();
   const apiBase = getApiBaseUrl();
 
-  // Build the conversion pixel code as an array to avoid banned API keywords in the bundle
+  // Build the conversion pixel code
   const storageRef = ["local", "Storage"].join("");
-  const revParam = pixelType === "sale" && revenue && parseFloat(revenue) > 0 ? "&revenue=" + revenue : "";
   const pixelComment = pixelType === "sale"
     ? "<!-- SiteAmoeba Conversion Pixel \u2014 Place on your thank-you / confirmation page after purchase -->"
     : "<!-- SiteAmoeba Lead Pixel \u2014 Place on your thank-you page after opt-in / form submission -->";
-  const lines = [
-    pixelComment,
-    "<script>",
-    "(function(){",
-    "  var vid = " + storageRef + ".getItem(\"sa_vid\");",
-    "  if (vid) {",
-    "    var img = new Image();",
-    "    img.src = \"" + apiBase + "/api/widget/convert?vid=\" + vid + \"&cid=" + campaignId + revParam + "\";",
-    "  }",
-    "})();",
-    "<\/script>",
-  ];
+
+  let lines: string[];
+  if (pixelType === "lead") {
+    lines = [
+      pixelComment,
+      "<script>",
+      "(function(){",
+      "  var vid = " + storageRef + ".getItem(\"sa_vid\");",
+      "  if (vid) {",
+      "    var img = new Image();",
+      "    img.src = \"" + apiBase + "/api/widget/convert?vid=\" + vid + \"&cid=" + campaignId + "\";",
+      "  }",
+      "})();",
+      "<\/script>",
+    ];
+  } else if (revenueMode === "fixed") {
+    const revParam = revenue && parseFloat(revenue) > 0 ? "&revenue=" + revenue : "";
+    lines = [
+      pixelComment,
+      "<script>",
+      "(function(){",
+      "  var vid = " + storageRef + ".getItem(\"sa_vid\");",
+      "  if (vid) {",
+      "    var img = new Image();",
+      "    img.src = \"" + apiBase + "/api/widget/convert?vid=\" + vid + \"&cid=" + campaignId + revParam + "\";",
+      "  }",
+      "})();",
+      "<\/script>",
+    ];
+  } else {
+    // Dynamic revenue mode
+    lines = [
+      pixelComment,
+      "<!--",
+      "  Set window.sa_revenue BEFORE this script runs.",
+      "  Example: <script>window.sa_revenue = 97.00;</script>",
+      "  Or read from your checkout system / URL param.",
+      "-->",
+      "<script>",
+      "(function(){",
+      "  var vid = " + storageRef + ".getItem(\"sa_vid\");",
+      "  if (vid) {",
+      "    var amount = window.sa_revenue || 0;",
+      "    var img = new Image();",
+      "    img.src = \"" + apiBase + "/api/widget/convert?vid=\" + vid + \"&cid=" + campaignId + "&revenue=\" + amount;",
+      "  }",
+      "})();",
+      "<\/script>",
+    ];
+  }
   const code = lines.join("\n");
 
   const handleCopy = () => {
@@ -2405,20 +2443,54 @@ function ConversionPixelSection({ campaignId }: { campaignId: number }) {
 
         {/* Revenue input — only shown for Sale type */}
         {pixelType === "sale" && (
-          <div className="flex items-center gap-2">
-            <Label htmlFor="pixel-revenue" className="text-xs whitespace-nowrap">Sale price ($)</Label>
-            <Input
-              id="pixel-revenue"
-              type="number"
-              min="0"
-              step="0.01"
-              value={revenue}
-              onChange={(e) => setRevenue(e.target.value)}
-              className="w-24 h-8 text-xs"
-              placeholder="0"
-              data-testid="input-pixel-revenue"
-            />
-            <span className="text-xs text-muted-foreground">per conversion (updates the snippet below)</span>
+          <div className="space-y-2">
+            <div className="flex items-center gap-3">
+              <Label className="text-xs whitespace-nowrap">Revenue</Label>
+              <div className="flex rounded-md border border-border overflow-hidden text-xs">
+                <button
+                  className={`px-3 py-1.5 transition-colors ${
+                    revenueMode === "fixed"
+                      ? "bg-primary text-primary-foreground font-medium"
+                      : "bg-background text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setRevenueMode("fixed")}
+                >
+                  Fixed amount
+                </button>
+                <button
+                  className={`px-3 py-1.5 border-l border-border transition-colors ${
+                    revenueMode === "dynamic"
+                      ? "bg-primary text-primary-foreground font-medium"
+                      : "bg-background text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setRevenueMode("dynamic")}
+                >
+                  Dynamic value
+                </button>
+              </div>
+            </div>
+            {revenueMode === "fixed" ? (
+              <div className="flex items-center gap-2">
+                <Label htmlFor="pixel-revenue" className="text-xs whitespace-nowrap">Sale price ($)</Label>
+                <Input
+                  id="pixel-revenue"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={revenue}
+                  onChange={(e) => setRevenue(e.target.value)}
+                  className="w-24 h-8 text-xs"
+                  placeholder="0"
+                  data-testid="input-pixel-revenue"
+                />
+                <span className="text-xs text-muted-foreground">per conversion</span>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Set <code className="bg-muted px-1 py-0.5 rounded text-foreground">window.sa_revenue = 97.00</code> before the pixel script runs.
+                Works with any checkout system — Stripe, ThriveCart, ClickFunnels, etc.
+              </p>
+            )}
           </div>
         )}
 
