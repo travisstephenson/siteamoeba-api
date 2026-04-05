@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useLocation } from "wouter";
-import { User as UserIcon, Mail, Calendar, CreditCard, Trash2, Sparkles, Eye, EyeOff, Check, FlaskConical, Coins, MessageSquarePlus } from "lucide-react";
+import { User as UserIcon, Mail, Calendar, CreditCard, Trash2, Sparkles, Eye, EyeOff, Check, FlaskConical, Coins, MessageSquarePlus, Plug, CheckCircle2, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -437,6 +437,166 @@ function YourFeedbackSection({ isAuthenticated }: { isAuthenticated: boolean }) 
   );
 }
 
+function StripeConnectCard() {
+  const { toast } = useToast();
+  const [stripeKey, setStripeKey] = useState("");
+  const [showKey, setShowKey] = useState(false);
+
+  const { data: stripeStatus, isLoading: statusLoading, refetch: refetchStatus } = useQuery<{
+    connected: boolean;
+    accountId?: string;
+    recentCharges?: number;
+    connectedAt?: string;
+  }>({
+    queryKey: ["/api/settings/stripe-status"],
+  });
+
+  const connectMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/settings/connect-stripe", {
+        stripeSecretKey: stripeKey,
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to connect Stripe");
+      }
+      return res.json();
+    },
+    onSuccess: (data) => {
+      setStripeKey("");
+      toast({
+        title: "Stripe connected",
+        description: data.accountName ? `Connected to ${data.accountName}` : "Stripe account connected successfully",
+      });
+      refetchStatus();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Connection failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const disconnectMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/settings/disconnect-stripe", {});
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to disconnect");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Stripe disconnected" });
+      refetchStatus();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const isConnected = stripeStatus?.connected ?? false;
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Plug className="w-4 h-4" />
+          Integrations
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Connect external services to automatically sync transaction data across all your campaigns.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Stripe Connect */}
+        <div className="rounded-md border border-border p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#635bff]" />
+            <span className="text-sm font-medium">Stripe</span>
+            {isConnected && (
+              <Badge variant="secondary" className="text-xs gap-1 text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/40">
+                <CheckCircle2 className="w-3 h-3" />
+                Connected
+              </Badge>
+            )}
+          </div>
+
+          {statusLoading ? (
+            <Skeleton className="h-10 w-full" />
+          ) : isConnected ? (
+            <div className="space-y-3">
+              <div className="text-xs text-muted-foreground space-y-1">
+                {stripeStatus?.accountId && (
+                  <p data-testid="text-stripe-account-id">Account: <span className="font-mono">{stripeStatus.accountId}</span></p>
+                )}
+                {stripeStatus?.recentCharges !== undefined && (
+                  <p data-testid="text-stripe-recent-charges">
+                    {stripeStatus.recentCharges} recent transaction{stripeStatus.recentCharges !== 1 ? "s" : ""} synced
+                  </p>
+                )}
+                {stripeStatus?.connectedAt && (
+                  <p>Connected {new Date(stripeStatus.connectedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
+                )}
+              </div>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => disconnectMutation.mutate()}
+                disabled={disconnectMutation.isPending}
+                data-testid="button-disconnect-stripe"
+                className="text-destructive hover:text-destructive"
+              >
+                {disconnectMutation.isPending ? "Disconnecting..." : "Disconnect"}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label htmlFor="stripe-secret-key" className="text-xs font-medium">Stripe Secret Key</Label>
+                <div className="relative">
+                  <Input
+                    id="stripe-secret-key"
+                    type={showKey ? "text" : "password"}
+                    placeholder="sk_live_..."
+                    value={stripeKey}
+                    onChange={(e) => setStripeKey(e.target.value)}
+                    className="pr-10 h-9 font-mono text-xs"
+                    data-testid="input-stripe-secret-key"
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    data-testid="button-toggle-stripe-key-visibility"
+                    aria-label={showKey ? "Hide key" : "Show key"}
+                  >
+                    {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <div className="flex items-start gap-1.5">
+                  <AlertTriangle className="w-3 h-3 text-amber-500 mt-0.5 shrink-0" />
+                  <p className="text-xs text-muted-foreground">
+                    Your key is encrypted and only used to read transaction data.
+                  </p>
+                </div>
+              </div>
+              <Button
+                size="sm"
+                onClick={() => connectMutation.mutate()}
+                disabled={!stripeKey || connectMutation.isPending}
+                data-testid="button-connect-stripe"
+                className="gap-1.5"
+              >
+                {connectMutation.isPending ? "Connecting..." : "Connect Stripe"}
+              </Button>
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const [, navigate] = useLocation();
@@ -562,6 +722,9 @@ export default function SettingsPage() {
 
         {/* AI Configuration */}
         <AIConfigCard currentProvider={(user as any)?.llmProvider} />
+
+        {/* Integrations (Stripe) */}
+        <StripeConnectCard />
 
         {/* Testing Settings */}
         <TestingSettingsCard

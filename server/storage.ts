@@ -18,7 +18,7 @@ import {
   type Referral, type InsertReferral,
 } from "@shared/schema";
 
-const pool = new Pool({
+export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
   max: 20,                      // maximum connections in pool
@@ -41,6 +41,7 @@ export interface VariantStats {
   revenue: number;
   revenuePerVisitor: number;
   confidence: number;
+  persuasionTags: string[] | null;
 }
 
 export interface DailyStats {
@@ -591,6 +592,12 @@ class StorageImpl implements IStorage {
       CREATE INDEX IF NOT EXISTS idx_specialist_knowledge_role ON specialist_knowledge(specialist_role, section_type);
       CREATE INDEX IF NOT EXISTS idx_specialist_knowledge_page ON specialist_knowledge(specialist_role, page_type);
     `);
+    // Stripe account-level connection columns
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_account_id TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_access_token TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_connected_at TEXT;
+    `);
   }
 
   // ===== Users =====
@@ -839,6 +846,16 @@ class StorageImpl implements IStorage {
       const cr = imp > 0 ? conv / imp : 0;
       const rpv = imp > 0 ? rev / imp : 0;
 
+      // Parse persuasion tags from JSON text field
+      let parsedTags: string[] | null = null;
+      if (v.persuasionTags) {
+        try {
+          parsedTags = JSON.parse(v.persuasionTags);
+        } catch {
+          parsedTags = null;
+        }
+      }
+
       stats.push({
         variantId: v.id,
         type: v.type,
@@ -852,6 +869,7 @@ class StorageImpl implements IStorage {
         revenue: rev,
         revenuePerVisitor: rpv,
         confidence: 0,
+        persuasionTags: parsedTags,
       });
     }
 

@@ -113,6 +113,7 @@ interface VariantStats {
   conversionRate: number;
   revenue: number;
   confidence: number;
+  persuasionTags?: string[] | null;
 }
 
 interface CampaignStats {
@@ -1994,7 +1995,7 @@ function VariantCard({
             aria-label={variant.isActive ? "Pause variant" : "Activate variant"}
           >
             {variant.isActive ? (
-              <EyeOff className="w-3.5 h-3.5 text-muted-foreground" />
+              <Pause className="w-3.5 h-3.5 text-muted-foreground" />
             ) : (
               <Eye className="w-3.5 h-3.5 text-primary" />
             )}
@@ -2020,6 +2021,23 @@ function VariantCard({
           sectionType={sectionType}
         />
       </div>
+
+      {/* Persuasion tags (strategy) */}
+      {variant.persuasionTags && variant.persuasionTags.length > 0 && (
+        <div className="mt-2 mb-3 p-2 rounded-md bg-muted/50 border border-border/50">
+          <div className="flex items-center gap-1.5 mb-1">
+            <Lightbulb className="w-3 h-3 text-amber-500" />
+            <span className="text-xs font-medium text-foreground">Strategy</span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {variant.persuasionTags.map((tag, idx) => (
+              <Badge key={idx} variant="secondary" className="text-xs">
+                {STRATEGY_LABELS[tag] || tag}
+              </Badge>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* vs control comparison */}
       {vsControl !== null && (
@@ -2975,7 +2993,6 @@ function IntegrationSettings({ campaignId }: { campaignId: number }) {
   const { toast } = useToast();
 
   const PROD_BASE = "https://api.siteamoeba.com";
-  const stripeUrl = `${PROD_BASE}/api/webhooks/stripe/${campaignId}`;
   const shopifyUrl = `${PROD_BASE}/api/webhooks/shopify/${campaignId}`;
   const genericUrl = `${PROD_BASE}/api/webhooks/generic/${campaignId}`;
 
@@ -3055,27 +3072,10 @@ function IntegrationSettings({ campaignId }: { campaignId: number }) {
         <span className="text-xs text-muted-foreground">Track every purchase, subscription, and refund</span>
       </div>
 
-      {/* Stripe card */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-sm font-semibold flex items-center gap-2">
-            <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#635bff]" />
-            Stripe
-          </CardTitle>
-          <p className="text-xs text-muted-foreground">
-            Add this as a Stripe webhook endpoint. Events: <code className="text-xs bg-muted rounded px-1">checkout.session.completed</code>, <code className="text-xs bg-muted rounded px-1">payment_intent.succeeded</code>, <code className="text-xs bg-muted rounded px-1">charge.refunded</code>
-          </p>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">Webhook URL</p>
-            <UrlRow url={stripeUrl} id="stripe-webhook-url" />
-          </div>
-          <div className="bg-muted/40 rounded-md p-3 text-xs text-muted-foreground">
-            <strong className="text-foreground">Setup:</strong> Stripe Dashboard → Developers → Webhooks → Add endpoint → paste URL above → select events above
-          </div>
-        </CardContent>
-      </Card>
+      {/* Stripe note */}
+      <div className="rounded-md bg-muted/40 border border-border p-3 text-xs text-muted-foreground">
+        Stripe integration is configured in <strong className="text-foreground">Settings</strong>. Shopify and other platforms use campaign-level webhooks below.
+      </div>
 
       {/* Shopify card */}
       <Card>
@@ -3487,6 +3487,47 @@ function getTestMethodConfig(method: string): { icon: React.ElementType; label: 
   }
 }
 
+// ---- Helper: render copy text with proper HTML/bullet handling ----
+function renderCopyText(text: string): React.ReactNode {
+  const cleaned = text.trim();
+
+  // If contains HTML tags, render as HTML
+  if (/<[a-z][\s\S]*>/i.test(cleaned)) {
+    return (
+      <div
+        className="prose prose-sm dark:prose-invert max-w-none"
+        dangerouslySetInnerHTML={{ __html: cleaned }}
+      />
+    );
+  }
+
+  // If contains bullet characters, convert to HTML list
+  if (cleaned.includes('\u2022')) {
+    const items = cleaned.split('\u2022').filter((s) => s.trim());
+    const html = '<ul>' + items.map((item) => `<li>${item.trim()}</li>`).join('') + '</ul>';
+    return (
+      <div
+        className="prose prose-sm dark:prose-invert max-w-none"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    );
+  }
+
+  // Plain text with line breaks
+  if (cleaned.includes('\n')) {
+    const html = cleaned.split('\n').map((line) => `<p>${line}</p>`).join('');
+    return (
+      <div
+        className="prose prose-sm dark:prose-invert max-w-none"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+    );
+  }
+
+  // Simple text
+  return <span>{cleaned}</span>;
+}
+
 // ---- Test Section Card ----
 function TestSectionCard({
   section,
@@ -3668,11 +3709,16 @@ function TestSectionCard({
                 </div>
                 {(section.category === "body_copy" || section.category === "hero_journey") ? (
                   <>
-                    <p className="text-sm text-foreground leading-relaxed whitespace-pre-line">
+                    <div className="text-sm text-foreground leading-relaxed">
                       {showFullControlText
-                        ? section.currentText.replace(/<[^>]*>/g, " ").trim()
-                        : (section.currentText.replace(/<[^>]*>/g, " ").trim().slice(0, 100) + (section.currentText.length > 100 ? "…" : ""))}
-                    </p>
+                        ? renderCopyText(section.currentText)
+                        : (
+                          <span className="text-sm text-foreground leading-relaxed">
+                            {section.currentText.replace(/<[^>]*>/g, " ").replace(/\u2022/g, "•").trim().slice(0, 100)}
+                            {section.currentText.replace(/<[^>]*>/g, " ").trim().length > 100 ? "…" : ""}
+                          </span>
+                        )}
+                    </div>
                     {section.currentText.replace(/<[^>]*>/g, " ").trim().length > 100 && (
                       <button
                         className="text-xs text-primary hover:underline mt-1 flex items-center gap-0.5"
@@ -3688,7 +3734,7 @@ function TestSectionCard({
                     )}
                   </>
                 ) : (
-                  <p className="text-sm text-foreground leading-relaxed">{section.currentText}</p>
+                  <div className="text-sm text-foreground leading-relaxed">{renderCopyText(section.currentText)}</div>
                 )}
               </div>
             )}
@@ -3705,19 +3751,27 @@ function TestSectionCard({
               </div>
             ) : (
               <div className="space-y-3 mb-4">
-                {sectionVariants.map((variant, i) => (
-                  <VariantCard
-                    key={variant.id}
-                    variant={variant}
-                    rank={i + 1}
-                    isLeader={variant.id === leaderVariant?.id && sectionVariants.length > 1}
-                    campaignId={campaignId}
-                    campaignUrl={campaignUrl}
-                    controlVariant={controlVariant}
-                    sectionType={section.category}
-                    elementStyles={section.elementStyles}
-                  />
-                ))}
+                {(() => {
+                  // Sort: control first, then by id
+                  const sortedVariants = [...sectionVariants].sort((a, b) => {
+                    if (a.isControl && !b.isControl) return -1;
+                    if (!a.isControl && b.isControl) return 1;
+                    return a.id - b.id;
+                  });
+                  return sortedVariants.map((variant, i) => (
+                    <VariantCard
+                      key={variant.id}
+                      variant={variant}
+                      rank={i + 1}
+                      isLeader={variant.id === leaderVariant?.id && sectionVariants.length > 1}
+                      campaignId={campaignId}
+                      campaignUrl={campaignUrl}
+                      controlVariant={controlVariant}
+                      sectionType={section.category}
+                      elementStyles={section.elementStyles}
+                    />
+                  ));
+                })()}
               </div>
             )}
 

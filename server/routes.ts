@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import Stripe from "stripe";
 import rateLimit from "express-rate-limit";
 import xss from "xss";
-import { storage } from "./storage";
+import { storage, pool } from "./storage";
 import { callLLM, resolveLLMConfig } from "./llm";
 import { runCounsel, runPostMortem } from "./counsel";
 import { encryptApiKey, decryptApiKey } from "./encryption";
@@ -514,6 +514,7 @@ export async function registerRoutes(server: Server, app: Express) {
       conversionRate: v.conversionRate * 100,
       revenue: v.revenue,
       confidence: v.confidence,
+      persuasionTags: v.persuasionTags,
     }));
 
     res.json({
@@ -594,6 +595,232 @@ export async function registerRoutes(server: Server, app: Express) {
 
     await storage.updateUser(user.id, updates);
     res.json({ ok: true, ...updates });
+  });
+
+  // ============== STRIPE ACCOUNT-LEVEL INTEGRATION ==============
+
+  // Match Stripe charges to visitors and create revenue events
+  async function matchStripeTransactionsToVisitors(userId: number): Promise<number> {
+    const user = await storage.getUserById(userId);
+    if (!user || !(user as any).stripeAccessToken) return 0;
+
+    const decryptedKey = decryptApiKey((user as any).stripeAccessToken);
+    const stripeClient = new Stripe(decryptedKey);
+
+    // Fetch up to 100 recent charges
+    const charges = await stripeClient.charges.list({ limit: 100 });
+    const userCampaigns = await storage.getCampaignsByUser(userId);
+    let matched = 0;
+
+    for (const charge of charges.data) {
+      if (charge.status !== "succeeded") continue;
+      const customerEmail = charge.billing_details?.email || null;
+      if (!customerEmail) continue;
+
+      // Check if we already have a revenue event for this charge
+      const existing = await pool.query(
+        `SELECT id FROM revenue_events WHERE external_id = $1 AND source = 'stripe_account' LIMIT 1`,
+        [charge.id]
+      );
+      if (existing.rows.length > 0) continue;
+
+      // Look for a visitor that already has a revenue_event with this email
+      let matchedCampaignId: number | null = null;
+      let matchedVisitorId: string | null = null;
+
+      const visitorMatch = await pool.query(
+        `SELECT re.visitor_id, re.campaign_id
+         FROM revenue_events re
+         JOIN campaigns c ON c.id = re.campaign_id
+         WHERE re.customer_email = $1 AND c.user_id = $2 AND re.visitor_id IS NOT NULL
+         LIMIT 1`,
+        [customerEmail, userId]
+      );
+
+      if (visitorMatch.rows.length > 0) {
+        matchedVisitorId = visitorMatch.rows[0].visitor_id;
+        matchedCampaignId = visitorMatch.rows[0].campaign_id;
+      } else if (userCampaigns.length > 0) {
+        // Assign to first active campaign as fallback
+        const activeCampaign = userCampaigns.find((c: any) => c.isActive && c.status === "active") || userCampaigns[0];
+        matchedCampaignId = activeCampaign.id;
+      }
+
+      if (!matchedCampaignId) continue;
+
+      await storage.addRevenueEvent({
+        visitorId: matchedVisitorId || undefined,
+        campaignId: matchedCampaignId,
+        source: "stripe_account",
+        eventType: charge.refunded ? "refund" : "purchase",
+        amount: charge.amount / 100, // Stripe amounts are in cents
+        currency: charge.currency?.toUpperCase() || "USD",
+        externalId: charge.id,
+        customerEmail: customerEmail,
+        metadata: JSON.stringify({
+          description: charge.description,
+          paymentMethod: charge.payment_method_details?.type,
+        }),
+      });
+      matched++;
+    }
+
+    return matched;
+  }
+
+  // A) POST /api/settings/connect-stripe
+  app.post("/api/settings/connect-stripe", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    const { stripeSecretKey } = req.body;
+    if (!stripeSecretKey || typeof stripeSecretKey !== "string") {
+      return res.status(400).json({ error: "stripeSecretKey is required" });
+    }
+    if (!stripeSecretKey.startsWith("sk_")) {
+      return res.status(400).json({ error: "Invalid Stripe secret key format" });
+    }
+
+    // Verify the key works
+    let account: Stripe.Account;
+    try {
+      const stripeClient = new Stripe(stripeSecretKey);
+      account = await stripeClient.accounts.retrieve();
+    } catch (err: any) {
+      return res.status(400).json({ error: "Invalid Stripe key: " + (err.message || "could not verify") });
+    }
+
+    // Encrypt and save
+    await storage.updateUser(user.id, {
+      stripeAccountId: account.id,
+      stripeAccessToken: encryptApiKey(stripeSecretKey),
+      stripeConnectedAt: new Date().toISOString(),
+    } as any);
+
+    // Backfill existing transactions
+    try {
+      await matchStripeTransactionsToVisitors(user.id);
+    } catch (e) {
+      console.error("Stripe backfill error:", e);
+    }
+
+    res.json({
+      connected: true,
+      accountId: account.id,
+      accountName: account.business_profile?.name || (account.settings as any)?.dashboard?.display_name || null,
+    });
+  });
+
+  // B) POST /api/settings/disconnect-stripe
+  app.post("/api/settings/disconnect-stripe", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    await storage.updateUser(user.id, {
+      stripeAccountId: null,
+      stripeAccessToken: null,
+      stripeConnectedAt: null,
+    } as any);
+
+    res.json({ disconnected: true });
+  });
+
+  // C) GET /api/settings/stripe-status
+  app.get("/api/settings/stripe-status", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    const accessToken = (user as any).stripeAccessToken;
+    if (!accessToken) {
+      return res.json({ connected: false });
+    }
+
+    try {
+      const decryptedKey = decryptApiKey(accessToken);
+      const stripeClient = new Stripe(decryptedKey);
+      const charges = await stripeClient.charges.list({ limit: 20 });
+      res.json({
+        connected: true,
+        accountId: (user as any).stripeAccountId,
+        recentCharges: charges.data.length,
+        connectedAt: (user as any).stripeConnectedAt,
+      });
+    } catch (err) {
+      // Key is invalid — clear it
+      await storage.updateUser(user.id, {
+        stripeAccountId: null,
+        stripeAccessToken: null,
+        stripeConnectedAt: null,
+      } as any);
+      res.json({ connected: false });
+    }
+  });
+
+  // D) GET /api/settings/stripe-transactions
+  app.get("/api/settings/stripe-transactions", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    const accessToken = (user as any).stripeAccessToken;
+    if (!accessToken) {
+      return res.status(400).json({ error: "Stripe not connected" });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+    const startDate = req.query.startDate ? parseInt(req.query.startDate as string) : undefined;
+    const endDate = req.query.endDate ? parseInt(req.query.endDate as string) : undefined;
+
+    try {
+      const decryptedKey = decryptApiKey(accessToken);
+      const stripeClient = new Stripe(decryptedKey);
+
+      const listParams: Stripe.ChargeListParams = { limit };
+      if (startDate || endDate) {
+        listParams.created = {};
+        if (startDate) listParams.created.gte = startDate;
+        if (endDate) listParams.created.lte = endDate;
+      }
+
+      const charges = await stripeClient.charges.list(listParams);
+      const userCampaigns = await storage.getCampaignsByUser(user.id);
+      const campaignIds = userCampaigns.map((c: any) => c.id);
+
+      const transactions = await Promise.all(
+        charges.data.map(async (charge) => {
+          const email = charge.billing_details?.email || null;
+          let trafficSource: string | null = null;
+
+          if (email && campaignIds.length > 0) {
+            // Look up traffic source via existing revenue_events → visitors
+            const match = await pool.query(
+              `SELECT v.traffic_source
+               FROM revenue_events re
+               JOIN visitors v ON v.id = re.visitor_id
+               WHERE re.customer_email = $1 AND re.campaign_id = ANY($2::int[])
+               AND v.traffic_source IS NOT NULL
+               LIMIT 1`,
+              [email, campaignIds]
+            );
+            trafficSource = match.rows[0]?.traffic_source || null;
+          }
+
+          return {
+            id: charge.id,
+            amount: charge.amount / 100,
+            currency: charge.currency,
+            customerEmail: email,
+            created: new Date(charge.created * 1000).toISOString(),
+            status: charge.status,
+            description: charge.description,
+            trafficSource,
+          };
+        })
+      );
+
+      res.json({ transactions });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to fetch transactions" });
+    }
   });
 
   // ============== PAGE SCANNER ==============
@@ -1359,6 +1586,7 @@ export async function registerRoutes(server: Server, app: Express) {
         conversions: v.conversions,
         conversionRate: v.conversionRate * 100,
         confidence: v.confidence,
+        persuasionTags: v.persuasionTags,
       })),
       totalVisitors,
       totalConversions,

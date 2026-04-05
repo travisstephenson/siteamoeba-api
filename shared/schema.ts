@@ -34,6 +34,10 @@ export const users = pgTable("users", {
   // Referral
   referralCode: text("referral_code"),
   referredBy: integer("referred_by"),
+  // Stripe account-level connection
+  stripeAccountId: text("stripe_account_id"),
+  stripeAccessToken: text("stripe_access_token"),
+  stripeConnectedAt: text("stripe_connected_at"),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({
