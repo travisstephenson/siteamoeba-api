@@ -2017,9 +2017,9 @@ function VariantCard({
                   <span className="text-sm font-medium">Live Preview — variant applied to your actual page</span>
                 </div>
                 <iframe
-                  src={`${PUBLIC_API_URL}/api/campaigns/${campaignId}/preview/${variant.id}${getAuthToken() ? `?token=${encodeURIComponent(getAuthToken()!)}` : ""}`}
+                  src={`${campaignUrl}${campaignUrl.includes('?') ? '&' : '?'}sa_preview=${variant.id}${getAuthToken() ? `&sa_token=${encodeURIComponent(getAuthToken()!)}` : ""}`}
                   className="flex-1 w-full border-0 min-h-0"
-                  sandbox="allow-same-origin allow-scripts"
+                  referrerPolicy="no-referrer"
                   title="Variant preview"
                 />
               </div>

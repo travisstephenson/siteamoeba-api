@@ -1760,6 +1760,62 @@ export async function registerRoutes(server: Server, app: Express) {
     next();
   });
 
+  // ============== PREVIEW DATA (for widget preview mode) ==============
+  // Returns variant data in the same format as /assign, but for a specific variant.
+  // Called by the widget when sa_preview query param is present.
+  app.get("/api/widget/preview-data", async (req: Request, res: Response) => {
+    const campaignId = parseInt(req.query.cid as string);
+    const variantId = parseInt(req.query.variantId as string);
+    const tokenStr = req.query.token as string;
+
+    if (!campaignId || !variantId) {
+      return res.status(400).json({ error: "Missing cid or variantId" });
+    }
+
+    // Validate token
+    try {
+      jwt.verify(tokenStr, JWT_SECRET);
+    } catch {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign) return res.status(404).json({ error: "Campaign not found" });
+
+    const variant = await storage.getVariant(variantId);
+    if (!variant || variant.campaignId !== campaignId) {
+      return res.status(404).json({ error: "Variant not found" });
+    }
+
+    // Resolve selector using the same strategy as the assign endpoint
+    const testSections = await storage.getTestSectionsByCampaign(campaignId);
+    let section = variant.testSectionId
+      ? testSections.find(s => s.id === variant.testSectionId)
+      : undefined;
+    if (!section) {
+      section = testSections.find(s => s.isActive && s.category === variant.type);
+    }
+
+    const payload: any = {
+      id: variant.id,
+      text: variant.text,
+      isControl: !!variant.isControl,
+      selector: section?.selector || campaign.headlineSelector || "",
+      testMethod: section?.testMethod || "text_swap",
+    };
+
+    // Return in the same shape as the assign endpoint
+    const result: any = { headline: null, subheadline: null };
+    if (variant.type === "headline") result.headline = payload;
+    else if (variant.type === "subheadline") result.subheadline = payload;
+    else {
+      // For non-headline/subheadline types, return as sections array
+      result.sections = [{ ...payload, selector: payload.selector }];
+    }
+
+    res.json(result);
+  });
+
   app.get("/api/widget/assign", widgetLimiter, async (req: Request, res: Response) => {
     const visitorId = req.query.vid as string;
     const campaignId = parseInt(req.query.cid as string);

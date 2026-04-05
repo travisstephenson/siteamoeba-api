@@ -169,16 +169,14 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     }
   }
 
-  // === VARIANT ASSIGNMENT ===
-  var assignUrl = API + "/api/widget/assign?vid=" + vid + "&cid=" + CID + "&ref=" + encodeURIComponent(document.referrer);
-  if (utmParams.utm_source)   assignUrl += "&utm_source="   + encodeURIComponent(utmParams.utm_source);
-  if (utmParams.utm_medium)   assignUrl += "&utm_medium="   + encodeURIComponent(utmParams.utm_medium);
-  if (utmParams.utm_campaign) assignUrl += "&utm_campaign=" + encodeURIComponent(utmParams.utm_campaign);
-  if (utmParams.utm_content)  assignUrl += "&utm_content="  + encodeURIComponent(utmParams.utm_content);
-  if (utmParams.utm_term)     assignUrl += "&utm_term="     + encodeURIComponent(utmParams.utm_term);
-  fetch(assignUrl)
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
+  // === PREVIEW MODE DETECTION ===
+  // If URL has ?sa_preview=VARIANT_ID, skip normal assignment and apply that specific variant.
+  // This lets the dashboard show an accurate preview on the ACTUAL live page.
+  var previewMatch = window.location.search.match(/[?&]sa_preview=(\d+)/);
+  var previewToken = (window.location.search.match(/[?&]sa_token=([^&]+)/) || [])[1] || "";
+  var isPreviewMode = !!previewMatch;
+
+  function handleAssignData(data) {
       // Apply headline variant — SKIP if control (let original page be the control)
       if (data.headline && data.headline.text && !data.headline.isControl) {
         if (data.headline.selector) {
@@ -207,8 +205,56 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       // Final page integrity check — only if any non-control variants were applied
       var anyApplied = (data.headline && !data.headline.isControl) || (data.subheadline && !data.subheadline.isControl);
       if (anyApplied) postReplacementCheck();
-    })
-    .catch(function(e) { console.log("SiteAmoeba: using defaults", e); });
+
+      // In preview mode, add a green outline to the changed element and show banner
+      if (isPreviewMode && anyApplied) {
+        var outlinedEls = document.querySelectorAll("[data-sa-hidden]");
+        // Find the primary (visible) changed element by looking for our replaced text
+        if (data.headline && data.headline.selector && !data.headline.isControl) {
+          try {
+            var firstSel = data.headline.selector.split(",")[0].trim();
+            var el = document.querySelector(firstSel);
+            if (el) {
+              el.style.outline = "3px solid #10b981";
+              el.style.outlineOffset = "4px";
+            }
+          } catch(e) {}
+        }
+      }
+  }
+
+  // === VARIANT ASSIGNMENT (preview vs live) ===
+  if (isPreviewMode) {
+    // PREVIEW MODE: fetch the specific variant from the preview-data endpoint
+    var previewVid = previewMatch[1];
+    fetch(API + "/api/widget/preview-data?cid=" + CID + "&variantId=" + previewVid + "&token=" + encodeURIComponent(previewToken))
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        // Retry with delays for dynamic pages (GHL renders content after load)
+        var retries = [0, 500, 1000, 2000, 3000, 5000];
+        var applied = false;
+        retries.forEach(function(delay) {
+          setTimeout(function() {
+            if (applied) return;
+            handleAssignData(data);
+            applied = true;
+          }, delay);
+        });
+      })
+      .catch(function(e) { console.log("SiteAmoeba preview: error", e); });
+  } else {
+    // NORMAL MODE: standard variant assignment
+    var assignUrl = API + "/api/widget/assign?vid=" + vid + "&cid=" + CID + "&ref=" + encodeURIComponent(document.referrer);
+    if (utmParams.utm_source)   assignUrl += "&utm_source="   + encodeURIComponent(utmParams.utm_source);
+    if (utmParams.utm_medium)   assignUrl += "&utm_medium="   + encodeURIComponent(utmParams.utm_medium);
+    if (utmParams.utm_campaign) assignUrl += "&utm_campaign=" + encodeURIComponent(utmParams.utm_campaign);
+    if (utmParams.utm_content)  assignUrl += "&utm_content="  + encodeURIComponent(utmParams.utm_content);
+    if (utmParams.utm_term)     assignUrl += "&utm_term="     + encodeURIComponent(utmParams.utm_term);
+    fetch(assignUrl)
+      .then(function(r) { return r.json(); })
+      .then(function(data) { handleAssignData(data); })
+      .catch(function(e) { console.log("SiteAmoeba: using defaults", e); });
+  }
 
   // Capture element styles for dashboard preview (fire-and-forget)
   // Runs once on first page load; subsequent loads are skipped server-side if styles already stored
