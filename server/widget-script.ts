@@ -25,7 +25,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       for (var i = 0; i < pairs.length; i++) {
         var pair = pairs[i].split("=");
         if (pair.length === 2 && keys.indexOf(pair[0]) !== -1) {
-          params[pair[0]] = decodeURIComponent(pair[1].replace(/\+/g, " "));
+          params[pair[0]] = decodeURIComponent(pair[1].replace(/\\+/g, " "));
         }
       }
     }
