@@ -605,6 +605,11 @@ class StorageImpl implements IStorage {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS shopify_connected_at TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS ghl_connected_at TEXT;
     `);
+    // Whop integration columns
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS whop_api_key TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS whop_connected_at TEXT;
+    `);
   }
 
   // ===== Users =====

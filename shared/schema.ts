@@ -43,6 +43,9 @@ export const users = pgTable("users", {
   shopifyStoreUrl: text("shopify_store_url"),
   shopifyConnectedAt: text("shopify_connected_at"),
   ghlConnectedAt: text("ghl_connected_at"),
+  // Whop integration
+  whopApiKey: text("whop_api_key"),
+  whopConnectedAt: text("whop_connected_at"),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({

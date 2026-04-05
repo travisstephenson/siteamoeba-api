@@ -479,6 +479,8 @@ function UrlRow({ url, testId }: { url: string; testId?: string }) {
 function StripeIntegration({ userId }: { userId?: number }) {
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
+  const [showFallback, setShowFallback] = useState(false);
+  const [stripeKey, setStripeKey] = useState("");
 
   const { data: stripeStatus, isLoading: statusLoading, refetch: refetchStatus } = useQuery<{
     connected: boolean;
@@ -518,6 +520,28 @@ function StripeIntegration({ userId }: { userId?: number }) {
     onSuccess: (data) => {
       window.location.href = data.url;
     },
+    onError: () => {
+      // OAuth not configured — show fallback restricted key UI
+      setShowFallback(true);
+    },
+  });
+
+  const connectKeyMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/settings/connect-stripe", { stripeKey });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to connect");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Stripe connected!", description: "Your restricted API key has been saved and verified." });
+      setStripeKey("");
+      setShowFallback(false);
+      refetchStatus();
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/stripe-status"] });
+    },
     onError: (err: Error) => {
       toast({ title: "Connection failed", description: err.message, variant: "destructive" });
     },
@@ -555,7 +579,7 @@ function StripeIntegration({ userId }: { userId?: number }) {
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium">Stripe</p>
-          <p className="text-xs text-muted-foreground">Sync payment data via OAuth</p>
+          <p className="text-xs text-muted-foreground">Sync payment data via OAuth or API key</p>
         </div>
         {statusLoading ? (
           <Skeleton className="h-5 w-20" />
@@ -599,6 +623,50 @@ function StripeIntegration({ userId }: { userId?: number }) {
                 {disconnectMutation.isPending ? "Disconnecting..." : "Disconnect Stripe"}
               </Button>
             </div>
+          ) : showFallback ? (
+            <div className="space-y-3">
+              <div className="rounded-md bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 text-xs text-amber-800 dark:text-amber-300">
+                <p className="font-medium mb-1">Use a Restricted API Key</p>
+                <p className="text-amber-700 dark:text-amber-400">Stripe Connect OAuth is not available. Use a restricted key instead:</p>
+                <ol className="list-decimal list-inside mt-1.5 space-y-0.5">
+                  <li>Go to <strong>Stripe Dashboard</strong> → Developers → API Keys</li>
+                  <li>Click <strong>Create restricted key</strong></li>
+                  <li>Grant <em>read-only</em> access to <strong>Charges</strong> and <strong>Customers</strong></li>
+                  <li>Copy the key (starts with <code className="bg-amber-100 dark:bg-amber-800 rounded px-1">rk_live_</code> or <code className="bg-amber-100 dark:bg-amber-800 rounded px-1">rk_test_</code>)</li>
+                </ol>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="stripe-restricted-key" className="text-xs font-medium">Restricted API Key</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="stripe-restricted-key"
+                    type="password"
+                    placeholder="rk_live_..."
+                    value={stripeKey}
+                    onChange={(e) => setStripeKey(e.target.value)}
+                    className="h-9 text-xs flex-1 font-mono"
+                    data-testid="input-stripe-restricted-key"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => connectKeyMutation.mutate()}
+                    disabled={!stripeKey || connectKeyMutation.isPending}
+                    data-testid="button-connect-stripe-key"
+                    className="gap-1.5 bg-[#635bff] hover:bg-[#5549e8] text-white shrink-0"
+                  >
+                    {connectKeyMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    Connect
+                  </Button>
+                </div>
+              </div>
+              <button
+                className="text-xs text-muted-foreground hover:text-foreground underline"
+                onClick={() => setShowFallback(false)}
+                data-testid="button-stripe-back-to-oauth"
+              >
+                ← Try OAuth instead
+              </button>
+            </div>
           ) : (
             <div className="space-y-3">
               <p className="text-xs text-muted-foreground">
@@ -612,16 +680,18 @@ function StripeIntegration({ userId }: { userId?: number }) {
                 className="gap-1.5 bg-[#635bff] hover:bg-[#5549e8] text-white"
               >
                 {connectMutation.isPending ? (
-                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Redirecting...</>
+                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Connecting...</>
                 ) : (
                   <><ExternalLink className="w-3.5 h-3.5" /> Connect with Stripe</>
                 )}
               </Button>
-              {!stripeStatus?.connectAvailable && (
-                <p className="text-xs text-amber-600 dark:text-amber-400">
-                  Stripe Connect OAuth is not configured on this server. Contact support.
-                </p>
-              )}
+              <button
+                className="text-xs text-muted-foreground hover:text-foreground underline block"
+                onClick={() => setShowFallback(true)}
+                data-testid="button-stripe-use-key-instead"
+              >
+                Use a restricted API key instead
+              </button>
             </div>
           )}
         </div>
@@ -923,6 +993,169 @@ function GenericWebhookIntegration({ userId, webhookSecret }: { userId?: number;
   );
 }
 
+// ----- Whop Integration -----
+function WhopIntegration({ userId }: { userId?: number }) {
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+
+  const { data: whopStatus, isLoading: statusLoading, refetch: refetchStatus } = useQuery<{
+    connected: boolean;
+    webhookUrl: string;
+    connectedAt?: string;
+  }>({
+    queryKey: ["/api/settings/whop-status"],
+  });
+
+  const webhookUrl = whopStatus?.webhookUrl || (userId ? `https://api.siteamoeba.com/api/webhooks/whop/${userId}` : "");
+  const isConnected = whopStatus?.connected ?? false;
+
+  const connectMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/settings/connect-whop", { apiKey });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to connect");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Whop connected!", description: "Your Whop API key has been saved and verified." });
+      setApiKey("");
+      refetchStatus();
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/whop-status"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Connection failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const disconnectMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/settings/disconnect-whop", {});
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to disconnect");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Whop disconnected" });
+      refetchStatus();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="rounded-lg border border-border overflow-hidden" data-testid="card-integration-whop">
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors text-left"
+        onClick={() => setExpanded((v) => !v)}
+        data-testid="button-expand-whop"
+      >
+        <div className="w-8 h-8 rounded-full bg-purple-500/10 flex items-center justify-center shrink-0">
+          <span className="text-xs font-bold text-purple-600 dark:text-purple-400">W</span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium">Whop</p>
+          <p className="text-xs text-muted-foreground">Track payments via webhook</p>
+        </div>
+        {statusLoading ? (
+          <Skeleton className="h-5 w-20" />
+        ) : isConnected ? (
+          <Badge className="text-xs gap-1 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400 hover:bg-emerald-100" data-testid="badge-whop-connected">
+            <CheckCircle2 className="w-3 h-3" />Connected
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="text-xs text-muted-foreground" data-testid="badge-whop-disconnected">Not connected</Badge>
+        )}
+        {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 pt-3 border-t border-border space-y-4">
+          {statusLoading ? (
+            <Skeleton className="h-10 w-full" />
+          ) : isConnected ? (
+            <div className="space-y-3">
+              <div className="text-xs text-muted-foreground space-y-1">
+                {whopStatus?.connectedAt && (
+                  <p>Connected {new Date(whopStatus.connectedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
+                )}
+              </div>
+              {webhookUrl && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Your webhook URL</p>
+                  <UrlRow url={webhookUrl} testId="whop-webhook-url" />
+                </div>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => disconnectMutation.mutate()}
+                disabled={disconnectMutation.isPending}
+                data-testid="button-disconnect-whop"
+                className="text-destructive hover:text-destructive"
+              >
+                {disconnectMutation.isPending ? "Disconnecting..." : "Disconnect Whop"}
+              </Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="whop-api-key" className="text-xs font-medium">Company API Key</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="whop-api-key"
+                    type="password"
+                    placeholder="whop_..."
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    className="h-9 text-xs flex-1 font-mono"
+                    data-testid="input-whop-api-key"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => connectMutation.mutate()}
+                    disabled={!apiKey || connectMutation.isPending}
+                    data-testid="button-connect-whop"
+                    className="gap-1.5 bg-purple-600 hover:bg-purple-700 text-white shrink-0"
+                  >
+                    {connectMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                    Connect
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Get your key from <strong className="text-foreground">Whop Dashboard</strong> → Developer → Company API Keys
+                </p>
+              </div>
+
+              {webhookUrl && (
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Your webhook URL</p>
+                  <UrlRow url={webhookUrl} testId="whop-webhook-url-disconnected" />
+                </div>
+              )}
+
+              <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+                <p className="font-medium text-foreground">Webhook setup in Whop</p>
+                <ol className="list-decimal list-inside space-y-1">
+                  <li>Go to <strong className="text-foreground">Whop Dashboard</strong> → Developer → Webhooks</li>
+                  <li>Click <strong className="text-foreground">Create webhook</strong></li>
+                  <li>Paste the webhook URL above</li>
+                  <li>Select events: <em>payment.succeeded</em>, <em>payment.failed</em></li>
+                </ol>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function IntegrationsCard({ userId, webhookSecret }: { userId?: number; webhookSecret?: string | null }) {
   return (
     <Card>
@@ -937,6 +1170,7 @@ function IntegrationsCard({ userId, webhookSecret }: { userId?: number; webhookS
       </CardHeader>
       <CardContent className="space-y-2">
         <StripeIntegration userId={userId} />
+        <WhopIntegration userId={userId} />
         <ShopifyIntegration userId={userId} />
         <GoHighLevelIntegration userId={userId} webhookSecret={webhookSecret} />
         <GenericWebhookIntegration userId={userId} webhookSecret={webhookSecret} />

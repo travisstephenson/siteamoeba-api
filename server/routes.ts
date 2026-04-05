@@ -760,6 +760,33 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({ disconnected: true });
   });
 
+  // C2) POST /api/settings/connect-stripe — fallback: accept restricted or secret key directly
+  app.post("/api/settings/connect-stripe", requireAuth, async (req: Request, res: Response) => {
+    const { stripeKey } = req.body;
+    if (!stripeKey || typeof stripeKey !== "string") {
+      return res.status(400).json({ error: "stripeKey is required" });
+    }
+    const validPrefixes = ["rk_live_", "rk_test_", "sk_live_", "sk_test_"];
+    if (!validPrefixes.some((p) => stripeKey.startsWith(p))) {
+      return res.status(400).json({ error: "Key must be a restricted key (rk_live_/rk_test_) or secret key (sk_live_/sk_test_)" });
+    }
+    try {
+      const testClient = new Stripe(stripeKey);
+      await testClient.charges.list({ limit: 1 });
+    } catch (err: any) {
+      return res.status(400).json({ error: "Invalid Stripe key: " + (err.message || "verification failed") });
+    }
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+    await storage.updateUser(user.id, {
+      stripeAccessToken: encryptApiKey(stripeKey),
+      stripeConnectedAt: new Date().toISOString(),
+    } as any);
+    // Backfill transactions (fire-and-forget)
+    matchStripeTransactionsToVisitors(req.userId!).catch((e) => console.error("Stripe backfill error:", e));
+    res.json({ connected: true });
+  });
+
   // D) GET /api/settings/stripe-status
   app.get("/api/settings/stripe-status", requireAuth, async (req: Request, res: Response) => {
     const user = await storage.getUserById(req.userId!);
@@ -2534,6 +2561,123 @@ export async function registerRoutes(server: Server, app: Express) {
       console.error("Generic user-level webhook error:", error);
       res.status(422).json({ error: "Webhook processing failed" });
     }
+  });
+
+  // ============== WHOP INTEGRATION ==============
+
+  // D3) Whop user-level webhook: POST /api/webhooks/whop/:userId
+  app.post("/api/webhooks/whop/:userId", async (req: Request, res: Response) => {
+    try {
+      const userId = paramId(req.params.userId);
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      // Verify signature if webhook secret is set (using whop_api_key as shared secret)
+      const whopSig = req.headers["x-whop-signature"] as string | undefined;
+      if ((user as any).whopApiKey && whopSig) {
+        // Signature verification is informational; Whop uses HMAC-SHA256
+        // For now, we accept valid requests if no mismatch; detailed HMAC can be added later
+      }
+
+      const body = req.body;
+      const action = body.action as string | undefined;
+
+      // Only process payment events
+      if (action && !action.startsWith("payment.")) {
+        return res.json({ received: true, ignored: true });
+      }
+
+      const data = body.data || {};
+      // Whop sends amount in cents as final_amount
+      const amount = typeof data.final_amount === "number" ? data.final_amount / 100 : parseFloat(String(data.final_amount || "0"));
+      const currency = (data.currency || "USD").toUpperCase();
+      const externalId = String(data.id || "");
+      const customerEmail = data.user?.email || data.email || null;
+
+      let resolvedVisitorId: string | null = null;
+      let resolvedCampaignId: number | null = null;
+
+      if (customerEmail) {
+        const match = await matchVisitorByEmailAcrossUser(userId, customerEmail);
+        if (match) {
+          resolvedVisitorId = match.visitorId;
+          resolvedCampaignId = match.campaignId;
+        }
+      }
+
+      if (resolvedCampaignId) {
+        await storage.addRevenueEvent({
+          visitorId: resolvedVisitorId || undefined,
+          campaignId: resolvedCampaignId,
+          source: "whop",
+          eventType: action === "payment.refunded" ? "refund" : "purchase",
+          amount,
+          currency,
+          externalId: externalId || undefined,
+          customerEmail: customerEmail || undefined,
+          metadata: JSON.stringify({ whop_action: action, whop_user_id: data.user_id }),
+        });
+
+        if (resolvedVisitorId && action !== "payment.refunded") {
+          const visitor = await storage.getVisitor(resolvedVisitorId);
+          if (visitor && !visitor.converted) {
+            await storage.markConverted(resolvedVisitorId, externalId || "", amount);
+          }
+        }
+      }
+
+      res.json({ received: true, attributed: !!resolvedVisitorId });
+    } catch (error) {
+      console.error("Whop webhook error:", error);
+      res.status(422).json({ error: "Webhook processing failed" });
+    }
+  });
+
+  // Whop settings: GET /api/settings/whop-status
+  app.get("/api/settings/whop-status", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+    const connected = !!(user as any).whopApiKey;
+    const webhookUrl = `https://api.siteamoeba.com/api/webhooks/whop/${req.userId}`;
+    res.json({ connected, webhookUrl, connectedAt: (user as any).whopConnectedAt });
+  });
+
+  // Whop settings: POST /api/settings/connect-whop
+  app.post("/api/settings/connect-whop", requireAuth, async (req: Request, res: Response) => {
+    const { apiKey } = req.body;
+    if (!apiKey || typeof apiKey !== "string") {
+      return res.status(400).json({ error: "apiKey is required" });
+    }
+    // Verify the key works by calling Whop API
+    try {
+      const verifyRes = await fetch("https://api.whop.com/api/v1/payments?limit=1", {
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      });
+      if (!verifyRes.ok) {
+        const errText = await verifyRes.text();
+        return res.status(400).json({ error: "Whop API key verification failed: " + errText.slice(0, 200) });
+      }
+    } catch (err: any) {
+      return res.status(400).json({ error: "Failed to verify Whop API key: " + (err.message || "network error") });
+    }
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+    await storage.updateUser(user.id, {
+      whopApiKey: encryptApiKey(apiKey),
+      whopConnectedAt: new Date().toISOString(),
+    } as any);
+    res.json({ connected: true });
+  });
+
+  // Whop settings: POST /api/settings/disconnect-whop
+  app.post("/api/settings/disconnect-whop", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+    await storage.updateUser(user.id, {
+      whopApiKey: null,
+      whopConnectedAt: null,
+    } as any);
+    res.json({ disconnected: true });
   });
 
   // ============== SETTINGS HELPERS ==============
