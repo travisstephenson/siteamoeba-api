@@ -103,7 +103,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     }
 
     // Split variant text into words
-    var words = text.split(/\s+/).filter(Boolean);
+    var words = text.split(/\\s+/).filter(Boolean);
     if (words.length === 0) return;
 
     // Distribute words across elements proportionally
