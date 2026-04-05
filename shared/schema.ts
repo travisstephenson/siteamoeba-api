@@ -38,6 +38,11 @@ export const users = pgTable("users", {
   stripeAccountId: text("stripe_account_id"),
   stripeAccessToken: text("stripe_access_token"),
   stripeConnectedAt: text("stripe_connected_at"),
+  // User-level integrations
+  webhookSecret: text("webhook_secret"),
+  shopifyStoreUrl: text("shopify_store_url"),
+  shopifyConnectedAt: text("shopify_connected_at"),
+  ghlConnectedAt: text("ghl_connected_at"),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({

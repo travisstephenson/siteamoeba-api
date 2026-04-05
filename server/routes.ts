@@ -2326,6 +2326,242 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // ============== USER-LEVEL WEBHOOK ROUTES ==============
+
+  // Helper: find a visitor across ALL campaigns belonging to a user, matched by email
+  async function matchVisitorByEmailAcrossUser(userId: number, email: string): Promise<{ visitorId: string; campaignId: number } | null> {
+    try {
+      const result = await pool.query(
+        `SELECT v.id, v.campaign_id FROM visitors v
+         JOIN campaigns c ON c.id = v.campaign_id
+         WHERE c.user_id = $1
+           AND v.converted = false
+         ORDER BY v.first_seen DESC
+         LIMIT 1`,
+        [userId]
+      );
+      if (result.rows.length > 0) {
+        return { visitorId: result.rows[0].id as string, campaignId: result.rows[0].campaign_id as number };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  // D1) Shopify user-level: POST /api/webhooks/shopify/user/:userId
+  app.post("/api/webhooks/shopify/user/:userId", async (req: Request, res: Response) => {
+    try {
+      const userId = paramId(req.params.userId);
+      const order = req.body;
+      const topic = req.headers["x-shopify-topic"] as string | undefined;
+      if (topic && topic !== "orders/create" && topic !== "orders/paid") {
+        return res.json({ received: true, ignored: true });
+      }
+
+      const amount = parseFloat(order.total_price || "0");
+      const customerEmail = order.email || order.customer?.email || null;
+      const externalId = String(order.id || "");
+      const currency = (order.currency || "USD").toUpperCase();
+
+      let resolvedVisitorId: string | null = null;
+      let resolvedCampaignId: number | null = null;
+
+      if (customerEmail) {
+        const match = await matchVisitorByEmailAcrossUser(userId, customerEmail);
+        if (match) {
+          resolvedVisitorId = match.visitorId;
+          resolvedCampaignId = match.campaignId;
+        }
+      }
+
+      if (resolvedCampaignId) {
+        await storage.addRevenueEvent({
+          visitorId: resolvedVisitorId || undefined,
+          campaignId: resolvedCampaignId,
+          source: "shopify",
+          eventType: "purchase",
+          amount,
+          currency,
+          externalId,
+          customerEmail: customerEmail || undefined,
+          metadata: JSON.stringify({ shopify_order_name: order.name, tags: order.tags }),
+        });
+
+        if (resolvedVisitorId) {
+          const visitor = await storage.getVisitor(resolvedVisitorId);
+          if (visitor && !visitor.converted) {
+            await storage.markConverted(resolvedVisitorId, externalId, amount);
+          }
+        }
+      }
+
+      res.json({ received: true, attributed: !!resolvedVisitorId });
+    } catch (error) {
+      console.error("Shopify user-level webhook error:", error);
+      res.status(422).json({ error: "Webhook processing failed" });
+    }
+  });
+
+  // D2) GoHighLevel user-level: POST /api/webhooks/ghl/:userId
+  app.post("/api/webhooks/ghl/:userId", async (req: Request, res: Response) => {
+    try {
+      const userId = paramId(req.params.userId);
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      // Verify webhook secret if set
+      if ((user as any).webhookSecret) {
+        const providedSecret = req.headers["x-webhook-secret"] as string | undefined;
+        if (providedSecret !== (user as any).webhookSecret) {
+          return res.status(401).json({ error: "Invalid webhook secret" });
+        }
+      }
+
+      const body = req.body;
+      // GHL payload: { event, contact: { email }, opportunity: { monetary_value } }
+      const customerEmail = body.contact?.email || body.email || null;
+      const amount = parseFloat(String(body.opportunity?.monetary_value || body.amount || "0"));
+      const eventType = body.event || body.event_type || "purchase";
+      const externalId = body.id || body.external_id || null;
+
+      let resolvedVisitorId: string | null = null;
+      let resolvedCampaignId: number | null = null;
+
+      if (customerEmail) {
+        const match = await matchVisitorByEmailAcrossUser(userId, customerEmail);
+        if (match) {
+          resolvedVisitorId = match.visitorId;
+          resolvedCampaignId = match.campaignId;
+        }
+      }
+
+      if (resolvedCampaignId) {
+        await storage.addRevenueEvent({
+          visitorId: resolvedVisitorId || undefined,
+          campaignId: resolvedCampaignId,
+          source: "gohighlevel",
+          eventType: "purchase",
+          amount,
+          currency: "USD",
+          externalId: externalId || undefined,
+          customerEmail: customerEmail || undefined,
+          metadata: JSON.stringify({ ghl_event: eventType, raw: body }),
+        });
+
+        if (resolvedVisitorId && !eventType.includes("refund")) {
+          const visitor = await storage.getVisitor(resolvedVisitorId);
+          if (visitor && !visitor.converted) {
+            await storage.markConverted(resolvedVisitorId, externalId || "", amount);
+          }
+        }
+      }
+
+      res.json({ received: true, attributed: !!resolvedVisitorId });
+    } catch (error) {
+      console.error("GHL webhook error:", error);
+      res.status(422).json({ error: "Webhook processing failed" });
+    }
+  });
+
+  // D3) Generic user-level: POST /api/webhooks/generic/user/:userId
+  app.post("/api/webhooks/generic/user/:userId", async (req: Request, res: Response) => {
+    try {
+      const userId = paramId(req.params.userId);
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      // Verify webhook secret if set
+      if ((user as any).webhookSecret) {
+        const providedSecret = req.headers["x-webhook-secret"] as string | undefined;
+        if (providedSecret !== (user as any).webhookSecret) {
+          return res.status(401).json({ error: "Invalid webhook secret" });
+        }
+      }
+
+      const body = req.body as {
+        email?: string;
+        amount?: number | string;
+        event_type?: string;
+        currency?: string;
+        external_id?: string;
+        source?: string;
+        visitor_id?: string;
+        metadata?: Record<string, unknown>;
+      };
+
+      const customerEmail = body.email || null;
+      const amount = parseFloat(String(body.amount || "0"));
+      const eventType = body.event_type || "purchase";
+      const currency = (body.currency || "USD").toUpperCase();
+      const externalId = body.external_id || null;
+      const source = body.source || "webhook";
+
+      let resolvedVisitorId = body.visitor_id || null;
+      let resolvedCampaignId: number | null = null;
+
+      if (!resolvedVisitorId && customerEmail) {
+        const match = await matchVisitorByEmailAcrossUser(userId, customerEmail);
+        if (match) {
+          resolvedVisitorId = match.visitorId;
+          resolvedCampaignId = match.campaignId;
+        }
+      }
+
+      if (resolvedCampaignId) {
+        await storage.addRevenueEvent({
+          visitorId: resolvedVisitorId || undefined,
+          campaignId: resolvedCampaignId,
+          source,
+          eventType,
+          amount,
+          currency,
+          externalId: externalId || undefined,
+          customerEmail: customerEmail || undefined,
+          metadata: body.metadata ? JSON.stringify(body.metadata) : undefined,
+        });
+
+        if (resolvedVisitorId && eventType !== "refund") {
+          const visitor = await storage.getVisitor(resolvedVisitorId);
+          if (visitor && !visitor.converted) {
+            await storage.markConverted(resolvedVisitorId, externalId || "", amount);
+          }
+        }
+      }
+
+      res.json({ received: true, attributed: !!resolvedVisitorId });
+    } catch (error) {
+      console.error("Generic user-level webhook error:", error);
+      res.status(422).json({ error: "Webhook processing failed" });
+    }
+  });
+
+  // ============== SETTINGS HELPERS ==============
+
+  // Generate/save a user-level webhook secret
+  app.post("/api/settings/generate-webhook-secret", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    // Return existing secret if already set
+    if ((user as any).webhookSecret) {
+      return res.json({ secret: (user as any).webhookSecret });
+    }
+    const { randomBytes } = require("crypto");
+    const secret = "whsec_" + randomBytes(24).toString("hex");
+    await storage.updateUser(user.id, { webhookSecret: secret } as any);
+    res.json({ secret });
+  });
+
+  // Save Shopify store URL for a user
+  app.post("/api/settings/shopify-store", requireAuth, async (req: Request, res: Response) => {
+    const { storeUrl } = req.body;
+    if (!storeUrl || typeof storeUrl !== "string") {
+      return res.status(400).json({ error: "storeUrl is required" });
+    }
+    await storage.updateUser(req.userId!, { shopifyStoreUrl: storeUrl, shopifyConnectedAt: new Date().toISOString() } as any);
+    res.json({ ok: true });
+  });
+
   // Generate/retrieve webhook secret for a campaign
   app.post("/api/campaigns/:id/webhook-secret", requireAuth, async (req: Request, res: Response) => {
     const campaignId = paramId(req.params.id);

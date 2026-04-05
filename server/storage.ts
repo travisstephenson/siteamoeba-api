@@ -598,6 +598,13 @@ class StorageImpl implements IStorage {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_access_token TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS stripe_connected_at TEXT;
     `);
+    // User-level integration columns
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS webhook_secret TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS shopify_store_url TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS shopify_connected_at TEXT;
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS ghl_connected_at TEXT;
+    `);
   }
 
   // ===== Users =====

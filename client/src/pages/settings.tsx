@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { User as UserIcon, Mail, Calendar, CreditCard, Trash2, Sparkles, Eye, EyeOff, Check, FlaskConical, Coins, MessageSquarePlus, Plug, CheckCircle2, AlertTriangle } from "lucide-react";
+import { User as UserIcon, Mail, Calendar, CreditCard, Trash2, Sparkles, Eye, EyeOff, Check, FlaskConical, Coins, MessageSquarePlus, Plug, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp, Copy, Zap, Loader2, ShoppingBag, Building2, Webhook, ExternalLink } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Feedback } from "@shared/schema";
 
@@ -437,38 +437,86 @@ function YourFeedbackSection({ isAuthenticated }: { isAuthenticated: boolean }) 
   );
 }
 
-function StripeConnectCard() {
+// ===== Integrations =====
+
+const PROD_BASE = "https://api.siteamoeba.com";
+
+function CopyButton({ text, testId }: { text: string; testId?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      size="icon"
+      variant="ghost"
+      className="h-7 w-7 shrink-0"
+      onClick={() => {
+        navigator.clipboard.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        });
+      }}
+      data-testid={testId}
+    >
+      {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+    </Button>
+  );
+}
+
+function UrlRow({ url, testId }: { url: string; testId?: string }) {
+  return (
+    <div className="flex items-center gap-2 mt-1">
+      <code
+        className="flex-1 bg-muted rounded-md px-3 py-2 text-xs font-mono text-foreground truncate"
+        data-testid={testId}
+      >
+        {url}
+      </code>
+      <CopyButton text={url} testId={testId ? `button-copy-${testId}` : undefined} />
+    </div>
+  );
+}
+
+// ----- Stripe Integration -----
+function StripeIntegration({ userId }: { userId?: number }) {
   const { toast } = useToast();
-  const [stripeKey, setStripeKey] = useState("");
-  const [showKey, setShowKey] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const { data: stripeStatus, isLoading: statusLoading, refetch: refetchStatus } = useQuery<{
     connected: boolean;
     accountId?: string;
     recentCharges?: number;
     connectedAt?: string;
+    connectAvailable?: boolean;
   }>({
     queryKey: ["/api/settings/stripe-status"],
   });
 
+  // Detect stripe_connected=true from OAuth redirect
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const stripeConnected = params.get("stripe_connected");
+    const stripeError = params.get("stripe_error");
+    if (stripeConnected === "true") {
+      toast({ title: "Stripe connected!", description: "Your Stripe account has been linked successfully." });
+      refetchStatus();
+      // Clean up URL
+      window.history.replaceState({}, "", window.location.pathname + window.location.hash.replace(/[?&]stripe_connected=true/, ""));
+    } else if (stripeError) {
+      toast({ title: "Stripe connection failed", description: decodeURIComponent(stripeError), variant: "destructive" });
+      window.history.replaceState({}, "", window.location.pathname + window.location.hash.replace(/[?&]stripe_error=[^&]*/, ""));
+    }
+  }, []);
+
   const connectMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/settings/connect-stripe", {
-        stripeSecretKey: stripeKey,
-      });
+      const res = await apiRequest("GET", "/api/settings/stripe-connect-url");
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.error || "Failed to connect Stripe");
+        throw new Error(err.error || "Failed to get OAuth URL");
       }
-      return res.json();
+      return res.json() as Promise<{ url: string }>;
     },
     onSuccess: (data) => {
-      setStripeKey("");
-      toast({
-        title: "Stripe connected",
-        description: data.accountName ? `Connected to ${data.accountName}` : "Stripe account connected successfully",
-      });
-      refetchStatus();
+      window.location.href = data.url;
     },
     onError: (err: Error) => {
       toast({ title: "Connection failed", description: err.message, variant: "destructive" });
@@ -496,37 +544,40 @@ function StripeConnectCard() {
   const isConnected = stripeStatus?.connected ?? false;
 
   return (
-    <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <Plug className="w-4 h-4" />
-          Integrations
-        </CardTitle>
-        <CardDescription className="text-xs">
-          Connect external services to automatically sync transaction data across all your campaigns.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* Stripe Connect */}
-        <div className="rounded-md border border-border p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <span className="inline-block w-2.5 h-2.5 rounded-full bg-[#635bff]" />
-            <span className="text-sm font-medium">Stripe</span>
-            {isConnected && (
-              <Badge variant="secondary" className="text-xs gap-1 text-emerald-700 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-900/40">
-                <CheckCircle2 className="w-3 h-3" />
-                Connected
-              </Badge>
-            )}
-          </div>
+    <div className="rounded-lg border border-border overflow-hidden" data-testid="card-integration-stripe">
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors text-left"
+        onClick={() => setExpanded((v) => !v)}
+        data-testid="button-expand-stripe"
+      >
+        <div className="w-8 h-8 rounded-md bg-[#635bff]/10 flex items-center justify-center shrink-0">
+          <CreditCard className="w-4 h-4 text-[#635bff]" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium">Stripe</p>
+          <p className="text-xs text-muted-foreground">Sync payment data via OAuth</p>
+        </div>
+        {statusLoading ? (
+          <Skeleton className="h-5 w-20" />
+        ) : isConnected ? (
+          <Badge className="text-xs gap-1 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400 hover:bg-emerald-100" data-testid="badge-stripe-connected">
+            <CheckCircle2 className="w-3 h-3" />Connected
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="text-xs text-muted-foreground" data-testid="badge-stripe-disconnected">Not connected</Badge>
+        )}
+        {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
+      </button>
 
+      {expanded && (
+        <div className="px-4 pb-4 pt-1 border-t border-border space-y-3">
           {statusLoading ? (
             <Skeleton className="h-10 w-full" />
           ) : isConnected ? (
             <div className="space-y-3">
               <div className="text-xs text-muted-foreground space-y-1">
                 {stripeStatus?.accountId && (
-                  <p data-testid="text-stripe-account-id">Account: <span className="font-mono">{stripeStatus.accountId}</span></p>
+                  <p data-testid="text-stripe-account-id">Account ID: <span className="font-mono">{stripeStatus.accountId}</span></p>
                 )}
                 {stripeStatus?.recentCharges !== undefined && (
                   <p data-testid="text-stripe-recent-charges">
@@ -545,53 +596,350 @@ function StripeConnectCard() {
                 data-testid="button-disconnect-stripe"
                 className="text-destructive hover:text-destructive"
               >
-                {disconnectMutation.isPending ? "Disconnecting..." : "Disconnect"}
+                {disconnectMutation.isPending ? "Disconnecting..." : "Disconnect Stripe"}
               </Button>
             </div>
           ) : (
             <div className="space-y-3">
-              <div className="space-y-2">
-                <Label htmlFor="stripe-secret-key" className="text-xs font-medium">Stripe Secret Key</Label>
-                <div className="relative">
-                  <Input
-                    id="stripe-secret-key"
-                    type={showKey ? "text" : "password"}
-                    placeholder="sk_live_..."
-                    value={stripeKey}
-                    onChange={(e) => setStripeKey(e.target.value)}
-                    className="pr-10 h-9 font-mono text-xs"
-                    data-testid="input-stripe-secret-key"
-                    autoComplete="off"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowKey((v) => !v)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    data-testid="button-toggle-stripe-key-visibility"
-                    aria-label={showKey ? "Hide key" : "Show key"}
-                  >
-                    {showKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-                <div className="flex items-start gap-1.5">
-                  <AlertTriangle className="w-3 h-3 text-amber-500 mt-0.5 shrink-0" />
-                  <p className="text-xs text-muted-foreground">
-                    Your key is encrypted and only used to read transaction data.
-                  </p>
-                </div>
-              </div>
+              <p className="text-xs text-muted-foreground">
+                Connect your Stripe account via OAuth to automatically sync charges and attribute revenue to your A/B test variants.
+              </p>
               <Button
                 size="sm"
                 onClick={() => connectMutation.mutate()}
-                disabled={!stripeKey || connectMutation.isPending}
+                disabled={connectMutation.isPending}
                 data-testid="button-connect-stripe"
-                className="gap-1.5"
+                className="gap-1.5 bg-[#635bff] hover:bg-[#5549e8] text-white"
               >
-                {connectMutation.isPending ? "Connecting..." : "Connect Stripe"}
+                {connectMutation.isPending ? (
+                  <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Redirecting...</>
+                ) : (
+                  <><ExternalLink className="w-3.5 h-3.5" /> Connect with Stripe</>
+                )}
               </Button>
+              {!stripeStatus?.connectAvailable && (
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  Stripe Connect OAuth is not configured on this server. Contact support.
+                </p>
+              )}
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+// ----- Shopify Integration -----
+function ShopifyIntegration({ userId }: { userId?: number }) {
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const [storeUrl, setStoreUrl] = useState("");
+  const [saved, setSaved] = useState(false);
+
+  const webhookUrl = userId ? `${PROD_BASE}/api/webhooks/shopify/user/${userId}` : "";
+  const isConnected = saved;
+
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/settings/shopify-store", { storeUrl });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to save");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      setSaved(true);
+      toast({ title: "Shopify store saved", description: "Webhook URL is ready to use." });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="rounded-lg border border-border overflow-hidden" data-testid="card-integration-shopify">
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors text-left"
+        onClick={() => setExpanded((v) => !v)}
+        data-testid="button-expand-shopify"
+      >
+        <div className="w-8 h-8 rounded-md bg-[#96bf48]/10 flex items-center justify-center shrink-0">
+          <ShoppingBag className="w-4 h-4 text-[#96bf48]" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium">Shopify</p>
+          <p className="text-xs text-muted-foreground">Track orders via webhook</p>
+        </div>
+        {isConnected ? (
+          <Badge className="text-xs gap-1 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400 hover:bg-emerald-100" data-testid="badge-shopify-connected">
+            <CheckCircle2 className="w-3 h-3" />Connected
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="text-xs text-muted-foreground" data-testid="badge-shopify-disconnected">Not connected</Badge>
+        )}
+        {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 pt-3 border-t border-border space-y-4">
+          {userId && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Your webhook URL</p>
+              <UrlRow url={webhookUrl} testId="shopify-webhook-url" />
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <Label htmlFor="shopify-store-url" className="text-xs font-medium">Store URL <span className="text-muted-foreground">(optional — for your reference)</span></Label>
+            <div className="flex gap-2">
+              <Input
+                id="shopify-store-url"
+                placeholder="mystore.myshopify.com"
+                value={storeUrl}
+                onChange={(e) => setStoreUrl(e.target.value)}
+                className="h-9 text-xs flex-1"
+                data-testid="input-shopify-store-url"
+              />
+              <Button
+                size="sm"
+                onClick={() => saveMutation.mutate()}
+                disabled={!storeUrl || saveMutation.isPending}
+                data-testid="button-save-shopify"
+                className="gap-1 bg-[#96bf48] hover:bg-[#7da33a] text-white"
+              >
+                {saveMutation.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                Save
+              </Button>
+            </div>
+          </div>
+
+          <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+            <p className="font-medium text-foreground">Setup instructions</p>
+            <ol className="list-decimal list-inside space-y-1">
+              <li>Go to <strong className="text-foreground">Shopify Admin</strong> → Settings → Notifications</li>
+              <li>Scroll to <strong className="text-foreground">Webhooks</strong> → Create webhook</li>
+              <li>Set Event: <em>Order payment</em></li>
+              <li>Paste the webhook URL above</li>
+            </ol>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ----- GoHighLevel Integration -----
+function GoHighLevelIntegration({ userId, webhookSecret }: { userId?: number; webhookSecret?: string | null }) {
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const [localSecret, setLocalSecret] = useState<string | null>(webhookSecret || null);
+  const [generatingSecret, setGeneratingSecret] = useState(false);
+
+  const webhookUrl = userId ? `${PROD_BASE}/api/webhooks/ghl/${userId}` : "";
+
+  const handleGenerateSecret = async () => {
+    setGeneratingSecret(true);
+    try {
+      const res = await apiRequest("POST", "/api/settings/generate-webhook-secret");
+      if (!res.ok) throw new Error("Failed to generate secret");
+      const data = await res.json();
+      setLocalSecret(data.secret);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Webhook secret generated" });
+    } catch {
+      toast({ title: "Failed to generate secret", variant: "destructive" });
+    } finally {
+      setGeneratingSecret(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-border overflow-hidden" data-testid="card-integration-ghl">
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors text-left"
+        onClick={() => setExpanded((v) => !v)}
+        data-testid="button-expand-ghl"
+      >
+        <div className="w-8 h-8 rounded-md bg-[#f97316]/10 flex items-center justify-center shrink-0">
+          <Building2 className="w-4 h-4 text-[#f97316]" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium">GoHighLevel</p>
+          <p className="text-xs text-muted-foreground">CRM & pipeline webhook</p>
+        </div>
+        <Badge variant="outline" className="text-xs text-muted-foreground" data-testid="badge-ghl-status">Webhook</Badge>
+        {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 pt-3 border-t border-border space-y-4">
+          {userId && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Webhook URL</p>
+              <UrlRow url={webhookUrl} testId="ghl-webhook-url" />
+            </div>
+          )}
+
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Webhook Secret <span className="text-xs">(send as <code className="bg-muted rounded px-1">x-webhook-secret</code> header)</span></p>
+            {localSecret ? (
+              <div className="flex items-center gap-2">
+                <code className="flex-1 bg-muted rounded-md px-3 py-2 text-xs font-mono text-foreground truncate" data-testid="text-ghl-webhook-secret">{localSecret}</code>
+                <CopyButton text={localSecret} testId="button-copy-ghl-secret" />
+              </div>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs h-8 gap-1"
+                onClick={handleGenerateSecret}
+                disabled={generatingSecret}
+                data-testid="button-generate-ghl-secret"
+              >
+                {generatingSecret ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                Generate Secret
+              </Button>
+            )}
+          </div>
+
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Expected payload format</p>
+            <div className="bg-muted rounded-md p-3">
+              <pre className="text-xs font-mono text-foreground whitespace-pre-wrap">{`{
+  "event": "opportunity.won",
+  "contact": { "email": "customer@example.com" },
+  "opportunity": { "monetary_value": 297.00 }
+}`}</pre>
+            </div>
+          </div>
+
+          <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
+            <p className="font-medium text-foreground">Setup in GoHighLevel</p>
+            <ol className="list-decimal list-inside space-y-1">
+              <li>Go to <strong className="text-foreground">Settings</strong> → Webhooks → Add Webhook</li>
+              <li>Set Event: <em>Contact created</em> or <em>Opportunity won</em></li>
+              <li>Paste the webhook URL above</li>
+              <li>Add header <code className="bg-muted rounded px-1">x-webhook-secret</code> with your secret</li>
+            </ol>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ----- Generic Webhook Integration -----
+function GenericWebhookIntegration({ userId, webhookSecret }: { userId?: number; webhookSecret?: string | null }) {
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const [localSecret, setLocalSecret] = useState<string | null>(webhookSecret || null);
+  const [generatingSecret, setGeneratingSecret] = useState(false);
+
+  const webhookUrl = userId ? `${PROD_BASE}/api/webhooks/generic/user/${userId}` : "";
+
+  const handleGenerateSecret = async () => {
+    setGeneratingSecret(true);
+    try {
+      const res = await apiRequest("POST", "/api/settings/generate-webhook-secret");
+      if (!res.ok) throw new Error("Failed to generate secret");
+      const data = await res.json();
+      setLocalSecret(data.secret);
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      toast({ title: "Webhook secret generated" });
+    } catch {
+      toast({ title: "Failed to generate secret", variant: "destructive" });
+    } finally {
+      setGeneratingSecret(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-border overflow-hidden" data-testid="card-integration-generic">
+      <button
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors text-left"
+        onClick={() => setExpanded((v) => !v)}
+        data-testid="button-expand-generic-webhook"
+      >
+        <div className="w-8 h-8 rounded-md bg-sky-500/10 flex items-center justify-center shrink-0">
+          <Webhook className="w-4 h-4 text-sky-500" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium">Generic Webhook</p>
+          <p className="text-xs text-muted-foreground">Any platform via JSON POST</p>
+        </div>
+        <Badge variant="outline" className="text-xs text-muted-foreground" data-testid="badge-generic-status">Webhook</Badge>
+        {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-4 pt-3 border-t border-border space-y-4">
+          {userId && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Webhook URL</p>
+              <UrlRow url={webhookUrl} testId="generic-webhook-url" />
+            </div>
+          )}
+
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">Webhook Secret <span className="text-xs">(send as <code className="bg-muted rounded px-1">x-webhook-secret</code> header)</span></p>
+            {localSecret ? (
+              <div className="flex items-center gap-2">
+                <code className="flex-1 bg-muted rounded-md px-3 py-2 text-xs font-mono text-foreground truncate" data-testid="text-generic-webhook-secret">{localSecret}</code>
+                <CopyButton text={localSecret} testId="button-copy-generic-secret" />
+              </div>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-xs h-8 gap-1"
+                onClick={handleGenerateSecret}
+                disabled={generatingSecret}
+                data-testid="button-generate-generic-secret"
+              >
+                {generatingSecret ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                Generate Secret
+              </Button>
+            )}
+          </div>
+
+          <div>
+            <p className="text-xs text-muted-foreground mb-1">JSON payload format</p>
+            <div className="bg-muted rounded-md p-3">
+              <pre className="text-xs font-mono text-foreground whitespace-pre-wrap">{`{
+  "email": "customer@example.com",
+  "amount": 97.00,
+  "event_type": "purchase",
+  "currency": "USD",
+  "external_id": "order_123"
+}`}</pre>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IntegrationsCard({ userId, webhookSecret }: { userId?: number; webhookSecret?: string | null }) {
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <Plug className="w-4 h-4" />
+          Integrations
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Connect your payment and marketing platforms to track revenue across all campaigns.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <StripeIntegration userId={userId} />
+        <ShopifyIntegration userId={userId} />
+        <GoHighLevelIntegration userId={userId} webhookSecret={webhookSecret} />
+        <GenericWebhookIntegration userId={userId} webhookSecret={webhookSecret} />
       </CardContent>
     </Card>
   );
@@ -723,8 +1071,11 @@ export default function SettingsPage() {
         {/* AI Configuration */}
         <AIConfigCard currentProvider={(user as any)?.llmProvider} />
 
-        {/* Integrations (Stripe) */}
-        <StripeConnectCard />
+        {/* Integrations */}
+        <IntegrationsCard
+          userId={user?.id}
+          webhookSecret={(user as any)?.webhookSecret}
+        />
 
         {/* Testing Settings */}
         <TestingSettingsCard
