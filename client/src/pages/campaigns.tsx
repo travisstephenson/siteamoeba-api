@@ -50,6 +50,7 @@ import {
   BarChart3,
   TrendingUp as TrendingUpIcon,
   Settings,
+  Copy,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -460,6 +461,8 @@ function StepIndicator({ current, total }: { current: number; total: number }) {
     { n: 1, label: "Enter URL" },
     { n: 2, label: "Review Sections" },
     { n: 3, label: "Name & Create" },
+    { n: 4, label: "Install Pixel" },
+    { n: 5, label: "Conversion Pixel" },
   ];
   return (
     <div className="flex items-center gap-0 mb-8">
@@ -620,6 +623,18 @@ function CampaignWizard({
   const [creating, setCreating] = useState(false);
   const [showQuickCreate, setShowQuickCreate] = useState(false);
 
+  // Pixel verification state (steps 4-5)
+  const [createdCampaignId, setCreatedCampaignId] = useState<number | null>(null);
+  const [pixelVerified, setPixelVerified] = useState(false);
+  const [pixelVerifying, setPixelVerifying] = useState(false);
+  const [pixelError, setPixelError] = useState("");
+  const [conversionUrl, setConversionUrl] = useState("");
+  const [convPixelVerified, setConvPixelVerified] = useState(false);
+  const [convPixelVerifying, setConvPixelVerifying] = useState(false);
+  const [convPixelError, setConvPixelError] = useState("");
+  const [pixelCopied, setPixelCopied] = useState(false);
+  const [convPixelCopied, setConvPixelCopied] = useState(false);
+
   const resetWizard = useCallback(() => {
     setStep(1);
     setUrl("");
@@ -630,6 +645,14 @@ function CampaignWizard({
     setSelectedSections(new Set());
     setCampaignName("");
     setCreating(false);
+    setCreatedCampaignId(null);
+    setPixelVerified(false);
+    setPixelVerifying(false);
+    setPixelError("");
+    setConversionUrl("");
+    setConvPixelVerified(false);
+    setConvPixelVerifying(false);
+    setConvPixelError("");
   }, []);
 
   const handleClose = () => {
@@ -751,12 +774,8 @@ function CampaignWizard({
       }
 
       queryClient.invalidateQueries({ queryKey: ["/api/campaigns"] });
-      toast({
-        title: "Campaign created!",
-        description: `Testing ${selected.length} section${selected.length !== 1 ? "s" : ""} on your page.`,
-      });
-      handleClose();
-      navigate(`/campaigns/${campaign.id}`);
+      setCreatedCampaignId(campaign.id);
+      setStep(4); // Advance to pixel installation step
     } catch (err: any) {
       const msg = err.message?.replace(/^\d+:\s*/, "") || "Failed to create campaign";
       toast({ title: "Error", description: msg, variant: "destructive" });
@@ -797,6 +816,8 @@ function CampaignWizard({
                   {step === 1 && "Scan your page to detect testable sections"}
                   {step === 2 && "Choose which sections to test"}
                   {step === 3 && "Name your campaign and launch"}
+                  {step === 4 && "Install the tracking pixel on your page"}
+                  {step === 5 && "Install the conversion pixel on your thank-you page"}
                 </p>
               </div>
             </div>
@@ -813,7 +834,7 @@ function CampaignWizard({
 
           {/* Body */}
           <div className="flex-1 overflow-y-auto px-6 py-6">
-            <StepIndicator current={step} total={3} />
+            <StepIndicator current={step} total={5} />
 
             {/* ---- STEP 1: Enter URL ---- */}
             {step === 1 && (
@@ -1083,6 +1104,123 @@ function CampaignWizard({
                 )}
               </div>
             )}
+
+            {/* ---- STEP 4: Install Tracking Pixel ---- */}
+            {step === 4 && createdCampaignId && (
+              <div className="space-y-5">
+                <div>
+                  <h3 className="text-sm font-semibold mb-1">Install the tracking pixel</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Add this script tag to your landing page's <code className="bg-muted px-1 py-0.5 rounded">&lt;head&gt;</code> or just before <code className="bg-muted px-1 py-0.5 rounded">&lt;/body&gt;</code>.
+                    This enables A/B testing and behavioral tracking.
+                  </p>
+                </div>
+
+                <div className="relative">
+                  <pre className="bg-muted rounded-md p-4 text-xs font-mono overflow-x-auto text-foreground">
+{`<script src="https://api.siteamoeba.com/api/widget/script/${createdCampaignId}"></script>`}
+                  </pre>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="absolute top-2 right-2"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`<script src="https://api.siteamoeba.com/api/widget/script/${createdCampaignId}"></script>`);
+                      setPixelCopied(true);
+                      setTimeout(() => setPixelCopied(false), 2000);
+                    }}
+                  >
+                    {pixelCopied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+                  </Button>
+                </div>
+
+                <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+                  <p className="text-xs font-semibold">After installing, click Verify to confirm</p>
+                  <p className="text-xs text-muted-foreground">
+                    We'll check <span className="font-medium text-foreground">{url}</span> for the tracking script.
+                  </p>
+
+                  {pixelVerified && (
+                    <div className="flex items-center gap-2 text-green-600">
+                      <Check className="w-4 h-4" />
+                      <span className="text-sm font-medium">Pixel verified on your page</span>
+                    </div>
+                  )}
+                  {pixelError && (
+                    <p className="text-xs text-red-500">{pixelError}</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ---- STEP 5: Install Conversion Pixel ---- */}
+            {step === 5 && createdCampaignId && (
+              <div className="space-y-5">
+                <div>
+                  <h3 className="text-sm font-semibold mb-1">Install the conversion pixel</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Paste this on your thank-you or order confirmation page. It fires when a visitor converts,
+                    connecting the sale back to the variant they saw.
+                  </p>
+                </div>
+
+                <div className="relative">
+                  <pre className="bg-muted rounded-md p-4 text-xs font-mono overflow-x-auto text-foreground whitespace-pre-wrap">
+{`<!-- SiteAmoeba Conversion Pixel -->
+<script>
+(function(){
+  var vid = localStorage.getItem("sa_vid");
+  if (vid) {
+    var amount = window.sa_revenue || 0;
+    var img = new Image();
+    img.src = "https://api.siteamoeba.com/api/widget/convert?vid=" + vid + "&cid=${createdCampaignId}&revenue=" + amount;
+  }
+})();
+</script>`}
+                  </pre>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    className="absolute top-2 right-2"
+                    onClick={() => {
+                      const code = `<!-- SiteAmoeba Conversion Pixel -->\n<script>\n(function(){\n  var vid = localStorage.getItem("sa_vid");\n  if (vid) {\n    var amount = window.sa_revenue || 0;\n    var img = new Image();\n    img.src = "https://api.siteamoeba.com/api/widget/convert?vid=" + vid + "&cid=${createdCampaignId}&revenue=" + amount;\n  }\n})();\n</script>`;
+                      navigator.clipboard.writeText(code);
+                      setConvPixelCopied(true);
+                      setTimeout(() => setConvPixelCopied(false), 2000);
+                    }}
+                  >
+                    {convPixelCopied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+                  </Button>
+                </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Set <code className="bg-muted px-1 py-0.5 rounded text-foreground">window.sa_revenue = 27.00</code> before this script to track the actual transaction amount.
+                </p>
+
+                <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+                  <p className="text-xs font-semibold">Enter your thank-you page URL</p>
+                  <Input
+                    value={conversionUrl}
+                    onChange={(e) => setConversionUrl(e.target.value)}
+                    placeholder="https://yoursite.com/thank-you"
+                    data-testid="input-conversion-url"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    After installing the snippet above, we'll verify it on this page.
+                  </p>
+
+                  {convPixelVerified && (
+                    <div className="flex items-center gap-2 text-green-600">
+                      <Check className="w-4 h-4" />
+                      <span className="text-sm font-medium">Conversion pixel verified</span>
+                    </div>
+                  )}
+                  {convPixelError && (
+                    <p className="text-xs text-red-500">{convPixelError}</p>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Footer */}
@@ -1169,6 +1307,88 @@ function CampaignWizard({
                       <Zap className="w-4 h-4 mr-2" />
                       Create Campaign
                     </>
+                  )}
+                </Button>
+              )}
+
+              {step === 4 && (
+                <Button
+                  onClick={async () => {
+                    if (pixelVerified) { setStep(5); return; }
+                    setPixelVerifying(true);
+                    setPixelError("");
+                    try {
+                      const res = await apiRequest("POST", `/api/campaigns/${createdCampaignId}/verify-pixel`, { type: "tracking" });
+                      const data = await res.json();
+                      if (data.verified) {
+                        setPixelVerified(true);
+                        setTimeout(() => setStep(5), 1000);
+                      } else {
+                        setPixelError(data.error || "Pixel not found on your page. Make sure you added the script and saved/published your page.");
+                      }
+                    } catch {
+                      setPixelError("Failed to check your page. Try again.");
+                    } finally {
+                      setPixelVerifying(false);
+                    }
+                  }}
+                  disabled={pixelVerifying}
+                  data-testid="button-verify-pixel"
+                >
+                  {pixelVerifying ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying…</>
+                  ) : pixelVerified ? (
+                    <><Check className="w-4 h-4 mr-2" />Verified — Continue</>
+                  ) : (
+                    <><Search className="w-4 h-4 mr-2" />Verify Pixel</>
+                  )}
+                </Button>
+              )}
+
+              {step === 5 && (
+                <Button
+                  onClick={async () => {
+                    if (convPixelVerified) {
+                      // All done — navigate to campaign
+                      toast({ title: "Setup complete!", description: "Both pixels verified. Your campaign is live." });
+                      handleClose();
+                      navigate(`/campaigns/${createdCampaignId}`);
+                      return;
+                    }
+                    if (!conversionUrl.trim()) {
+                      setConvPixelError("Please enter your thank-you page URL");
+                      return;
+                    }
+                    setConvPixelVerifying(true);
+                    setConvPixelError("");
+                    try {
+                      const res = await apiRequest("POST", `/api/campaigns/${createdCampaignId}/verify-pixel`, { type: "conversion", url: conversionUrl.trim() });
+                      const data = await res.json();
+                      if (data.verified) {
+                        setConvPixelVerified(true);
+                        setTimeout(() => {
+                          toast({ title: "Setup complete!", description: "Both pixels verified. Your campaign is live." });
+                          handleClose();
+                          navigate(`/campaigns/${createdCampaignId}`);
+                        }, 1500);
+                      } else {
+                        setConvPixelError(data.error || "Conversion pixel not found. Make sure you added the script to your thank-you page and it's published.");
+                      }
+                    } catch {
+                      setConvPixelError("Failed to check your page. Try again.");
+                    } finally {
+                      setConvPixelVerifying(false);
+                    }
+                  }}
+                  disabled={convPixelVerifying || (!conversionUrl.trim() && !convPixelVerified)}
+                  data-testid="button-verify-conversion-pixel"
+                >
+                  {convPixelVerifying ? (
+                    <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Verifying…</>
+                  ) : convPixelVerified ? (
+                    <><Check className="w-4 h-4 mr-2" />Complete Setup</>
+                  ) : (
+                    <><Search className="w-4 h-4 mr-2" />Verify Conversion Pixel</>
                   )}
                 </Button>
               )}

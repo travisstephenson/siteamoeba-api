@@ -186,6 +186,27 @@ export interface IStorage {
   getReferralStats(userId: number): Promise<ReferralStats>;
   updateReferralEarnings(referralId: number, amount: number): Promise<void>;
 
+  // Brain Knowledge
+  addBrainKnowledge(data: {
+    knowledgeType: string;
+    pageType?: string;
+    niche?: string;
+    sectionType?: string;
+    originalText?: string;
+    winningText?: string;
+    liftPercent?: number;
+    confidence?: number;
+    sampleSize?: number;
+    insight?: string;
+    tags?: string;
+    campaignId?: number;
+    userId?: number;
+  }): Promise<void>;
+  getBrainKnowledge(opts: { pageType?: string; sectionType?: string; limit?: number }): Promise<any[]>;
+
+  // Pixel verification
+  updatePixelVerification(campaignId: number, field: "pixel" | "conversion_pixel", verified: boolean, url?: string): Promise<void>;
+
   // Init
   pushSchema(): Promise<void>;
 }
@@ -392,6 +413,34 @@ class StorageImpl implements IStorage {
       CREATE INDEX IF NOT EXISTS referrals_referrer_id ON referrals (referrer_id);
       CREATE INDEX IF NOT EXISTS referrals_referred_id ON referrals (referred_id);
       CREATE UNIQUE INDEX IF NOT EXISTS referrals_referral_code ON users (referral_code) WHERE referral_code IS NOT NULL;
+
+      -- Brain Knowledge: shared intelligence from all users' test results
+      CREATE TABLE IF NOT EXISTS brain_knowledge (
+        id SERIAL PRIMARY KEY,
+        knowledge_type TEXT NOT NULL,       -- 'test_result', 'pattern', 'headline_lesson', 'behavioral'
+        page_type TEXT,                      -- e.g. 'sales', 'landing', 'webinar'
+        niche TEXT,                           -- e.g. 'digital marketing', 'fitness'
+        section_type TEXT,                    -- e.g. 'headline', 'cta', 'social_proof'
+        original_text TEXT,                   -- the control/original copy
+        winning_text TEXT,                    -- what won (if applicable)
+        lift_percent REAL,                    -- conversion lift percentage
+        confidence REAL,                      -- statistical confidence
+        sample_size INTEGER,                  -- total visitors in the test
+        insight TEXT,                          -- AI-generated lesson from this result
+        tags TEXT,                             -- JSON array of persuasion tags
+        campaign_id INTEGER,                  -- reference (not exposed to other users)
+        user_id INTEGER,                      -- who contributed (not exposed to other users)
+        created_at TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_brain_knowledge_type ON brain_knowledge(knowledge_type);
+      CREATE INDEX IF NOT EXISTS idx_brain_knowledge_page_type ON brain_knowledge(page_type, section_type);
+
+      -- Campaign pixel verification fields
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS pixel_verified BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS pixel_verified_at TEXT;
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS conversion_url TEXT;
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS conversion_pixel_verified BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS conversion_pixel_verified_at TEXT;
     `);
     // Performance indexes for high-traffic query paths
     await pool.query(`
@@ -1286,6 +1335,97 @@ class StorageImpl implements IStorage {
       `UPDATE referrals SET total_earned = total_earned + $1 WHERE id = $2`,
       [amount, referralId]
     );
+  }
+
+  // ===== Brain Knowledge =====
+  async addBrainKnowledge(data: {
+    knowledgeType: string;
+    pageType?: string;
+    niche?: string;
+    sectionType?: string;
+    originalText?: string;
+    winningText?: string;
+    liftPercent?: number;
+    confidence?: number;
+    sampleSize?: number;
+    insight?: string;
+    tags?: string;
+    campaignId?: number;
+    userId?: number;
+  }): Promise<void> {
+    await pool.query(
+      `INSERT INTO brain_knowledge
+        (knowledge_type, page_type, niche, section_type, original_text, winning_text,
+         lift_percent, confidence, sample_size, insight, tags, campaign_id, user_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+      [
+        data.knowledgeType,
+        data.pageType || null,
+        data.niche || null,
+        data.sectionType || null,
+        data.originalText || null,
+        data.winningText || null,
+        data.liftPercent ?? null,
+        data.confidence ?? null,
+        data.sampleSize ?? null,
+        data.insight || null,
+        data.tags || null,
+        data.campaignId ?? null,
+        data.userId ?? null,
+        new Date().toISOString(),
+      ]
+    );
+  }
+
+  async getBrainKnowledge(opts: { pageType?: string; sectionType?: string; limit?: number }): Promise<any[]> {
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let idx = 1;
+
+    if (opts.pageType) {
+      conditions.push(`page_type = $${idx++}`);
+      params.push(opts.pageType);
+    }
+    if (opts.sectionType) {
+      conditions.push(`section_type = $${idx++}`);
+      params.push(opts.sectionType);
+    }
+
+    const where = conditions.length > 0 ? "WHERE " + conditions.join(" AND ") : "";
+    const limit = opts.limit || 20;
+    params.push(limit);
+
+    const result = await pool.query(
+      `SELECT knowledge_type, page_type, niche, section_type,
+              original_text, winning_text, lift_percent, confidence,
+              sample_size, insight, tags, created_at
+       FROM brain_knowledge ${where}
+       ORDER BY created_at DESC
+       LIMIT $${idx}`,
+      params
+    );
+    return result.rows;
+  }
+
+  // ===== Pixel Verification =====
+  async updatePixelVerification(
+    campaignId: number,
+    field: "pixel" | "conversion_pixel",
+    verified: boolean,
+    url?: string
+  ): Promise<void> {
+    const now = new Date().toISOString();
+    if (field === "pixel") {
+      await pool.query(
+        `UPDATE campaigns SET pixel_verified = $1, pixel_verified_at = $2 WHERE id = $3`,
+        [verified, verified ? now : null, campaignId]
+      );
+    } else {
+      await pool.query(
+        `UPDATE campaigns SET conversion_pixel_verified = $1, conversion_pixel_verified_at = $2, conversion_url = COALESCE($3, conversion_url) WHERE id = $4`,
+        [verified, verified ? now : null, url || null, campaignId]
+      );
+    }
   }
 }
 

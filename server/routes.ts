@@ -1897,6 +1897,53 @@ export async function registerRoutes(server: Server, app: Express) {
     const feed = await storage.getVisitorFeed(campaignId, 20);
     res.json(feed);
   });
+
+  // POST /api/campaigns/:id/verify-pixel — verify pixel is installed on user's page
+  app.post("/api/campaigns/:id/verify-pixel", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const { type } = req.body; // "tracking" or "conversion"
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const urlToCheck = type === "conversion" ? req.body.url : campaign.url;
+    if (!urlToCheck) {
+      return res.status(400).json({ error: "No URL to check", verified: false });
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const response = await fetch(urlToCheck, {
+        headers: { "User-Agent": "SiteAmoeba-PixelVerifier/1.0" },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const html = await response.text();
+
+      if (type === "conversion") {
+        // Check for conversion pixel: sa_vid + /api/widget/convert
+        const hasConvPixel = html.includes("sa_vid") && html.includes("/api/widget/convert");
+        await storage.updatePixelVerification(campaignId, "conversion_pixel", hasConvPixel, urlToCheck);
+        return res.json({ verified: hasConvPixel, url: urlToCheck });
+      } else {
+        // Check for tracking pixel: /api/widget/script/ + campaign ID
+        const hasTrackingPixel =
+          html.includes(`/api/widget/script/${campaignId}`) ||
+          html.includes(`cid=${campaignId}`) ||
+          html.includes(`"cid":${campaignId}`) ||
+          html.includes(`siteamoeba`);
+        await storage.updatePixelVerification(campaignId, "pixel", hasTrackingPixel);
+        return res.json({ verified: hasTrackingPixel, url: campaign.url });
+      }
+    } catch (err: any) {
+      return res.json({
+        verified: false,
+        error: err.name === "AbortError" ? "Page took too long to load" : "Could not reach page: " + (err.message || ""),
+      });
+    }
+  });
 }
 
 // Helper: count total visitors across all campaigns for a user

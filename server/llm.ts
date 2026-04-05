@@ -13,6 +13,51 @@ export interface LLMMessage {
   content: string;
 }
 
+// ---- Operation tiers: what model quality each operation needs ----
+export type LLMOperation = 
+  | "scan"            // Page scanning — high volume, cheap
+  | "classify"        // Section classification — cheap
+  | "variant"         // Variant generation — needs quality
+  | "observation"     // Daily insights — mid quality
+  | "chat"            // Brain Chat — mid quality
+  | "autopilot"       // Autopilot decisions — needs quality
+  | "autopilot_learn" // Autopilot learnings — mid quality
+  | "counsel"         // Council deliberation — premium
+  | "default";        // Fallback
+
+// Model tiers: fast (cheapest), balanced, quality (most expensive)
+const PLATFORM_MODELS: Record<"fast" | "balanced" | "quality", { provider: "anthropic"; model: string }> = {
+  fast:     { provider: "anthropic", model: "claude-haiku-4-20250514" },
+  balanced: { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+  quality:  { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+};
+
+// Map each operation to a model tier
+const OPERATION_TIERS: Record<LLMOperation, "fast" | "balanced" | "quality"> = {
+  scan:            "fast",
+  classify:        "fast",
+  variant:         "balanced",
+  observation:     "fast",
+  chat:            "fast",
+  autopilot:       "balanced",
+  autopilot_learn: "fast",
+  counsel:         "quality",
+  default:         "fast",
+};
+
+// Approximate credit costs per operation (used for UI display, not billing)
+export const OPERATION_CREDIT_COSTS: Record<LLMOperation, number> = {
+  scan: 1,
+  classify: 1,
+  variant: 2,
+  observation: 1,
+  chat: 1,
+  autopilot: 2,
+  autopilot_learn: 1,
+  counsel: 5,
+  default: 1,
+};
+
 const DEFAULT_MODELS: Record<LLMConfig["provider"], string> = {
   anthropic: "claude-sonnet-4-20250514",
   openai: "gpt-4o-mini",
@@ -27,6 +72,76 @@ const OPENAI_COMPATIBLE_BASE_URLS: Partial<Record<LLMConfig["provider"], string>
   xai: "https://api.x.ai/v1",
   meta: "https://api.groq.com/openai/v1",
 };
+
+/**
+ * Resolve the LLM config for a given operation and user.
+ * Priority:
+ * 1. Paid user WITH own key → use their key + inject brain data
+ * 2. Paid user WITHOUT key → use platform key + inject brain data
+ * 3. Free BYOK user → use their key, NO brain data
+ * 
+ * Returns { config, useBrainData, creditCost }
+ */
+export function resolveLLMConfig(opts: {
+  operation: LLMOperation;
+  userPlan: string;
+  userProvider?: string | null;
+  userApiKey?: string | null;
+  userModel?: string | null;
+}): { config: LLMConfig; useBrainData: boolean; creditCost: number; source: "user" | "platform" } {
+  const { operation, userPlan, userProvider, userApiKey, userModel } = opts;
+  const isPaid = userPlan !== "free";
+  const hasUserKey = !!(userProvider && userApiKey);
+  const platformKey = process.env.PLATFORM_ANTHROPIC_KEY;
+  const tier = OPERATION_TIERS[operation] || "fast";
+  const creditCost = OPERATION_CREDIT_COSTS[operation] || 1;
+
+  // Paid user with their own key — use it (saves us money), inject brain data
+  if (isPaid && hasUserKey) {
+    return {
+      config: {
+        provider: userProvider as LLMConfig["provider"],
+        apiKey: userApiKey!,
+        model: userModel || undefined,
+      },
+      useBrainData: true,
+      creditCost,
+      source: "user",
+    };
+  }
+
+  // Paid user without key — use platform key
+  if (isPaid && platformKey) {
+    const tierConfig = PLATFORM_MODELS[tier];
+    return {
+      config: {
+        provider: tierConfig.provider,
+        apiKey: platformKey,
+        model: tierConfig.model,
+      },
+      useBrainData: true,
+      creditCost,
+      source: "platform",
+    };
+  }
+
+  // Free BYOK user — use their key, no brain data
+  if (hasUserKey) {
+    return {
+      config: {
+        provider: userProvider as LLMConfig["provider"],
+        apiKey: userApiKey!,
+        model: userModel || undefined,
+      },
+      useBrainData: false,
+      creditCost: 0, // Free tier doesn't deduct platform credits
+      source: "user",
+    };
+  }
+
+  // No key available at all — will throw when called
+  throw new Error("No AI key available. Add your API key in Settings or upgrade to a paid plan.");
+}
 
 // Classify common LLM API errors into user-friendly messages
 function classifyLLMError(err: any, provider: string): string {
