@@ -6,8 +6,8 @@ import Stripe from "stripe";
 import rateLimit from "express-rate-limit";
 import xss from "xss";
 import { storage } from "./storage";
-import { callLLM } from "./llm";
-import { runCounsel } from "./counsel";
+import { callLLM, resolveLLMConfig } from "./llm";
+import { runCounsel, runPostMortem } from "./counsel";
 import { encryptApiKey, decryptApiKey } from "./encryption";
 import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildSectionGenerationPrompt, buildClassificationPrompt, buildPageScanPrompt, buildBrainChatPrompt, buildTestLessonPrompt, type GenerationContext } from "./prompts";
 import { getBrainPageAuditKnowledge, getRelevantTestLessons } from "./brain-selector";
@@ -602,8 +602,18 @@ export async function registerRoutes(server: Server, app: Express) {
     const user = await storage.getUserById(req.userId!);
     if (!user) return res.status(401).json({ error: "User not found" });
 
-    if (!user.llmProvider || !user.llmApiKey) {
-      return res.status(400).json({ error: "Please configure your AI provider in Settings to use page scanning" });
+    // Resolve LLM config — scan works for all users (free get platform key for scanning)
+    let llmConfigResolved;
+    try {
+      llmConfigResolved = resolveLLMConfig({
+        operation: "scan",
+        userPlan: user.plan || "free",
+        userProvider: user.llmProvider,
+        userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : null,
+        userModel: user.llmModel,
+      });
+    } catch {
+      return res.status(400).json({ error: "Please configure your AI provider in Settings or upgrade to a paid plan to scan pages." });
     }
 
     const { url } = req.body;
@@ -661,17 +671,11 @@ export async function registerRoutes(server: Server, app: Express) {
       cleaned = cleaned.slice(0, 8000) + "\n<!-- [truncated] -->";
     }
 
-    const llmConfig = {
-      provider: user.llmProvider as any,
-      apiKey: decryptApiKey(user.llmApiKey as string), // decrypt before use
-      model: user.llmModel || undefined,
-    };
-
     const messages = buildPageScanPrompt(url, cleaned);
 
     let rawResponse: string;
     try {
-      rawResponse = await callLLM(llmConfig, messages);
+      rawResponse = await callLLM(llmConfigResolved.config, messages);
     } catch (err: any) {
       console.error("Page scan LLM call failed:", err);
       return res.status(502).json({ error: err.message || "AI provider error. Check your API key and credits in Settings." });
@@ -800,9 +804,18 @@ export async function registerRoutes(server: Server, app: Express) {
     const user = await storage.getUserById(req.userId!);
     if (!user) return res.status(401).json({ error: "User not found" });
 
-    // Check LLM config
-    if (!user.llmProvider || !user.llmApiKey) {
-      return res.status(400).json({ error: "Please configure your AI provider in Settings" });
+    // Resolve LLM config
+    let llmConfigResolved;
+    try {
+      llmConfigResolved = resolveLLMConfig({
+        operation: "variant",
+        userPlan: user.plan || "free",
+        userProvider: user.llmProvider,
+        userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : null,
+        userModel: user.llmModel,
+      });
+    } catch {
+      return res.status(400).json({ error: "Please configure your AI provider in Settings or upgrade to a paid plan." });
     }
 
     const { campaignId, type, sectionId } = req.body;
@@ -848,12 +861,6 @@ export async function registerRoutes(server: Server, app: Express) {
       niche: campaign.niche || undefined,
     };
 
-    const llmConfig = {
-      provider: user.llmProvider as any,
-      apiKey: decryptApiKey(user.llmApiKey as string), // decrypt before use
-      model: user.llmModel || undefined,
-    };
-
     // Get test section info for context — use sectionId if provided (precise), otherwise fall back to first match
     const testSections = await storage.getTestSectionsByCampaign(campaign.id);
     const matchingSection = sectionId
@@ -896,7 +903,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
     let rawResponse: string;
     try {
-      rawResponse = await callLLM(llmConfig, messages);
+      rawResponse = await callLLM(llmConfigResolved.config, messages);
     } catch (err: any) {
       console.error('LLM call failed:', err);
       return res.status(502).json({ error: err.message || "AI provider error. Check your API key and credits in Settings." });
@@ -1015,15 +1022,21 @@ export async function registerRoutes(server: Server, app: Express) {
           confidence: winnerStats.confidence,
         };
 
-        // Try to generate an LLM lesson summary if user has an LLM configured
+        // Try to generate an LLM lesson summary
         const user = await storage.getUserById(req.userId!);
-        if (user?.llmProvider && user?.llmApiKey) {
+        let lessonLLMConfig;
+        try {
+          lessonLLMConfig = resolveLLMConfig({
+            operation: "autopilot_learn",
+            userPlan: user?.plan || "free",
+            userProvider: user?.llmProvider,
+            userApiKey: user?.llmApiKey ? decryptApiKey(user.llmApiKey) : null,
+            userModel: user?.llmModel,
+          });
+        } catch { lessonLLMConfig = null; }
+        if (lessonLLMConfig) {
           try {
-            const llmConfig = {
-              provider: user.llmProvider as any,
-              apiKey: decryptApiKey(user.llmApiKey as string), // decrypt before use
-              model: user.llmModel || undefined,
-            };
+            const llmConfig = lessonLLMConfig.config;
             const lessonMessages = buildTestLessonPrompt({
               sectionType,
               pageType: campaign.pageType || undefined,
@@ -1068,6 +1081,25 @@ export async function registerRoutes(server: Server, app: Express) {
           });
         } catch (bkErr) {
           console.warn("Failed to store brain knowledge:", bkErr);
+        }
+
+        // === SPECIALIST POST-MORTEM: Each counsel specialist analyzes this result ===
+        // Fire-and-forget — don't block the response
+        if (lessonLLMConfig && loserVariant) {
+          runPostMortem(lessonLLMConfig.config, {
+            sectionType,
+            pageType: campaign.pageType || "sales_page",
+            niche: campaign.niche || undefined,
+            winnerText: winningVariant.text,
+            loserText: loserVariant.text,
+            winnerConversionRate: winnerCvr,
+            loserConversionRate: loserCvr,
+            liftPercent: liftPct,
+            sampleSize,
+            confidence: winnerStats.confidence,
+            campaignId: campaign.id,
+            userId: req.userId!,
+          }).catch(err => console.warn("Specialist post-mortem failed:", err));
         }
       }
     } catch (err) {
@@ -1220,8 +1252,17 @@ export async function registerRoutes(server: Server, app: Express) {
     const user = await storage.getUserById(req.userId!);
     if (!user) return res.status(401).json({ error: "User not found" });
 
-    if (!user.llmProvider || !user.llmApiKey) {
-      return res.status(400).json({ error: "Please configure your AI provider in Settings to use Brain Chat" });
+    let llmConfigResolved;
+    try {
+      llmConfigResolved = resolveLLMConfig({
+        operation: "chat",
+        userPlan: user.plan || "free",
+        userProvider: user.llmProvider,
+        userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : null,
+        userModel: user.llmModel,
+      });
+    } catch {
+      return res.status(400).json({ error: "Brain Chat requires a paid plan or your own API key configured in Settings." });
     }
 
     const { campaignId, history, useCounsel } = req.body;
@@ -1333,11 +1374,7 @@ export async function registerRoutes(server: Server, app: Express) {
       testLessons: testLessonsText || undefined,
     };
 
-    const llmConfig = {
-      provider: user.llmProvider as any,
-      apiKey: decryptApiKey(user.llmApiKey as string), // decrypt before use
-      model: user.llmModel || undefined,
-    };
+    const llmConfig = llmConfigResolved.config;
 
     // --- Counsel mode: 3 specialists + chairman synthesis ---
     if (useCounsel) {
@@ -2122,22 +2159,20 @@ export async function registerRoutes(server: Server, app: Express) {
     if (!campaign) return res.status(404).json({ error: "Campaign not found" });
     if (campaign.userId !== user.id) return res.status(403).json({ error: "Forbidden" });
 
-    // Check plan — must be paid (not free) and have LLM configured
-    const isPaidPlan = user.plan !== "free";
-    const hasByok = !!(user.llmProvider && user.llmApiKey);
-
-    if (!isPaidPlan && !hasByok) {
-      return res.status(403).json({
-        error: "Daily Observations require a paid plan. Upgrade to unlock behavioral insights.",
-        requiresUpgrade: true,
+    // Resolve LLM config — observations require paid plan or BYOK
+    let llmConfigResolved;
+    try {
+      llmConfigResolved = resolveLLMConfig({
+        operation: "observation",
+        userPlan: user.plan || "free",
+        userProvider: user.llmProvider,
+        userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : null,
+        userModel: user.llmModel,
       });
-    }
-
-    // LLM must be configured (either BYOK or on paid plan with their own key)
-    if (!user.llmProvider || !user.llmApiKey) {
-      return res.status(400).json({
-        error: "Please configure your AI provider in Settings to generate observations.",
-        requiresLLM: true,
+    } catch {
+      return res.status(403).json({
+        error: "Daily Observations require a paid plan or your own API key. Upgrade to unlock behavioral insights.",
+        requiresUpgrade: true,
       });
     }
 
@@ -2160,15 +2195,9 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(402).json({ error: "Credit limit reached. Upgrade your plan or enable overage." });
     }
 
-    const llmConfig = {
-      provider: user.llmProvider as any,
-      apiKey: decryptApiKey(user.llmApiKey as string), // decrypt before use
-      model: user.llmModel || undefined,
-    };
-
     try {
       const { observation, category, dataPoints } = await generateDailyObservation(
-        campaignId, user.id, llmConfig
+        campaignId, user.id, llmConfigResolved.config
       );
 
       // Store the observation

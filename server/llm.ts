@@ -139,6 +139,22 @@ export function resolveLLMConfig(opts: {
     };
   }
 
+  // Free user without key — allow platform key for scan/classify ONLY (the hook)
+  const FREE_ALLOWED_OPS: LLMOperation[] = ["scan", "classify"];
+  if (!isPaid && !hasUserKey && platformKey && FREE_ALLOWED_OPS.includes(operation)) {
+    const tierConfig = PLATFORM_MODELS.fast; // Always use cheapest model for free users
+    return {
+      config: {
+        provider: tierConfig.provider,
+        apiKey: platformKey,
+        model: tierConfig.model,
+      },
+      useBrainData: false,
+      creditCost: 0,
+      source: "platform",
+    };
+  }
+
   // No key available at all — will throw when called
   throw new Error("No AI key available. Add your API key in Settings or upgrade to a paid plan.");
 }

@@ -204,6 +204,24 @@ export interface IStorage {
   }): Promise<void>;
   getBrainKnowledge(opts: { pageType?: string; sectionType?: string; limit?: number }): Promise<any[]>;
 
+  // Specialist Knowledge (Counsel system)
+  addSpecialistKnowledge(data: {
+    specialistRole: string;
+    knowledgeType: string;
+    pageType?: string;
+    niche?: string;
+    sectionType?: string;
+    insight: string;
+    winnerText?: string;
+    loserText?: string;
+    liftPercent?: number;
+    sampleSize?: number;
+    confidence?: number;
+    campaignId?: number;
+    userId?: number;
+  }): Promise<void>;
+  getSpecialistKnowledge(role: string, opts?: { pageType?: string; sectionType?: string; limit?: number }): Promise<any[]>;
+
   // Pixel verification
   updatePixelVerification(campaignId: number, field: "pixel" | "conversion_pixel", verified: boolean, url?: string): Promise<void>;
 
@@ -551,6 +569,27 @@ class StorageImpl implements IStorage {
         created_at TEXT NOT NULL DEFAULT ''
       );
       CREATE INDEX IF NOT EXISTS idx_anomalies_campaign ON traffic_anomalies(campaign_id, is_read);
+
+      -- Specialist Knowledge: each counsel specialist accumulates domain-specific learnings
+      CREATE TABLE IF NOT EXISTS specialist_knowledge (
+        id SERIAL PRIMARY KEY,
+        specialist_role TEXT NOT NULL,     -- 'copywriter', 'psychologist', 'analyst'
+        knowledge_type TEXT NOT NULL,      -- 'post_mortem', 'pattern', 'insight'
+        page_type TEXT,
+        niche TEXT,
+        section_type TEXT,
+        insight TEXT NOT NULL,              -- the specialist's domain-specific learning
+        winner_text TEXT,
+        loser_text TEXT,
+        lift_percent REAL,
+        sample_size INTEGER,
+        confidence REAL,
+        campaign_id INTEGER,
+        user_id INTEGER,
+        created_at TEXT NOT NULL DEFAULT ''
+      );
+      CREATE INDEX IF NOT EXISTS idx_specialist_knowledge_role ON specialist_knowledge(specialist_role, section_type);
+      CREATE INDEX IF NOT EXISTS idx_specialist_knowledge_page ON specialist_knowledge(specialist_role, page_type);
     `);
   }
 
@@ -1496,6 +1535,89 @@ class StorageImpl implements IStorage {
               sample_size, insight, tags, created_at
        FROM brain_knowledge ${where}
        ORDER BY created_at DESC
+       LIMIT $${idx}`,
+      params
+    );
+    return result.rows;
+  }
+
+  // ===== Specialist Knowledge =====
+  async addSpecialistKnowledge(data: {
+    specialistRole: string;
+    knowledgeType: string;
+    pageType?: string;
+    niche?: string;
+    sectionType?: string;
+    insight: string;
+    winnerText?: string;
+    loserText?: string;
+    liftPercent?: number;
+    sampleSize?: number;
+    confidence?: number;
+    campaignId?: number;
+    userId?: number;
+  }): Promise<void> {
+    await pool.query(
+      `INSERT INTO specialist_knowledge
+        (specialist_role, knowledge_type, page_type, niche, section_type, insight,
+         winner_text, loser_text, lift_percent, sample_size, confidence,
+         campaign_id, user_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+      [
+        data.specialistRole,
+        data.knowledgeType,
+        data.pageType || null,
+        data.niche || null,
+        data.sectionType || null,
+        data.insight,
+        data.winnerText || null,
+        data.loserText || null,
+        data.liftPercent ?? null,
+        data.sampleSize ?? null,
+        data.confidence ?? null,
+        data.campaignId ?? null,
+        data.userId ?? null,
+        new Date().toISOString(),
+      ]
+    );
+  }
+
+  async getSpecialistKnowledge(
+    role: string,
+    opts?: { pageType?: string; sectionType?: string; limit?: number }
+  ): Promise<any[]> {
+    const conditions: string[] = ['specialist_role = $1'];
+    const params: any[] = [role];
+    let idx = 2;
+
+    // Prefer matching page_type and section_type, but don't require exact match
+    // Use a scoring approach: exact match first, then general
+    if (opts?.pageType) {
+      conditions.push(`(page_type = $${idx} OR page_type IS NULL)`);
+      params.push(opts.pageType);
+      idx++;
+    }
+    if (opts?.sectionType) {
+      conditions.push(`(section_type = $${idx} OR section_type IS NULL)`);
+      params.push(opts.sectionType);
+      idx++;
+    }
+
+    const limit = opts?.limit || 8;
+    params.push(limit);
+
+    const result = await pool.query(
+      `SELECT specialist_role, knowledge_type, page_type, niche, section_type,
+              insight, winner_text, loser_text, lift_percent, sample_size,
+              confidence, created_at
+       FROM specialist_knowledge
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY
+         CASE WHEN page_type IS NOT NULL AND section_type IS NOT NULL THEN 0
+              WHEN section_type IS NOT NULL THEN 1
+              WHEN page_type IS NOT NULL THEN 2
+              ELSE 3 END,
+         created_at DESC
        LIMIT $${idx}`,
       params
     );
