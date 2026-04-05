@@ -3302,6 +3302,14 @@ export async function registerRoutes(server: Server, app: Express) {
     const testMethod = section?.testMethod || "text_swap";
     const isControlVariant = !!variant.isControl;
 
+    // CRITICAL: Strip out the live SiteAmoeba widget script from the fetched page HTML.
+    // If left in, the widget fires during preview, fetches a random variant from the assign
+    // endpoint, and overwrites (or races with) the preview injection. The widget must NEVER
+    // run during a preview — only our controlled injection script should touch the page.
+    html = html.replace(/<script[^>]*src=["'][^"']*siteamoeba[^"']*widget\/script[^"']*["'][^>]*><\/script>/gi, '<!-- SiteAmoeba widget removed for preview -->');
+    // Also remove inline script blocks that reference the widget API (in case of inline embed)
+    html = html.replace(/<script[^>]*>[\s\S]*?api\.siteamoeba\.com\/api\/widget[\s\S]*?<\/script>/gi, '<!-- SiteAmoeba widget removed for preview -->');
+
     // Inject the variant replacement script before </body>
     const injectionScript = `
 <script>
