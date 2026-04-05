@@ -1480,6 +1480,54 @@ class StorageImpl implements IStorage {
       date: (l.created_at || '').slice(0, 10),
     }));
 
+    // Build active test snapshots — current status of each running test
+    const activeTests: any[] = [];
+    for (const campId of campaignIds) {
+      const camp = await this.getCampaign(campId);
+      if (!camp || camp.status !== 'active') continue;
+
+      const sections = await this.getTestSectionsByCampaign(campId);
+      const activeSections = sections.filter(s => s.isActive);
+      if (activeSections.length === 0) continue;
+
+      const variantStats = await this.getVariantStats(campId);
+
+      for (const section of activeSections) {
+        // Find variants for this section
+        const sectionVars = variantStats.filter(v => {
+          if (v.testSectionId === section.id) return true;
+          if (!v.testSectionId && v.isControl && v.type === section.category) return true;
+          return false;
+        });
+        const control = sectionVars.find(v => v.isControl);
+        const challengers = sectionVars.filter(v => !v.isControl);
+        if (!control || challengers.length === 0) continue;
+
+        const bestChallenger = challengers.reduce((best, c) =>
+          (c.conversionRate ?? 0) > (best.conversionRate ?? 0) ? c : best, challengers[0]);
+
+        const totalVisitorsInTest = sectionVars.reduce((sum, v) => sum + v.impressions, 0);
+        const controlCR = control.conversionRate ?? 0;
+        const challengerCR = bestChallenger.conversionRate ?? 0;
+        const lift = controlCR > 0 ? ((challengerCR - controlCR) / controlCR) * 100 : 0;
+
+        activeTests.push({
+          campaignId: campId,
+          campaignName: camp.name,
+          sectionLabel: section.label,
+          sectionCategory: section.category,
+          visitors: totalVisitorsInTest,
+          controlCR: Math.round(controlCR * 1000) / 10,
+          challengerCR: Math.round(challengerCR * 1000) / 10,
+          lift: Math.round(lift * 10) / 10,
+          confidence: Math.round(bestChallenger.confidence ?? 0),
+          status: (bestChallenger.confidence ?? 0) >= 95 ? 'winner' :
+                  (bestChallenger.confidence ?? 0) >= 80 ? 'promising' :
+                  totalVisitorsInTest < 50 ? 'collecting' : 'testing',
+        });
+      }
+    }
+
     return {
       activeCampaigns,
       archivedCampaigns,
@@ -1493,6 +1541,7 @@ class StorageImpl implements IStorage {
       projectedMonthlyGain: Math.round(projectedMonthlyGain * 100) / 100,
       recentWins,
       recentLosses,
+      activeTests,
     };
   }
   // ===== Referrals =====

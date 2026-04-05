@@ -4341,7 +4341,7 @@ export default function CampaignDetailPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "visitor-feed"] });
       queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "traffic-sources"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats/daily"] });
+
       setShowRestartDialog(false);
     },
   });
@@ -4792,8 +4792,6 @@ export default function CampaignDetailPage() {
         {/* Variant comparison chart */}
         <VariantComparisonChart variants={variants} testSections={testSections} isLoading={statsLoading} />
 
-        {/* Daily chart */}
-        <DailyChart campaignId={campaignId} />
 
         {/* Traffic Sources — referrer + UTM breakdown */}
         <TrafficSourcesPanel campaignId={campaignId} />

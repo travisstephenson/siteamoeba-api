@@ -114,6 +114,18 @@ interface DashboardStats {
   projectedMonthlyGain: number;
   recentWins: Array<{ campaignName: string; section: string; lift: number; date: string }>;
   recentLosses: Array<{ campaignName: string; section: string; lift: number; date: string }>;
+  activeTests: Array<{
+    campaignId: number;
+    campaignName: string;
+    sectionLabel: string;
+    sectionCategory: string;
+    visitors: number;
+    controlCR: number;
+    challengerCR: number;
+    lift: number;
+    confidence: number;
+    status: 'collecting' | 'testing' | 'promising' | 'winner';
+  }>;
 }
 
 interface ScannedSection {
@@ -1530,60 +1542,65 @@ function KpiCard({
 // WIN/LOSS TIMELINE
 // ============================================================
 
-function WinLossTimeline({ wins, losses }: {
-  wins: DashboardStats['recentWins'];
-  losses: DashboardStats['recentLosses'];
-}) {
-  // Merge wins and losses into one sorted list (most recent first)
-  const all = [
-    ...wins.map(w => ({ ...w, isWin: true })),
-    ...losses.map(l => ({ ...l, isWin: false })),
-  ].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
+function ActiveTestsPanel({ tests }: { tests: DashboardStats['activeTests'] }) {
+  const [, navigate] = useLocation();
 
-  if (all.length === 0) {
+  if (!tests || tests.length === 0) {
     return (
       <div
         className="flex flex-col items-center justify-center py-10 text-center text-muted-foreground"
-        data-testid="empty-win-loss-timeline"
+        data-testid="empty-active-tests"
       >
-        <BarChart3 className="w-8 h-8 mb-2 opacity-40" />
-        <p className="text-sm">Complete your first A/B test to see results here</p>
+        <FlaskConical className="w-8 h-8 mb-2 opacity-40" />
+        <p className="text-sm">No active tests running</p>
+        <p className="text-xs mt-1">Create a campaign and start testing to see live results</p>
       </div>
     );
   }
 
+  const statusConfig: Record<string, { label: string; color: string; icon: any }> = {
+    collecting: { label: 'Collecting data', color: 'text-muted-foreground', icon: Users },
+    testing: { label: 'Testing', color: 'text-blue-600 dark:text-blue-400', icon: FlaskConical },
+    promising: { label: 'Promising', color: 'text-amber-600 dark:text-amber-400', icon: TrendingUpIcon },
+    winner: { label: 'Winner found', color: 'text-emerald-600 dark:text-emerald-400', icon: Trophy },
+  };
+
   return (
-    <div className="divide-y divide-border" data-testid="win-loss-timeline">
-      {all.map((item, idx) => (
-        <div
-          key={idx}
-          className="flex items-center justify-between py-2.5 px-1 gap-3"
-          data-testid={`timeline-row-${idx}`}
-        >
-          <div className="flex items-center gap-2.5 min-w-0">
-            {item.isWin ? (
-              <Trophy className="w-3.5 h-3.5 text-emerald-500 shrink-0" />
-            ) : (
-              <TrendingDown className="w-3.5 h-3.5 text-rose-500 shrink-0" />
-            )}
-            <div className="min-w-0">
-              <span className="text-sm font-medium truncate block">{item.campaignName}</span>
-              <span className="text-xs text-muted-foreground capitalize">{item.section}</span>
+    <div className="divide-y divide-border" data-testid="active-tests-panel">
+      {tests.map((test, idx) => {
+        const cfg = statusConfig[test.status] || statusConfig.testing;
+        const StatusIcon = cfg.icon;
+        return (
+          <div
+            key={idx}
+            className="py-3 px-1 cursor-pointer hover:bg-muted/50 rounded-md transition-colors"
+            onClick={() => navigate(`/campaigns/${test.campaignId}`)}
+            data-testid={`active-test-${idx}`}
+          >
+            <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center gap-2 min-w-0">
+                <StatusIcon className={`w-3.5 h-3.5 shrink-0 ${cfg.color}`} />
+                <span className="text-sm font-medium truncate">{test.campaignName}</span>
+              </div>
+              <span className={`text-xs font-medium ${cfg.color}`}>{cfg.label}</span>
+            </div>
+            <div className="flex items-center justify-between pl-5.5">
+              <span className="text-xs text-muted-foreground capitalize">{test.sectionLabel}</span>
+              <div className="flex items-center gap-3 text-xs tabular-nums">
+                <span className="text-muted-foreground">{test.visitors} visitors</span>
+                {test.visitors >= 10 && (
+                  <span className={test.lift > 0 ? 'text-emerald-600 dark:text-emerald-400 font-semibold' : test.lift < 0 ? 'text-rose-600 dark:text-rose-400' : 'text-muted-foreground'}>
+                    {test.lift > 0 ? '+' : ''}{test.lift}% lift
+                  </span>
+                )}
+                {test.confidence > 0 && (
+                  <span className="text-muted-foreground">{test.confidence}% conf.</span>
+                )}
+              </div>
             </div>
           </div>
-          <div className="flex items-center gap-3 shrink-0">
-            <span
-              className={`text-sm font-semibold tabular-nums ${
-                item.isWin ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'
-              }`}
-              data-testid={`timeline-lift-${idx}`}
-            >
-              {item.isWin ? '+' : ''}{item.lift.toFixed(1)}%
-            </span>
-            <span className="text-xs text-muted-foreground w-20 text-right">{item.date}</span>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -1798,26 +1815,23 @@ export default function CampaignsPage() {
           )}
         </div>
 
-        {/* Win/Loss Timeline */}
-        <Card data-testid="card-win-loss-timeline">
+        {/* Active Tests */}
+        <Card data-testid="card-active-tests">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-semibold flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-muted-foreground" />
-              Recent Test Results
+              <FlaskConical className="w-4 h-4 text-muted-foreground" />
+              Active Tests
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-0">
             {statsLoading ? (
               <div className="space-y-2">
-                {Array.from({ length: 4 }).map((_, i) => (
-                  <Skeleton key={i} className="h-10 w-full" />
+                {Array.from({ length: 3 }).map((_, i) => (
+                  <Skeleton key={i} className="h-14 w-full" />
                 ))}
               </div>
             ) : (
-              <WinLossTimeline
-                wins={dashStats?.recentWins ?? []}
-                losses={dashStats?.recentLosses ?? []}
-              />
+              <ActiveTestsPanel tests={dashStats?.activeTests ?? []} />
             )}
           </CardContent>
         </Card>
