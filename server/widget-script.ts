@@ -231,13 +231,33 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       .then(function(r) { return r.json(); })
       .then(function(data) {
         // Retry with delays for dynamic pages (GHL renders content after load)
-        var retries = [0, 500, 1000, 2000, 3000, 5000];
+        // Check if the target elements exist before considering the apply "done"
+        var retries = [0, 500, 1000, 2000, 3000, 5000, 8000];
         var applied = false;
+        function checkApplied(data) {
+          // For headline/subheadline, check if the selector elements exist
+          var varData = data.headline || data.subheadline;
+          if (varData && varData.selector) {
+            var firstSel = varData.selector.split(",")[0].trim();
+            try { return !!document.querySelector(firstSel); } catch(e) { return false; }
+          }
+          // For sections, check if any section selector exists
+          if (data.sections && data.sections.length > 0) {
+            for (var i = 0; i < data.sections.length; i++) {
+              if (data.sections[i].selector) {
+                try { return !!document.querySelector(data.sections[i].selector.split(",")[0].trim()); } catch(e) {}
+              }
+            }
+          }
+          return false;
+        }
         retries.forEach(function(delay) {
           setTimeout(function() {
             if (applied) return;
-            handleAssignData(data);
-            applied = true;
+            if (checkApplied(data)) {
+              handleAssignData(data);
+              applied = true;
+            }
           }, delay);
         });
       })

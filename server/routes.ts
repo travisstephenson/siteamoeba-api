@@ -1753,9 +1753,12 @@ export async function registerRoutes(server: Server, app: Express) {
   // ============== WIDGET API (public, CORS) ==============
 
   app.use("/api/widget", (req, res, next) => {
-    res.header("Access-Control-Allow-Origin", "*");
+    // Use the request's origin for CORS (supports credentialed requests)
+    const origin = req.headers.origin || "*";
+    res.header("Access-Control-Allow-Origin", origin);
     res.header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.header("Access-Control-Allow-Headers", "Content-Type");
+    res.header("Access-Control-Allow-Credentials", "true");
     if (req.method === "OPTIONS") return res.sendStatus(200);
     next();
   });

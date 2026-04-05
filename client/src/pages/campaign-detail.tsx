@@ -276,28 +276,29 @@ function VariantComparisonChart({
     };
 
     if (testSections.length > 0) {
-      // Scanner-based campaigns — group by ALL test sections (active and inactive)
-      // Active sections first, then inactive, each sorted by priority
-      const allSections = [...testSections]
-        .sort((a, b) => {
-          // Active first, then by priority
-          if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
-          return (a.testPriority ?? 99) - (b.testPriority ?? 99);
-        });
+      // Scanner-based campaigns — only show ACTIVE test sections with real tests running
+      const activeSections = [...testSections]
+        .filter((s) => s.isActive)
+        .sort((a, b) => (a.testPriority ?? 99) - (b.testPriority ?? 99));
 
-      for (const section of allSections) {
+      for (const section of activeSections) {
         const sectionVars = variants
           .filter((v) => {
-            if (v.testSectionId) return v.testSectionId === section.id;
-            // Legacy fallback: match by type only if there's one section of this category
-            const sameCatSections = testSections.filter((s2) => s2.category === section.category);
-            if (sameCatSections.length <= 1) return v.type === section.category;
+            // Match variants directly linked to this section
+            if (v.testSectionId === section.id) return true;
+            // Also match control variants by type for this section (controls often lack testSectionId)
+            if (!v.testSectionId && v.isControl && v.type === section.category) {
+              // Only match if there's exactly one active section of this category
+              const sameCatActive = activeSections.filter((s2) => s2.category === section.category);
+              return sameCatActive.length <= 1;
+            }
             return false;
           })
           .sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
 
-        // Only show sections that have multiple variants (something to compare)
-        if (sectionVars.length > 1) {
+        // Only show sections with a real test (2+ variants: at least control + challenger)
+        const hasChallenger = sectionVars.some((v) => !v.isControl);
+        if (sectionVars.length > 1 && hasChallenger) {
           sectionVars.forEach((v) => placed.add(v.id));
           groups.push({
             key: `section-${section.id}`,
@@ -305,24 +306,6 @@ function VariantComparisonChart({
             variants: sectionVars,
           });
         }
-      }
-
-      // Also group remaining unplaced variants by type (those without testSectionId)
-      const unplaced = variants.filter((v) => !placed.has(v.id));
-      const typeMap = new Map<string, VariantStats[]>();
-      for (const v of unplaced) {
-        const list = typeMap.get(v.type) || [];
-        list.push(v);
-        typeMap.set(v.type, list);
-      }
-      for (const [type, vars] of typeMap) {
-        if (vars.length <= 1) continue; // Need 2+ to compare
-        vars.sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
-        groups.push({
-          key: `type-${type}`,
-          label: typeLabels[type] || type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-          variants: vars,
-        });
       }
     } else {
       // Legacy campaigns — group by variant type
