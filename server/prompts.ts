@@ -17,6 +17,7 @@ export interface GenerationContext {
   sectionPurpose?: string; // e.g. "Reduce purchase risk"
   existingPersuasionTags?: string[];
   type: string; // headline, subheadline, cta, guarantee, social_proof, etc.
+  brainKnowledge?: string; // injected winning patterns from the shared brain
 }
 
 // ============================================================
@@ -169,7 +170,12 @@ Return ONLY the JSON array, no other text.`;
 
   const brainKnowledge = getBrainKnowledgeForSection("headline");
   const pageContextRules = getPageContextRules(context.pageType, context.pageGoal, context.pricePoint, context.niche);
-  const systemWithBrain = COPYWRITING_SYSTEM_PROMPT + "\n\nBRAIN KNOWLEDGE BASE (use these frameworks):\n" + brainKnowledge + "\n\n" + pageContextRules;
+  let systemWithBrain = COPYWRITING_SYSTEM_PROMPT + "\n\nBRAIN KNOWLEDGE BASE (use these frameworks):\n" + brainKnowledge + "\n\n" + pageContextRules;
+
+  // Inject dynamic brain knowledge from winning test patterns (paid users only)
+  if (context.brainKnowledge) {
+    systemWithBrain += "\n\nREAL TEST RESULTS FROM THE SITEAMOEBA NETWORK (learn from these actual A/B test winners):\n" + context.brainKnowledge + "\n\nUse these real results to inform your variant strategy. Patterns that won in similar tests are more likely to win again.";
+  }
 
   return [
     { role: "system", content: systemWithBrain },
@@ -221,7 +227,11 @@ Return ONLY the JSON array, no other text.`;
 
   const brainKnowledge = getBrainKnowledgeForSection("subheadline");
   const pageContextRulesSubh = getPageContextRules(context.pageType, context.pageGoal, context.pricePoint, context.niche);
-  const systemWithBrain = COPYWRITING_SYSTEM_PROMPT + "\n\nBRAIN KNOWLEDGE BASE (use these frameworks):\n" + brainKnowledge + "\n\n" + pageContextRulesSubh;
+  let systemWithBrain = COPYWRITING_SYSTEM_PROMPT + "\n\nBRAIN KNOWLEDGE BASE (use these frameworks):\n" + brainKnowledge + "\n\n" + pageContextRulesSubh;
+
+  if (context.brainKnowledge) {
+    systemWithBrain += "\n\nREAL TEST RESULTS FROM THE SITEAMOEBA NETWORK:\n" + context.brainKnowledge + "\n\nUse these real results to inform your variant strategy.";
+  }
 
   return [
     { role: "system", content: systemWithBrain },
@@ -511,8 +521,13 @@ Generate 3 new test variants. Return a JSON array:
   {"text": "variant text here", "strategy": "strategy_name", "reasoning": "why this hook/structure could outperform while preserving the same message"}
 ]`;
 
+  let finalSystem = systemPrompt;
+  if (context.brainKnowledge) {
+    finalSystem += "\n\nREAL TEST RESULTS FROM THE SITEAMOEBA NETWORK:\n" + context.brainKnowledge + "\n\nUse these real results to inform your variant strategy.";
+  }
+
   return [
-    { role: "system", content: systemPrompt },
+    { role: "system", content: finalSystem },
     { role: "user", content: userMessage },
   ];
 }

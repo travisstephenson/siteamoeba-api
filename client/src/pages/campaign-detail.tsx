@@ -58,6 +58,7 @@ import {
   History,
   ChevronLeft,
   Archive,
+  Share2,
 } from "lucide-react";
 import {
   Breadcrumb,
@@ -1348,6 +1349,9 @@ function DeclareWinnerDialog({
   const { toast } = useToast();
   const cleanText = variant.text.replace(/<[^>]*>/g, "");
 
+  const [showCelebration, setShowCelebration] = useState(false);
+  const [testSummary, setTestSummary] = useState<any>(null);
+
   const declareMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", `/api/campaigns/${campaignId}/declare-winner`, {
@@ -1360,55 +1364,251 @@ function DeclareWinnerDialog({
       }
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] });
       queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "variants"] });
       queryClient.invalidateQueries({ queryKey: ["/api/campaigns"] });
-      onOpenChange(false);
-      onDeclared(variant);
-      toast({ title: isControl ? "Test ended" : "Winner declared!", description: `"${cleanText.slice(0, 60)}" is now the control.` });
+
+      // If there was a meaningful lift, show celebration
+      if (!isControl && data.testSummary && data.testSummary.liftPercent > 0) {
+        setTestSummary(data.testSummary);
+        setShowCelebration(true);
+        // Fire confetti
+        import("canvas-confetti").then(({ default: confetti }) => {
+          confetti({ particleCount: 150, spread: 80, origin: { y: 0.6 } });
+          setTimeout(() => confetti({ particleCount: 80, spread: 120, origin: { y: 0.4 } }), 300);
+        }).catch(() => {});
+      } else {
+        onOpenChange(false);
+        onDeclared(variant);
+        toast({ title: isControl ? "Test ended" : "Winner declared!", description: `"${cleanText.slice(0, 60)}" is now the control.` });
+      }
     },
     onError: (err: Error) => {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
 
+  const handleCloseCelebration = () => {
+    setShowCelebration(false);
+    setTestSummary(null);
+    onOpenChange(false);
+    onDeclared(variant);
+  };
+
+  // Generate shareable image as canvas → data URL
+  const generateShareImage = async (): Promise<string> => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1080;
+    canvas.height = 1080;
+    const ctx = canvas.getContext('2d')!;
+
+    // Background gradient
+    const grad = ctx.createLinearGradient(0, 0, 1080, 1080);
+    grad.addColorStop(0, '#0d1117');
+    grad.addColorStop(0.5, '#0f1a2e');
+    grad.addColorStop(1, '#0a1628');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 1080, 1080);
+
+    // Accent glow
+    const glowGrad = ctx.createRadialGradient(540, 300, 0, 540, 300, 400);
+    glowGrad.addColorStop(0, 'rgba(16, 185, 129, 0.15)');
+    glowGrad.addColorStop(1, 'rgba(16, 185, 129, 0)');
+    ctx.fillStyle = glowGrad;
+    ctx.fillRect(0, 0, 1080, 1080);
+
+    // Trophy emoji
+    ctx.font = '72px serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('\uD83C\uDFC6', 540, 160);
+
+    // Lift percentage (big)
+    ctx.font = 'bold 120px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#10b981';
+    ctx.fillText(`+${(testSummary?.liftPercent || 0).toFixed(1)}%`, 540, 310);
+
+    // "Conversion Lift"
+    ctx.font = '600 28px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillText('CONVERSION LIFT', 540, 360);
+
+    // Divider
+    ctx.strokeStyle = 'rgba(16, 185, 129, 0.3)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(200, 400);
+    ctx.lineTo(880, 400);
+    ctx.stroke();
+
+    // Stats row
+    ctx.font = '600 22px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('VISITORS', 320, 460);
+    ctx.fillText('WINNER CVR', 540, 460);
+    ctx.fillText('CONFIDENCE', 760, 460);
+
+    ctx.font = 'bold 36px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`${testSummary?.totalVisitors || 0}`, 320, 510);
+    ctx.fillStyle = '#10b981';
+    ctx.fillText(`${((testSummary?.winnerConversionRate || 0) * 100).toFixed(1)}%`, 540, 510);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(`${(testSummary?.confidence || 0).toFixed(0)}%`, 760, 510);
+
+    // Winning copy
+    ctx.font = '600 20px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('WINNING VARIANT', 540, 590);
+
+    ctx.font = 'italic 24px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    const winText = '"' + (cleanText.slice(0, 100) + (cleanText.length > 100 ? '...' : '')) + '"';
+    // Word wrap
+    const words = winText.split(' ');
+    let line = '';
+    let y = 640;
+    for (const word of words) {
+      const test = line + word + ' ';
+      if (ctx.measureText(test).width > 780 && line) {
+        ctx.fillText(line.trim(), 540, y);
+        line = word + ' ';
+        y += 34;
+        if (y > 730) break;
+      } else {
+        line = test;
+      }
+    }
+    if (line && y <= 730) ctx.fillText(line.trim(), 540, y);
+
+    // Campaign name
+    ctx.font = '500 20px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.fillText(testSummary?.campaignName || '', 540, 820);
+
+    // Branding + referral
+    ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = '#10b981';
+    ctx.fillText('SiteAmoeba', 540, 920);
+
+    ctx.font = '500 18px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.fillText('AI-Powered A/B Testing', 540, 955);
+
+    ctx.font = '500 16px system-ui, -apple-system, sans-serif';
+    ctx.fillStyle = 'rgba(16, 185, 129, 0.7)';
+    ctx.fillText('siteamoeba.com', 540, 1000);
+
+    return canvas.toDataURL('image/png');
+  };
+
+  const handleShareImage = async () => {
+    try {
+      const dataUrl = await generateShareImage();
+      const link = document.createElement('a');
+      link.download = `siteamoeba-test-result-${(testSummary?.liftPercent || 0).toFixed(0)}pct-lift.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch (err) {
+      toast({ title: "Error generating image", variant: "destructive" });
+    }
+  };
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent data-testid="dialog-declare-winner">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            {isControl ? (
-              <><Shield className="w-4 h-4" /> Keep Original Copy</>  
-            ) : (
-              <><Trophy className="w-4 h-4 text-yellow-500" /> Declare Winner</>  
-            )}
-          </DialogTitle>
-          <DialogDescription className="space-y-2 pt-1">
-            {isControl ? (
-              <span>
-                Keeping your original copy as the winner will end this test. No changes needed on your site. End test?
-              </span>
-            ) : (
-              <span>
-                Declaring <strong>&#8220;{cleanText.slice(0, 80)}{cleanText.length > 80 ? "..." : ""}&#8221;</strong> as the winner will end this test. You'll need to update your site with the winning copy to continue using it. Declare winner?
-              </span>
-            )}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={declareMutation.isPending}>
-            Cancel
-          </Button>
-          <Button
-            onClick={() => declareMutation.mutate()}
-            disabled={declareMutation.isPending}
-            className={isControl ? "" : "bg-green-600 hover:bg-green-700 text-white"}
-            data-testid="button-confirm-declare-winner"
-          >
-            {declareMutation.isPending ? "Processing..." : isControl ? "End Test" : "Declare Winner"}
-          </Button>
-        </DialogFooter>
+    <Dialog open={open} onOpenChange={(o) => { if (!o && showCelebration) handleCloseCelebration(); else onOpenChange(o); }}>
+      <DialogContent className={showCelebration ? "sm:max-w-lg" : ""} data-testid="dialog-declare-winner">
+        {showCelebration && testSummary ? (
+          /* ---- CELEBRATION VIEW ---- */
+          <div className="space-y-5 py-2" data-testid="celebration-view">
+            <div className="text-center space-y-2">
+              <div className="text-4xl">🏆</div>
+              <h2 className="text-xl font-bold text-foreground">Test Won.</h2>
+              <p className="text-3xl font-extrabold text-green-500">+{testSummary.liftPercent.toFixed(1)}% lift</p>
+              <p className="text-xs text-muted-foreground">Your page just got better</p>
+            </div>
+
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="rounded-lg border p-3">
+                <div className="text-lg font-bold">{testSummary.totalVisitors}</div>
+                <div className="text-[10px] text-muted-foreground">Visitors Tested</div>
+              </div>
+              <div className="rounded-lg border border-green-200 dark:border-green-800 bg-green-50/50 dark:bg-green-950/20 p-3">
+                <div className="text-lg font-bold text-green-600">{(testSummary.winnerConversionRate * 100).toFixed(1)}%</div>
+                <div className="text-[10px] text-muted-foreground">Winner CVR</div>
+              </div>
+              <div className="rounded-lg border p-3">
+                <div className="text-lg font-bold">{(testSummary.controlConversionRate * 100).toFixed(1)}%</div>
+                <div className="text-[10px] text-muted-foreground">Control CVR</div>
+              </div>
+            </div>
+
+            <div className="rounded-lg border bg-muted/30 p-3 space-y-2">
+              <div className="flex items-center gap-2">
+                <Trophy className="w-3.5 h-3.5 text-green-500" />
+                <span className="text-xs font-semibold text-foreground">Winner</span>
+              </div>
+              <p className="text-xs text-foreground leading-relaxed italic">
+                &#8220;{cleanText.slice(0, 120)}{cleanText.length > 120 ? "..." : ""}&#8221;
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <Button
+                onClick={handleShareImage}
+                variant="outline"
+                className="flex-1 gap-2"
+                data-testid="button-share-results"
+              >
+                <Share2 className="w-4 h-4" />
+                Share Your Results
+              </Button>
+              <Button
+                onClick={handleCloseCelebration}
+                className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                data-testid="button-close-celebration"
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        ) : (
+          /* ---- CONFIRM VIEW ---- */
+          <>
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2">
+                {isControl ? (
+                  <><Shield className="w-4 h-4" /> Keep Original Copy</>  
+                ) : (
+                  <><Trophy className="w-4 h-4 text-yellow-500" /> Declare Winner</>  
+                )}
+              </DialogTitle>
+              <DialogDescription className="space-y-2 pt-1">
+                {isControl ? (
+                  <span>
+                    Keeping your original copy as the winner will end this test. No changes needed on your site. End test?
+                  </span>
+                ) : (
+                  <span>
+                    Declaring <strong>&#8220;{cleanText.slice(0, 80)}{cleanText.length > 80 ? "..." : ""}&#8221;</strong> as the winner will end this test. You'll need to update your site with the winning copy to continue using it. Declare winner?
+                  </span>
+                )}
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={declareMutation.isPending}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => declareMutation.mutate()}
+                disabled={declareMutation.isPending}
+                className={isControl ? "" : "bg-green-600 hover:bg-green-700 text-white"}
+                data-testid="button-confirm-declare-winner"
+              >
+                {declareMutation.isPending ? "Processing..." : isControl ? "End Test" : "Declare Winner"}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );

@@ -855,6 +855,26 @@ export async function registerRoutes(server: Server, app: Express) {
       context.sectionPurpose = matchingSection.purpose || undefined;
     }
 
+    // Inject brain knowledge for paid users
+    const isPaid = user.plan !== 'free';
+    if (isPaid) {
+      try {
+        const knowledge = await storage.getBrainKnowledge({
+          pageType: campaign.pageType || undefined,
+          sectionType: type,
+          limit: 5,
+        });
+        if (knowledge.length > 0) {
+          const brainInsights = knowledge.map((k: any) =>
+            `- ${k.section_type} test: "${(k.winning_text || '').slice(0, 80)}" beat "${(k.original_text || '').slice(0, 80)}" with +${(k.lift_percent || 0).toFixed(0)}% lift (${k.sample_size || 0} visitors)${k.insight ? '. Insight: ' + k.insight.slice(0, 120) : ''}`
+          ).join('\n');
+          context.brainKnowledge = brainInsights;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch brain knowledge:', err);
+      }
+    }
+
     let messages;
     if (type === 'headline') {
       messages = buildHeadlineGenerationPrompt(context);
@@ -1018,11 +1038,38 @@ export async function registerRoutes(server: Server, app: Express) {
         }
 
         lesson = await storage.createTestLesson(lessonData);
+
+        // === BRAIN KNOWLEDGE: Store this result for the shared intelligence network ===
+        try {
+          await storage.addBrainKnowledge({
+            knowledgeType: "test_result",
+            pageType: campaign.pageType || "sales_page",
+            niche: campaign.niche || undefined,
+            sectionType,
+            originalText: loserVariant ? loserVariant.text.replace(/<[^>]*>/g, '').slice(0, 500) : undefined,
+            winningText: winningVariant.text.replace(/<[^>]*>/g, '').slice(0, 500),
+            liftPercent: liftPct,
+            confidence: winnerStats.confidence,
+            sampleSize,
+            insight: lessonData.lesson || undefined,
+            tags: winningVariant.persuasionTags || undefined,
+            campaignId: campaign.id,
+            userId: req.userId!,
+          });
+        } catch (bkErr) {
+          console.warn("Failed to store brain knowledge:", bkErr);
+        }
       }
     } catch (err) {
       // Non-fatal — winner is still declared even if lesson fails
       console.warn("Test lesson creation failed:", err);
     }
+
+    // Build test result summary for celebration UI
+    const winnerCvr = winnerStats?.conversionRate ?? 0;
+    const controlCvr = controlStats?.conversionRate ?? 0;
+    const liftPctFinal = controlCvr > 0 ? ((winnerCvr - controlCvr) / controlCvr) * 100 : 0;
+    const totalSample = (winnerStats?.impressions ?? 0) + (controlStats?.impressions ?? 0);
 
     res.json({
       ok: true,
@@ -1032,6 +1079,19 @@ export async function registerRoutes(server: Server, app: Express) {
         type: winningVariant.type,
       },
       lesson: lesson ? { id: lesson.id, lesson: lesson.lesson } : null,
+      testSummary: {
+        liftPercent: liftPctFinal,
+        winnerConversionRate: winnerCvr,
+        controlConversionRate: controlCvr,
+        totalVisitors: totalSample,
+        winnerVisitors: winnerStats?.impressions ?? 0,
+        winnerConversions: winnerStats?.conversions ?? 0,
+        controlText: controlStats?.text || typeVariants.find(v => v.id !== winningVariant.id)?.text || "",
+        confidence: winnerStats?.confidence ?? 0,
+        sectionType,
+        campaignName: campaign.name,
+        pageUrl: campaign.url,
+      },
     });
   });
 
@@ -1174,6 +1234,25 @@ export async function registerRoutes(server: Server, app: Express) {
 
     const brainKnowledge = getBrainPageAuditKnowledge();
 
+    // Inject dynamic brain knowledge from the network for paid users
+    let dynamicBrainKnowledge = "";
+    if (user.plan !== "free") {
+      try {
+        const knowledge = await storage.getBrainKnowledge({
+          pageType: campaign.pageType || undefined,
+          limit: 10,
+        });
+        if (knowledge.length > 0) {
+          dynamicBrainKnowledge = "\n\nREAL A/B TEST RESULTS FROM THE SITEAMOEBA NETWORK (use these to give data-backed advice):\n" +
+            knowledge.map((k: any) =>
+              `- ${k.section_type || 'unknown'} test (${k.page_type || 'unknown'} page): "${(k.winning_text || '').slice(0, 60)}..." beat "${(k.original_text || '').slice(0, 60)}..." with +${(k.lift_percent || 0).toFixed(0)}% lift across ${k.sample_size || 0} visitors${k.insight ? '. Key insight: ' + k.insight.slice(0, 100) : ''}`
+            ).join('\n');
+        }
+      } catch (err) {
+        console.warn('Failed to fetch brain knowledge for chat:', err);
+      }
+    }
+
     // Fetch the actual page content so the Brain can reference real page elements
     let pageContent = "";
     try {
@@ -1233,7 +1312,7 @@ export async function registerRoutes(server: Server, app: Express) {
       totalVisitors,
       totalConversions,
       conversionRate,
-      brainKnowledge,
+      brainKnowledge: brainKnowledge + dynamicBrainKnowledge,
       winConfidenceThreshold: user.winConfidenceThreshold,
       // Page context fields
       pageType: campaign.pageType || undefined,
