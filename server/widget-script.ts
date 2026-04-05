@@ -360,3 +360,4 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   });
 })();`;
 }
+// deployed Sun Apr  5 19:56:57 UTC 2026
