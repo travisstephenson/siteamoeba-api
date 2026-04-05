@@ -51,6 +51,8 @@ import {
   TrendingUp as TrendingUpIcon,
   Settings,
   Copy,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -119,6 +121,7 @@ interface ScannedSection {
   purpose: string;
   selector: string;
   currentText: string;
+  contentLength?: number;
   testPriority: number;
   category: string;
   testMethod?: string;
@@ -512,6 +515,16 @@ function SectionCard({
 }) {
   const config = getCategoryConfig(section.category);
   const Icon = config.icon;
+  const [showFullText, setShowFullText] = useState(false);
+
+  const isBodyCopy = section.category === "body_copy" || section.category === "hero_journey";
+  // Word count from plain text (strip HTML tags)
+  const wordCount = section.currentText
+    ? section.currentText.replace(/<[^>]*>/g, " ").trim().split(/\s+/).filter(Boolean).length
+    : 0;
+  const previewText = section.currentText
+    ? section.currentText.replace(/<[^>]*>/g, " ").trim()
+    : "";
 
   return (
     <div
@@ -557,6 +570,12 @@ function SectionCard({
               Text test
             </span>
           )}
+          {section.testMethod === "html_swap" && (
+            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs border font-medium bg-violet-500/10 text-violet-600 dark:text-violet-400 border-violet-500/20" data-testid={`badge-method-${section.id}`}>
+              <FileText className="w-3 h-3" />
+              HTML test
+            </span>
+          )}
           {section.testMethod === "visibility_toggle" && (
             <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs border font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20" data-testid={`badge-method-${section.id}`}>
               <Eye className="w-3 h-3" />
@@ -575,6 +594,12 @@ function SectionCard({
               Preview only
             </span>
           )}
+          {/* Word count badge for body copy sections */}
+          {isBodyCopy && wordCount > 0 && (
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs border font-medium bg-muted text-muted-foreground border-border" data-testid={`badge-wordcount-${section.id}`}>
+              ~{wordCount} words
+            </span>
+          )}
         </div>
         {section.purpose && (
           <p className="text-xs text-muted-foreground mb-1.5 leading-relaxed">{section.purpose}</p>
@@ -585,9 +610,34 @@ function SectionCard({
           </p>
         )}
         {section.currentText && (
-          <p className="text-xs text-foreground/70 bg-muted/50 rounded px-2 py-1 font-mono truncate" data-testid={`text-current-${section.id}`}>
-            "{section.currentText.length > 80 ? section.currentText.slice(0, 80) + "…" : section.currentText}"
-          </p>
+          <div className="mt-1" data-testid={`text-current-${section.id}`}>
+            {isBodyCopy ? (
+              <>
+                <p className="text-xs text-foreground/70 bg-muted/50 rounded px-2 py-1 font-mono">
+                  "{showFullText
+                    ? previewText
+                    : (previewText.length > 150 ? previewText.slice(0, 150) + "…" : previewText)}"
+                </p>
+                {previewText.length > 150 && (
+                  <button
+                    className="text-xs text-primary hover:underline mt-1 flex items-center gap-0.5"
+                    onClick={(e) => { e.stopPropagation(); setShowFullText((v) => !v); }}
+                    data-testid={`button-expand-text-${section.id}`}
+                  >
+                    {showFullText ? (
+                      <><ChevronUp className="w-3 h-3" />Hide full text</>
+                    ) : (
+                      <><ChevronDown className="w-3 h-3" />Show full text</>
+                    )}
+                  </button>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-foreground/70 bg-muted/50 rounded px-2 py-1 font-mono truncate">
+                "{section.currentText.length > 80 ? section.currentText.slice(0, 80) + "…" : section.currentText}"
+              </p>
+            )}
+          </div>
         )}
         <p className="text-xs text-muted-foreground mt-1.5 font-mono opacity-60 truncate">
           {section.selector}

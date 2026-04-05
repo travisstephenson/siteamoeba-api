@@ -694,19 +694,28 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     // Sanitize sections
-    const validTestMethods = ["text_swap", "visibility_toggle", "reorder", "not_testable"];
+    const validTestMethods = ["text_swap", "html_swap", "visibility_toggle", "reorder", "not_testable"];
     scanResult.sections = scanResult.sections
       .filter((s: any) => s && s.id && s.label && s.selector && s.category)
-      .map((s: any, i: number) => ({
-        id: String(s.id),
-        label: String(s.label),
-        purpose: s.purpose ? String(s.purpose) : "",
-        selector: String(s.selector),
-        currentText: s.currentText ? String(s.currentText).slice(0, 300) : "",
-        testPriority: typeof s.testPriority === "number" ? s.testPriority : i + 1,
-        category: String(s.category),
-        testMethod: validTestMethods.includes(s.testMethod) ? String(s.testMethod) : "text_swap",
-      }))
+      .map((s: any, i: number) => {
+        const category = String(s.category);
+        const isLongSection = category === "body_copy" || category === "hero_journey";
+        const rawText = s.currentText ? String(s.currentText) : "";
+        // Allow up to 2000 chars for body_copy/hero_journey, 300 for others
+        const currentText = isLongSection ? rawText.slice(0, 2000) : rawText.slice(0, 300);
+        const contentLength = rawText.length;
+        return {
+          id: String(s.id),
+          label: String(s.label),
+          purpose: s.purpose ? String(s.purpose) : "",
+          selector: String(s.selector),
+          currentText,
+          contentLength,
+          testPriority: typeof s.testPriority === "number" ? s.testPriority : i + 1,
+          category,
+          testMethod: validTestMethods.includes(s.testMethod) ? String(s.testMethod) : "text_swap",
+        };
+      })
       .sort((a: any, b: any) => a.testPriority - b.testPriority);
 
     // Store classification fields on the campaign if a campaignId was passed
@@ -2719,16 +2728,33 @@ function generateEmbedCode(baseUrl: string, campaign: any): string {
     });
   }
 
+  function applyVariantText(el, text, testMethod) {
+    if (!el || !text) return;
+    if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
+      el.innerHTML = text;
+    } else {
+      el.textContent = text;
+    }
+  }
+
   fetch(API + "/api/widget/assign?vid=" + vid + "&cid=" + CID + "&ref=" + encodeURIComponent(document.referrer))
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (data.headline && data.headline.text) {
         var h1 = document.querySelector('${hSel}') || document.querySelector("h1");
-        if (h1) h1.innerHTML = data.headline.text;
+        if (h1) applyVariantText(h1, data.headline.text, "text_swap");
       }
       if (data.subheadline && data.subheadline.text) {
         var sub = document.querySelector('${sSel}') || document.querySelector("h2");
-        if (sub) sub.innerHTML = data.subheadline.text;
+        if (sub) applyVariantText(sub, data.subheadline.text, "text_swap");
+      }
+      // Apply section variants (body_copy, CTAs, etc.) when returned by the assign endpoint
+      if (data.sections && Array.isArray(data.sections)) {
+        data.sections.forEach(function(sv) {
+          if (!sv || !sv.selector || !sv.text) return;
+          var el = document.querySelector(sv.selector);
+          if (el) applyVariantText(el, sv.text, sv.testMethod || "text_swap");
+        });
       }
       injectVisitorId();
     })

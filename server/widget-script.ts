@@ -32,6 +32,17 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     return params;
   })();
 
+  // === HELPER: Apply variant text to element ===
+  // Uses innerHTML when text contains HTML tags (html_swap), textContent otherwise (text_swap)
+  function applyVariantText(el, text, testMethod) {
+    if (!el || !text) return;
+    if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
+      el.innerHTML = text;
+    } else {
+      el.textContent = text;
+    }
+  }
+
   // === VARIANT ASSIGNMENT ===
   var assignUrl = API + "/api/widget/assign?vid=" + vid + "&cid=" + CID + "&ref=" + encodeURIComponent(document.referrer);
   if (utmParams.utm_source)   assignUrl += "&utm_source="   + encodeURIComponent(utmParams.utm_source);
@@ -44,11 +55,19 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     .then(function(data) {
       if (data.headline && data.headline.text) {
         var h1 = document.querySelector("h1");
-        if (h1) h1.innerHTML = data.headline.text;
+        if (h1) applyVariantText(h1, data.headline.text, "text_swap");
       }
       if (data.subheadline && data.subheadline.text) {
         var sub = document.querySelector("h2");
-        if (sub) sub.innerHTML = data.subheadline.text;
+        if (sub) applyVariantText(sub, data.subheadline.text, "text_swap");
+      }
+      // Apply section variants (body_copy, CTAs, etc.) when returned by the assign endpoint
+      if (data.sections && Array.isArray(data.sections)) {
+        data.sections.forEach(function(sv) {
+          if (!sv || !sv.selector || !sv.text) return;
+          var el = document.querySelector(sv.selector);
+          if (el) applyVariantText(el, sv.text, sv.testMethod || "text_swap");
+        });
       }
     })
     .catch(function(e) { console.log("SiteAmoeba: using defaults", e); });

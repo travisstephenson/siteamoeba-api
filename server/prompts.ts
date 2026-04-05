@@ -252,7 +252,7 @@ For each section you identify, you must:
 3. Suggest a CSS selector for each section (best effort — the user can adjust)
 4. Explain the sales psychology purpose of each section
 5. Rank by test priority — highest impact sections first (headlines are always #1)
-6. Extract the current visible text content (truncated to 200 chars)
+6. Extract the current visible text content. For body_copy and hero_journey sections, capture the FULL text (up to 2000 chars) including paragraph breaks as \n. For headlines, CTAs, and other short sections, truncate to 200 chars.
 7. Determine the testMethod for each section (see below)
 8. Return valid JSON only — no markdown, no explanation
 
@@ -263,7 +263,8 @@ Page Classification Fields (include in your response):
 - niche: a brief descriptor of the market/niche (e.g. "info product", "SaaS", "e-commerce apparel", "coaching", "health supplement", "B2B software")
 
 Test method classification — choose ONE per section:
-- "text_swap": For sections where text can be directly replaced (headlines, subheadlines, CTAs, body copy, guarantee text, pricing descriptions, FAQ answers)
+- "text_swap": For sections where text can be directly replaced (headlines, subheadlines, CTAs, guarantee text, pricing descriptions, FAQ answers)
+- "html_swap": For multi-paragraph body copy sections where the HTML structure (paragraphs, bold text, lists) needs to be preserved. The variant replaces the innerHTML of the container.
 - "visibility_toggle": For sections where you test showing/hiding elements or changing quantity (testimonials, social proof badges, trust seals, bonus items)
 - "reorder": For sections where the order of items can be tested (product stacks, feature lists, pricing tiers)
 - "not_testable": For sections that are images, videos, or embedded content that can't be modified via DOM text manipulation (hero images, video embeds, screenshot testimonials)
@@ -288,8 +289,13 @@ Section categories to use:
 - pricing: Price display, pricing tables
 - faq: Frequently asked questions
 - testimonials: Customer testimonials section
-- body_copy: ALL other text sections — section headers, transitions, problem agitation, solution reveals, feature descriptions. This is the catch-all for any text that isn't one of the above specific categories.
+- body_copy: Multi-paragraph text blocks — problem agitation, solution reveals, story sections, feature descriptions, value propositions. These are the persuasive NARRATIVE sections between headlines and CTAs. Capture the FULL text of these sections including paragraph breaks. A body copy section is typically a container div or section with multiple paragraphs, lists, and bold text inside it.
 - image: Hero image or key visual alt text
+
+GROUPING RULE FOR BODY COPY:
+When you see multiple consecutive paragraphs, bullet lists, and bold text that form a single persuasive narrative, group them as ONE body_copy section with a container selector (e.g. the parent div or section). Do NOT split them into individual paragraph sections. For example, if there's a problem agitation block with 5 paragraphs and a bullet list, that's ONE body_copy section, not 6 separate sections.
+
+For body_copy sections, use testMethod "html_swap" (not "text_swap") because the content includes HTML formatting (bold, lists, etc).
 
 Test priority guidelines:
 - Headlines (1-2): Always highest impact
@@ -382,12 +388,27 @@ Test strategies:
 - Test payment framing: "One-time payment" vs "Just $27 today" vs "Instant access for $27"
 - Test urgency: "Price increases soon" vs current price only`,
 
-  body_copy: `Body copy and supporting text. Test different angles and benefit framing.
-- Test problem-agitation vs benefit-forward copy
-- Test length: concise vs detailed
-- Test emotional vs logical appeals
-- Test specificity: exact numbers and timeframes vs general claims
-- The copy should move them closer to clicking the CTA.`,
+  body_copy: `Multi-paragraph body copy blocks. These are the persuasive narrative sections of a sales page.
+
+CRITICAL RULES:
+1. PRESERVE the core factual claims, numbers, and statistics exactly as stated
+2. PRESERVE the overall narrative structure (problem → agitation → solution → proof → call to action)
+3. PRESERVE any HTML formatting — use <p>, <strong>, <em>, <ul><li>, <br> tags as needed
+4. The variant MUST be approximately the same length as the control (within 25%)
+5. DO NOT change the offer, price, or product claims
+
+WHAT TO IMPROVE:
+- Opening hook: start with a stronger pattern interrupt or curiosity gap
+- Emotional amplification: heighten the pain points and desire
+- Specificity: replace vague claims with specific, vivid details
+- Social proof integration: weave credibility markers into the narrative
+- Psychological triggers: add scarcity, urgency, authority, or social proof where natural
+- Transition sentences: make each paragraph flow into the next with forward momentum
+- Power words: replace weak verbs with action words (discovered → uncovered, learned → mastered)
+- Sentence rhythm: vary sentence length — short punchy sentences mixed with longer descriptive ones
+- Bullet formatting: if the control has bullets, make them benefit-driven with bold lead-ins
+
+FORMAT: Return the variant text as HTML with proper <p>, <strong>, and <ul><li> tags so it can replace the container's innerHTML directly.`,
 
   faq: `FAQ answers. Test different ways of addressing objections.
 - Test answer length: concise vs thorough
@@ -479,16 +500,23 @@ CRITICAL RULES — FOLLOW ALL OF THESE:
 7. Return ONLY a JSON array, no markdown, no explanation outside the JSON`;
 
   const controlText = context.controlText || context.currentVariants[0] || "(no control text available)";
-  const controlWordCount = controlText.split(/\s+/).length;
+  const controlWordCount = controlText.replace(/<[^>]*>/g, " ").split(/\s+/).filter(Boolean).length;
   const existingVariants = context.currentVariants.length > 0
     ? context.currentVariants.map((v, i) => `  Variant ${i + 1}: "${v}"`).join("\n")
     : "  (none yet — this is the first test)";
+
+  const isBodyCopyType = sectionType === "body_copy" || sectionType === "hero_journey";
 
   const userMessage = `Campaign: ${context.campaignName}
 Page: ${context.pageUrl}
 Section: ${context.sectionLabel || sectionType}
 Section purpose: ${context.sectionPurpose || "Improve conversion"}
-
+${isBodyCopyType ? `\nSECTION TYPE: This is a BODY COPY / NARRATIVE section. Follow body copy rules:
+- Return variant text as HTML (with <p>, <strong>, <ul><li> tags)
+- Preserve the narrative structure (problem → agitation → solution → proof)
+- Each variant should test a different persuasion ANGLE, not just rephrase
+- DO NOT return plain text — use HTML formatting throughout
+` : ""}
 Current control text (~${controlWordCount} words):
 """${controlText}"""
 
@@ -504,10 +532,15 @@ STEP 2 — GENERATE VARIANTS that test different HOOKS and STRUCTURES while keep
 - Adjust the emphasis (which fact gets the spotlight)
 - Test different opening hooks (specificity, curiosity, direct benefit)
 - Do NOT invent new claims, change numbers, flip the tone, or distort the story
-
+${isBodyCopyType ? `
+For this body copy section specifically:
+- Each variant must test a completely different persuasion ANGLE (e.g., one tests curiosity/mystery, one tests authority/proof, one tests pain/agitation)
+- Use varied sentence rhythm: mix short punchy sentences with longer flowing ones
+- Make bullets benefit-driven with <strong> lead-ins if the control has bullets
+` : ""}
 Your variants MUST:
 - Preserve ALL factual claims from the control exactly as stated
-- Be approximately ${controlWordCount} words long (within 20%)
+- Be approximately ${controlWordCount} words long (within ${isBodyCopyType ? "25" : "20"}%)
 - Make sense as a direct replacement in this exact page position
 - Each test a different hook/structure while delivering the SAME core message
 

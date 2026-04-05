@@ -59,6 +59,7 @@ import {
   ChevronLeft,
   Archive,
   Share2,
+  FileText,
 } from "lucide-react";
 import {
   Breadcrumb,
@@ -1710,19 +1711,82 @@ function StyledPreview({
   styles?: string | null;
   sectionType: string;
 }) {
+  const [showFull, setShowFull] = useState(false);
   const parsedStyles = useMemo(() => {
     if (!styles) return null;
     try { return JSON.parse(styles); } catch { return null; }
   }, [styles]);
 
+  const isBodyCopy = sectionType === "body_copy" || sectionType === "hero_journey";
+  // Strip HTML tags for collapsed plain-text preview
+  const plainText = text.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  const previewPlain = plainText.length > 100 ? plainText.slice(0, 100) + "…" : plainText;
+
   if (!parsedStyles) {
-    // Fallback: render plain text (no styles captured yet)
+    // Fallback: render with expand/collapse for body copy
+    if (isBodyCopy) {
+      return (
+        <div data-testid="styled-preview-fallback">
+          {showFull ? (
+            <div
+              className="text-sm text-foreground leading-relaxed prose prose-sm max-w-none"
+              dangerouslySetInnerHTML={{ __html: text }}
+            />
+          ) : (
+            <p className="text-sm text-foreground leading-relaxed">{previewPlain}</p>
+          )}
+          {plainText.length > 100 && (
+            <button
+              className="text-xs text-primary hover:underline mt-1 flex items-center gap-0.5"
+              onClick={() => setShowFull((v) => !v)}
+              data-testid="button-expand-variant-preview"
+            >
+              {showFull ? (
+                <><ChevronUp className="w-3 h-3" />Hide full</>
+              ) : (
+                <><ChevronDown className="w-3 h-3" />Show full</>
+              )}
+            </button>
+          )}
+        </div>
+      );
+    }
+    // Non-body copy fallback
     return (
       <div
         className="text-sm text-foreground leading-relaxed"
         dangerouslySetInnerHTML={{ __html: text }}
         data-testid="styled-preview-fallback"
       />
+    );
+  }
+
+  // Body copy with styles: show truncated plain preview + expand to full HTML
+  if (isBodyCopy) {
+    return (
+      <div data-testid="styled-preview-body-copy">
+        {showFull ? (
+          <div
+            className="text-sm text-foreground leading-relaxed prose prose-sm max-w-none"
+            dangerouslySetInnerHTML={{ __html: text }}
+          />
+        ) : (
+          <p className="text-sm text-foreground leading-relaxed">{previewPlain}</p>
+        )}
+        {plainText.length > 100 && (
+          <button
+            className="text-xs text-primary hover:underline mt-1 flex items-center gap-0.5"
+            onClick={() => setShowFull((v) => !v)}
+            data-testid="button-expand-variant-preview"
+          >
+            {showFull ? (
+              <><ChevronUp className="w-3 h-3" />Hide full</>
+            ) : (
+              <><ChevronDown className="w-3 h-3" />Show full</>
+            )}
+          </button>
+        )}
+      </div>
     );
   }
 
@@ -3410,6 +3474,8 @@ function getTestMethodConfig(method: string): { icon: React.ElementType; label: 
   switch (method) {
     case "text_swap":
       return { icon: TextCursorInput, label: "Text Swap", color: "hsl(217, 91%, 60%)" };
+    case "html_swap":
+      return { icon: FileText, label: "HTML Swap", color: "hsl(271, 91%, 65%)" };
     case "visibility_toggle":
       return { icon: ToggleLeft, label: "Visibility Toggle", color: "hsl(280, 70%, 55%)" };
     case "reorder":
@@ -3440,6 +3506,7 @@ function TestSectionCard({
   userPlan: string;
 }) {
   const [expanded, setExpanded] = useState(section.isActive);
+  const [showFullControlText, setShowFullControlText] = useState(false);
   const { toast } = useToast();
   const catConfig = getCategoryConfig(section.category);
   const methodConfig = getTestMethodConfig(section.testMethod);
@@ -3584,13 +3651,45 @@ function TestSectionCard({
             {/* Control text from scan */}
             {section.currentText && (
               <div className="mb-4 p-3 rounded-lg bg-muted/40 border border-border">
-                <div className="flex items-center gap-2 mb-1">
+                <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <Badge variant="outline" className="text-xs gap-1">
                     <Shield className="w-2.5 h-2.5" /> Control
                   </Badge>
                   <span className="text-xs text-muted-foreground">Original text from scan</span>
+                  {/* Word count for body copy */}
+                  {(section.category === "body_copy" || section.category === "hero_journey") && (() => {
+                    const wc = section.currentText.replace(/<[^>]*>/g, " ").trim().split(/\s+/).filter(Boolean).length;
+                    return wc > 0 ? (
+                      <Badge variant="secondary" className="text-xs">
+                        ~{wc} words
+                      </Badge>
+                    ) : null;
+                  })()}
                 </div>
-                <p className="text-sm text-foreground leading-relaxed">{section.currentText}</p>
+                {(section.category === "body_copy" || section.category === "hero_journey") ? (
+                  <>
+                    <p className="text-sm text-foreground leading-relaxed whitespace-pre-line">
+                      {showFullControlText
+                        ? section.currentText.replace(/<[^>]*>/g, " ").trim()
+                        : (section.currentText.replace(/<[^>]*>/g, " ").trim().slice(0, 100) + (section.currentText.length > 100 ? "…" : ""))}
+                    </p>
+                    {section.currentText.replace(/<[^>]*>/g, " ").trim().length > 100 && (
+                      <button
+                        className="text-xs text-primary hover:underline mt-1 flex items-center gap-0.5"
+                        onClick={() => setShowFullControlText((v) => !v)}
+                        data-testid={`button-expand-control-${section.id}`}
+                      >
+                        {showFullControlText ? (
+                          <><ChevronUp className="w-3 h-3" />Hide full text</>
+                        ) : (
+                          <><ChevronDown className="w-3 h-3" />Show full text</>
+                        )}
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-sm text-foreground leading-relaxed">{section.currentText}</p>
+                )}
               </div>
             )}
 
