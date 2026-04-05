@@ -839,22 +839,52 @@ class StorageImpl implements IStorage {
 
     for (const v of allVariants) {
       const isHeadline = v.type === "headline";
-      const column = isHeadline ? "headline_variant_id" : "subheadline_variant_id";
+      const isSubheadline = v.type === "subheadline";
+      const isSectionVariant = !isHeadline && !isSubheadline;
 
-      const impResult = await pool.query(
-        `SELECT COUNT(DISTINCT id) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2`,
-        [campaignId, v.id]
-      );
+      let impResult, convResult, revResult;
 
-      const convResult = await pool.query(
-        `SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND converted = true`,
-        [campaignId, v.id]
-      );
-
-      const revResult = await pool.query(
-        `SELECT COALESCE(SUM(revenue), 0) as total FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND converted = true`,
-        [campaignId, v.id]
-      );
+      if (isSectionVariant) {
+        // Section variants are tracked via JSON column section_variant_assignments
+        // Use JSON text matching: look for '"variantId' pattern in the JSON
+        const jsonPattern = `%"${v.id}"%`;
+        // More precise: search for the variant ID as a value in the JSON
+        // The format is {"sectionId": variantId}, so we look for :variantId or : variantId
+        const jsonPatternExact = `%:${v.id}%`;
+        const jsonPatternSpaced = `%: ${v.id}%`;
+        impResult = await pool.query(
+          `SELECT COUNT(DISTINCT id) as count FROM visitors WHERE campaign_id = $1 AND (
+            section_variant_assignments LIKE $2 OR section_variant_assignments LIKE $3
+          )`,
+          [campaignId, jsonPatternExact, jsonPatternSpaced]
+        );
+        convResult = await pool.query(
+          `SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1 AND converted = true AND (
+            section_variant_assignments LIKE $2 OR section_variant_assignments LIKE $3
+          )`,
+          [campaignId, jsonPatternExact, jsonPatternSpaced]
+        );
+        revResult = await pool.query(
+          `SELECT COALESCE(SUM(revenue), 0) as total FROM visitors WHERE campaign_id = $1 AND converted = true AND (
+            section_variant_assignments LIKE $2 OR section_variant_assignments LIKE $3
+          )`,
+          [campaignId, jsonPatternExact, jsonPatternSpaced]
+        );
+      } else {
+        const column = isHeadline ? "headline_variant_id" : "subheadline_variant_id";
+        impResult = await pool.query(
+          `SELECT COUNT(DISTINCT id) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2`,
+          [campaignId, v.id]
+        );
+        convResult = await pool.query(
+          `SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND converted = true`,
+          [campaignId, v.id]
+        );
+        revResult = await pool.query(
+          `SELECT COALESCE(SUM(revenue), 0) as total FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND converted = true`,
+          [campaignId, v.id]
+        );
+      }
 
       const imp = parseInt(impResult.rows[0]?.count) || 0;
       const conv = parseInt(convResult.rows[0]?.count) || 0;
@@ -889,8 +919,9 @@ class StorageImpl implements IStorage {
       });
     }
 
-    // Calculate statistical significance vs control for each type
-    for (const type of ["headline", "subheadline"]) {
+    // Calculate statistical significance vs control for each variant type
+    const allTypes = [...new Set(stats.map(s => s.type))];
+    for (const type of allTypes) {
       const typeStats = stats.filter(s => s.type === type);
       const control = typeStats.find(s => s.isControl);
       if (!control || control.impressions < 10) continue;

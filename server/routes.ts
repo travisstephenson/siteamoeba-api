@@ -1894,19 +1894,42 @@ export async function registerRoutes(server: Server, app: Express) {
     if (existing && existing.campaignId === campaignId) {
       const h = await storage.getVariant(existing.headlineVariantId);
       const s = await storage.getVariant(existing.subheadlineVariantId);
+
+      // Reconstruct section payloads from stored assignments
+      let existingSections: any[] | undefined;
+      if ((existing as any).sectionVariantAssignments) {
+        try {
+          const assignments = JSON.parse((existing as any).sectionVariantAssignments);
+          const allSections = _testSectionsCache[campaignId] || await storage.getTestSectionsByCampaign(campaignId);
+          _testSectionsCache[campaignId] = allSections;
+          existingSections = [];
+          for (const [sectionIdStr, variantId] of Object.entries(assignments)) {
+            const section = allSections.find((s: any) => s.id === parseInt(sectionIdStr));
+            const variant = await storage.getVariant(variantId as number);
+            if (section && variant) {
+              existingSections.push({
+                id: variant.id,
+                text: variant.text,
+                isControl: !!variant.isControl,
+                selector: section.selector,
+                testMethod: section.testMethod || "text_swap",
+                sectionId: section.id,
+              });
+            }
+          }
+        } catch { /* ignore parse errors */ }
+      }
+
       return res.json({
         visitorId: existing.id,
         headline: await resolveVariantPayload(h),
         subheadline: await resolveVariantPayload(s),
+        sections: existingSections && existingSections.length > 0 ? existingSections : undefined,
       });
     }
 
     const headlineVariants = await storage.getActiveVariantsByCampaign(campaignId, "headline");
     const subheadlineVariants = await storage.getActiveVariantsByCampaign(campaignId, "subheadline");
-
-    if (headlineVariants.length === 0 && subheadlineVariants.length === 0) {
-      return res.json({ visitorId, headline: null, subheadline: null });
-    }
 
     const hVariant = headlineVariants.length > 0
       ? headlineVariants[Math.floor(Math.random() * headlineVariants.length)]
@@ -1914,6 +1937,35 @@ export async function registerRoutes(server: Server, app: Express) {
     const sVariant = subheadlineVariants.length > 0
       ? subheadlineVariants[Math.floor(Math.random() * subheadlineVariants.length)]
       : null;
+
+    // === SECTION-LEVEL TESTS: assign variants for all active non-headline/subheadline sections ===
+    const allTestSections = _testSectionsCache[campaignId] || await storage.getTestSectionsByCampaign(campaignId);
+    _testSectionsCache[campaignId] = allTestSections;
+    const sectionAssignments: Record<string, number> = {}; // sectionId -> variantId
+    const sectionPayloads: any[] = [];
+    for (const section of allTestSections) {
+      if (!section.isActive) continue;
+      if (section.category === "headline" || section.category === "subheadline") continue;
+      // Get active variants for this section's category
+      const sectionVars = await storage.getActiveVariantsByCampaign(campaignId, section.category);
+      if (sectionVars.length === 0) continue;
+      // Randomly assign one
+      const chosen = sectionVars[Math.floor(Math.random() * sectionVars.length)];
+      sectionAssignments[String(section.id)] = chosen.id;
+      sectionPayloads.push({
+        id: chosen.id,
+        text: chosen.text,
+        isControl: !!chosen.isControl,
+        selector: section.selector,
+        testMethod: section.testMethod || "text_swap",
+        sectionId: section.id,
+      });
+    }
+
+    // Check if there's anything to test at all
+    if (!hVariant && !sVariant && sectionPayloads.length === 0) {
+      return res.json({ visitorId, headline: null, subheadline: null });
+    }
 
     const utmSource   = (req.query.utm_source   as string) || null;
     const utmMedium   = (req.query.utm_medium   as string) || null;
@@ -1943,6 +1995,9 @@ export async function registerRoutes(server: Server, app: Express) {
       utmTerm,
       trafficSource,
       deviceCategory,
+      sectionVariantAssignments: Object.keys(sectionAssignments).length > 0
+        ? JSON.stringify(sectionAssignments)
+        : null,
     });
 
     await storage.createImpression({
@@ -1966,6 +2021,7 @@ export async function registerRoutes(server: Server, app: Express) {
       visitorId: visitor.id,
       headline: await resolveVariantPayload(hVariant),
       subheadline: await resolveVariantPayload(sVariant),
+      sections: sectionPayloads.length > 0 ? sectionPayloads : undefined,
     });
 
     // Fire-and-forget anomaly detection (throttled to once per 5 min per campaign)
