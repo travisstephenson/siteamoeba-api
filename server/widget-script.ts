@@ -60,74 +60,79 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   })();
 
   // === HELPER: Apply variant text to a section ===
-  // Handles comma-separated selectors (multi-element headlines):
-  //   - Puts variant text into the FIRST matched element
-  //   - HIDES all other matched elements so there's no duplication
-  //   - Preserves original styling on the surviving element
+  // DESIGN PRINCIPLE: Preserve the original page formatting.
+  // When a selector targets multiple elements (e.g., 3 H1s forming one visual headline),
+  // we DISTRIBUTE the variant text across all elements proportionally by word count.
+  // Each element keeps its own CSS (colors, sizes, weights) — we only change the text.
+  // This ensures the visual rhythm, color accents, and layout remain intact.
   function applySectionVariant(selector, text, testMethod) {
     if (!selector || !text) return;
 
     // Split comma-separated selectors into individual parts
     var parts = selector.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
     var allElements = [];
-
-    // Collect all matching elements across all selector parts, in order
     for (var i = 0; i < parts.length; i++) {
       try {
         var matches = document.querySelectorAll(parts[i]);
         for (var j = 0; j < matches.length; j++) {
-          // Avoid duplicates (same element matched by multiple selectors)
-          if (allElements.indexOf(matches[j]) === -1) {
-            allElements.push(matches[j]);
-          }
+          if (allElements.indexOf(matches[j]) === -1) allElements.push(matches[j]);
         }
-      } catch(e) {
-        console.log("SiteAmoeba: invalid selector part", parts[i], e);
-      }
+      } catch(e) {}
     }
 
-    if (allElements.length === 0) {
-      console.log("SiteAmoeba: no elements found for selector", selector);
+    if (allElements.length === 0) return;
+
+    // === SINGLE ELEMENT: simple replacement ===
+    if (allElements.length === 1) {
+      if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
+        allElements[0].innerHTML = text;
+      } else {
+        allElements[0].textContent = text;
+      }
       return;
     }
 
-    // Capture computed styles from ALL original elements BEFORE making changes
-    // We'll use the element with the most text as the style donor (it's usually the "main" piece)
-    var styleDonor = allElements[0];
-    var maxLen = (allElements[0].textContent || "").length;
-    for (var d = 1; d < allElements.length; d++) {
-      var len = (allElements[d].textContent || "").length;
-      if (len > maxLen) { maxLen = len; styleDonor = allElements[d]; }
-    }
-    var donorStyles = window.getComputedStyle(styleDonor);
-    var preserveProps = ["fontSize", "fontWeight", "fontFamily", "color", "lineHeight", "letterSpacing", "textTransform", "textAlign"];
-    var capturedStyles = {};
-    for (var p = 0; p < preserveProps.length; p++) {
-      capturedStyles[preserveProps[p]] = donorStyles[preserveProps[p]];
+    // === MULTI-ELEMENT: distribute text proportionally ===
+    // Measure original char counts to establish the visual ratio
+    var originalLengths = [];
+    var totalOrigLen = 0;
+    for (var m = 0; m < allElements.length; m++) {
+      var len = (allElements[m].textContent || "").trim().length || 1;
+      originalLengths.push(len);
+      totalOrigLen += len;
     }
 
-    // First element gets the variant text
-    var primary = allElements[0];
-    if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
-      primary.innerHTML = text;
-    } else {
-      primary.textContent = text;
+    // Split variant text into words
+    var words = text.split(/\s+/).filter(Boolean);
+    if (words.length === 0) return;
+
+    // Distribute words across elements proportionally
+    var lines = [];
+    var wordIndex = 0;
+    for (var el = 0; el < allElements.length; el++) {
+      var ratio = originalLengths[el] / totalOrigLen;
+      // Target word count for this line (proportional to original char ratio)
+      var targetWords = Math.max(1, Math.round(ratio * words.length));
+      // Last element gets all remaining words
+      if (el === allElements.length - 1) {
+        lines.push(words.slice(wordIndex).join(" "));
+      } else {
+        lines.push(words.slice(wordIndex, wordIndex + targetWords).join(" "));
+        wordIndex += targetWords;
+        if (wordIndex >= words.length) wordIndex = words.length;
+      }
     }
 
-    // Apply captured styles to the primary element to preserve the original look
-    // (the primary may have had different styling than the "main" visual piece)
-    for (var sp = 0; sp < preserveProps.length; sp++) {
-      var prop = preserveProps[sp];
-      // Convert camelCase to kebab-case for style.setProperty
-      var cssProp = prop.replace(/([A-Z])/g, "-$1").toLowerCase();
-      primary.style.setProperty(cssProp, capturedStyles[prop], "important");
-    }
-
-    // Hide all remaining sibling elements that were part of the same visual headline
-    // This prevents duplication (e.g., 3 H1s that visually form one headline)
-    for (var k = 1; k < allElements.length; k++) {
-      allElements[k].style.display = "none";
-      allElements[k].setAttribute("data-sa-hidden", "true");
+    // Apply each line to its corresponding element — NO style changes, just text
+    for (var n = 0; n < allElements.length; n++) {
+      var lineText = lines[n] || "";
+      if (!lineText) {
+        // If a line is empty (variant text shorter than # of elements), hide it
+        allElements[n].style.display = "none";
+        allElements[n].setAttribute("data-sa-hidden", "true");
+      } else {
+        allElements[n].textContent = lineText;
+      }
     }
   }
 
@@ -206,21 +211,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       var anyApplied = (data.headline && !data.headline.isControl) || (data.subheadline && !data.subheadline.isControl);
       if (anyApplied) postReplacementCheck();
 
-      // In preview mode, add a green outline to the changed element and show banner
-      if (isPreviewMode && anyApplied) {
-        var outlinedEls = document.querySelectorAll("[data-sa-hidden]");
-        // Find the primary (visible) changed element by looking for our replaced text
-        if (data.headline && data.headline.selector && !data.headline.isControl) {
-          try {
-            var firstSel = data.headline.selector.split(",")[0].trim();
-            var el = document.querySelector(firstSel);
-            if (el) {
-              el.style.outline = "3px solid #10b981";
-              el.style.outlineOffset = "4px";
-            }
-          } catch(e) {}
-        }
-      }
+
   }
 
   // === VARIANT ASSIGNMENT (preview vs live) ===
