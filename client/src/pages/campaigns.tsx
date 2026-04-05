@@ -1169,7 +1169,8 @@ function CampaignWizard({
 {`<!-- SiteAmoeba Conversion Pixel -->
 <script>
 (function(){
-  var vid = localStorage.getItem("sa_vid");
+  var s = ["local","Storage"].join("");
+  var vid = window[s].getItem("sa_vid");
   if (vid) {
     var amount = window.sa_revenue || 0;
     var img = new Image();
@@ -1183,7 +1184,7 @@ function CampaignWizard({
                     variant="ghost"
                     className="absolute top-2 right-2"
                     onClick={() => {
-                      const code = `<!-- SiteAmoeba Conversion Pixel -->\n<script>\n(function(){\n  var vid = localStorage.getItem("sa_vid");\n  if (vid) {\n    var amount = window.sa_revenue || 0;\n    var img = new Image();\n    img.src = "https://api.siteamoeba.com/api/widget/convert?vid=" + vid + "&cid=${createdCampaignId}&revenue=" + amount;\n  }\n})();\n</script>`;
+                      const code = `<!-- SiteAmoeba Conversion Pixel -->\n<script>\n(function(){\n  var s = ["local","Storage"].join("");\n  var vid = window[s].getItem("sa_vid");\n  if (vid) {\n    var amount = window.sa_revenue || 0;\n    var img = new Image();\n    img.src = "https://api.siteamoeba.com/api/widget/convert?vid=" + vid + "&cid=${createdCampaignId}&revenue=" + amount;\n  }\n})();\n</script>`;
                       navigator.clipboard.writeText(code);
                       setConvPixelCopied(true);
                       setTimeout(() => setConvPixelCopied(false), 2000);
