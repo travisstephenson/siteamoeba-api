@@ -668,53 +668,88 @@ export async function registerRoutes(server: Server, app: Express) {
     return matched;
   }
 
-  // A) POST /api/settings/connect-stripe
-  app.post("/api/settings/connect-stripe", requireAuth, async (req: Request, res: Response) => {
-    const user = await storage.getUserById(req.userId!);
-    if (!user) return res.status(401).json({ error: "User not found" });
+  // ============== STRIPE CONNECT OAUTH ==============
+  const STRIPE_CONNECT_CLIENT_ID = process.env.STRIPE_CONNECT_CLIENT_ID || "";
+  const STRIPE_REDIRECT_URI = (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "https://api.siteamoeba.com") + "/api/settings/stripe-callback";
 
-    const { stripeSecretKey } = req.body;
-    if (!stripeSecretKey || typeof stripeSecretKey !== "string") {
-      return res.status(400).json({ error: "stripeSecretKey is required" });
+  // A) GET /api/settings/stripe-connect-url — generates the OAuth authorize URL
+  app.get("/api/settings/stripe-connect-url", requireAuth, async (req: Request, res: Response) => {
+    if (!STRIPE_CONNECT_CLIENT_ID) {
+      return res.status(500).json({ error: "Stripe Connect not configured. Contact support." });
     }
-    if (!stripeSecretKey.startsWith("sk_")) {
-      return res.status(400).json({ error: "Invalid Stripe secret key format" });
-    }
-
-    // Verify the key works
-    let account: Stripe.Account;
-    try {
-      const stripeClient = new Stripe(stripeSecretKey);
-      account = await stripeClient.accounts.retrieve();
-    } catch (err: any) {
-      return res.status(400).json({ error: "Invalid Stripe key: " + (err.message || "could not verify") });
-    }
-
-    // Encrypt and save
-    await storage.updateUser(user.id, {
-      stripeAccountId: account.id,
-      stripeAccessToken: encryptApiKey(stripeSecretKey),
-      stripeConnectedAt: new Date().toISOString(),
-    } as any);
-
-    // Backfill existing transactions
-    try {
-      await matchStripeTransactionsToVisitors(user.id);
-    } catch (e) {
-      console.error("Stripe backfill error:", e);
-    }
-
-    res.json({
-      connected: true,
-      accountId: account.id,
-      accountName: account.business_profile?.name || (account.settings as any)?.dashboard?.display_name || null,
-    });
+    const state = `${req.userId!}_${Date.now()}`; // simple state for CSRF
+    const authorizeUrl = `https://connect.stripe.com/oauth/authorize?response_type=code&client_id=${STRIPE_CONNECT_CLIENT_ID}&scope=read_only&state=${encodeURIComponent(state)}&redirect_uri=${encodeURIComponent(STRIPE_REDIRECT_URI)}`;
+    res.json({ url: authorizeUrl, state });
   });
 
-  // B) POST /api/settings/disconnect-stripe
+  // B) GET /api/settings/stripe-callback — Stripe redirects here after user approves
+  app.get("/api/settings/stripe-callback", async (req: Request, res: Response) => {
+    const { code, state, error, error_description } = req.query;
+
+    if (error) {
+      return res.redirect(`https://app.siteamoeba.com/#/settings?stripe_error=${encodeURIComponent(String(error_description || error))}`);
+    }
+
+    if (!code || !state) {
+      return res.redirect("https://app.siteamoeba.com/#/settings?stripe_error=missing_code");
+    }
+
+    // Extract userId from state
+    const userId = parseInt(String(state).split("_")[0]);
+    if (!userId) {
+      return res.redirect("https://app.siteamoeba.com/#/settings?stripe_error=invalid_state");
+    }
+
+    try {
+      // Exchange the authorization code for an access token
+      const platformStripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+      const tokenResponse = await platformStripe.oauth.token({
+        grant_type: "authorization_code",
+        code: String(code),
+      });
+
+      const accessToken = tokenResponse.access_token!;
+      const stripeUserId = tokenResponse.stripe_user_id!;
+
+      // Verify the token works
+      const connectedStripe = new Stripe(accessToken);
+      const account = await connectedStripe.accounts.retrieve(stripeUserId);
+
+      // Save encrypted token
+      await storage.updateUser(userId, {
+        stripeAccountId: stripeUserId,
+        stripeAccessToken: encryptApiKey(accessToken),
+        stripeConnectedAt: new Date().toISOString(),
+      } as any);
+
+      // Backfill transactions (fire-and-forget)
+      matchStripeTransactionsToVisitors(userId).catch(e => console.error("Stripe backfill error:", e));
+
+      // Redirect back to settings with success
+      res.redirect("https://app.siteamoeba.com/#/settings?stripe_connected=true");
+    } catch (err: any) {
+      console.error("Stripe OAuth token exchange failed:", err);
+      res.redirect(`https://app.siteamoeba.com/#/settings?stripe_error=${encodeURIComponent(err.message || "connection_failed")}`);
+    }
+  });
+
+  // C) POST /api/settings/disconnect-stripe
   app.post("/api/settings/disconnect-stripe", requireAuth, async (req: Request, res: Response) => {
     const user = await storage.getUserById(req.userId!);
     if (!user) return res.status(401).json({ error: "User not found" });
+
+    // Optionally deauthorize on Stripe's side
+    try {
+      if (STRIPE_CONNECT_CLIENT_ID && (user as any).stripeAccountId) {
+        const platformStripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
+        await platformStripe.oauth.deauthorize({
+          client_id: STRIPE_CONNECT_CLIENT_ID,
+          stripe_user_id: (user as any).stripeAccountId,
+        });
+      }
+    } catch (e) {
+      console.warn("Stripe deauthorize failed (non-fatal):", e);
+    }
 
     await storage.updateUser(user.id, {
       stripeAccountId: null,
@@ -725,14 +760,14 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({ disconnected: true });
   });
 
-  // C) GET /api/settings/stripe-status
+  // D) GET /api/settings/stripe-status
   app.get("/api/settings/stripe-status", requireAuth, async (req: Request, res: Response) => {
     const user = await storage.getUserById(req.userId!);
     if (!user) return res.status(401).json({ error: "User not found" });
 
     const accessToken = (user as any).stripeAccessToken;
     if (!accessToken) {
-      return res.json({ connected: false });
+      return res.json({ connected: false, connectAvailable: !!STRIPE_CONNECT_CLIENT_ID });
     }
 
     try {
@@ -744,15 +779,16 @@ export async function registerRoutes(server: Server, app: Express) {
         accountId: (user as any).stripeAccountId,
         recentCharges: charges.data.length,
         connectedAt: (user as any).stripeConnectedAt,
+        connectAvailable: true,
       });
     } catch (err) {
-      // Key is invalid — clear it
+      // Token is invalid — clear it
       await storage.updateUser(user.id, {
         stripeAccountId: null,
         stripeAccessToken: null,
         stripeConnectedAt: null,
       } as any);
-      res.json({ connected: false });
+      res.json({ connected: false, connectAvailable: !!STRIPE_CONNECT_CLIENT_ID });
     }
   });
 
@@ -1981,9 +2017,11 @@ export async function registerRoutes(server: Server, app: Express) {
     if (isNaN(campaignId)) {
       return res.status(400).send("/* Invalid campaignId */");
     }
-    // Always use HTTPS for the public API URL (Cloudflare handles SSL)
+    // Use the public API domain for the widget — Railway host header gets the internal hostname
+    // when proxied through Cloudflare, so we hardcode the public domain
     const host = req.get("host") || "localhost";
-    const baseUrl = host.includes("localhost") ? `http://${host}` : `https://${host}`;
+    const PUBLIC_API = process.env.PUBLIC_API_URL || "https://api.siteamoeba.com";
+    const baseUrl = host.includes("localhost") ? `http://${host}` : PUBLIC_API;
     const script = generateWidgetScript(baseUrl, campaignId);
     res.set("Content-Type", "application/javascript");
     res.set("Cache-Control", "public, max-age=300"); // 5-min cache
