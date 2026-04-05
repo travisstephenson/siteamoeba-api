@@ -3248,7 +3248,7 @@ export async function registerRoutes(server: Server, app: Express) {
     // Get the test section for this variant to find the CSS selector
     const testSections = await storage.getTestSectionsByCampaign(campaignId);
     const section = testSections.find((s) => s.id === variant.testSectionId);
-    const selector = section?.cssSelector || "";
+    const selector = section?.selector || "";
 
     // Inject the variant replacement script before </body>
     const injectionScript = `
@@ -3274,11 +3274,19 @@ export async function registerRoutes(server: Server, app: Express) {
   }
 
   function tryApply() {
+    var applied = false;
     if (selector) {
-      var el = document.querySelector(selector);
-      if (el) { applyVariant(el); return; }
+      // Handle comma-separated selectors
+      var selectors = selector.split(",").map(function(s) { return s.trim(); });
+      for (var s = 0; s < selectors.length; s++) {
+        try {
+          var el = document.querySelector(selectors[s]);
+          if (el) { applyVariant(el); applied = true; break; }
+        } catch(e) {}
+      }
+      if (applied) return;
     }
-    // Fallback: try common headline selectors
+    // Fallback: try common headline selectors — but only for headline variants
     var headlineSelectors = ["h1", ".hero h1", "[class*='heading'] h1", "[class*='headline']"];
     for (var i = 0; i < headlineSelectors.length; i++) {
       var h = document.querySelector(headlineSelectors[i]);
@@ -3289,10 +3297,27 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", tryApply);
-  } else {
+  // Try immediately, then retry with increasing delays for dynamic pages (GHL, etc.)
+  var retries = [0, 500, 1000, 2000, 3000, 5000];
+  var variantApplied = false;
+  function attemptApply() {
+    if (variantApplied) return;
     tryApply();
+    // Check if it worked by looking for our outline
+    var styled = document.querySelector('[style*="outline"]');
+    if (styled) variantApplied = true;
+  }
+  
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", function() {
+      retries.forEach(function(delay) {
+        setTimeout(attemptApply, delay);
+      });
+    });
+  } else {
+    retries.forEach(function(delay) {
+      setTimeout(attemptApply, delay);
+    });
   }
 
   // Disable all links and forms to prevent navigation
