@@ -172,7 +172,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   // === PREVIEW MODE DETECTION ===
   // If URL has ?sa_preview=VARIANT_ID, skip normal assignment and apply that specific variant.
   // This lets the dashboard show an accurate preview on the ACTUAL live page.
-  var previewMatch = window.location.search.match(/[?&]sa_preview=(\d+)/);
+  var previewMatch = window.location.search.match(/[?&]sa_preview=(\\d+)/);
   var previewToken = (window.location.search.match(/[?&]sa_token=([^&]+)/) || [])[1] || "";
   var isPreviewMode = !!previewMatch;
 
