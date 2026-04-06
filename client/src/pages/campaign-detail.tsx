@@ -3325,6 +3325,18 @@ function TestSectionCard({
   const leaderVariant = sectionVariants[0];
   const isNotTestable = section.testMethod === "not_testable";
 
+  const [trafficPct, setTrafficPct] = useState<number>((section as any).trafficPercentage ?? 100);
+
+  const trafficMutation = useMutation({
+    mutationFn: async (pct: number) => {
+      const res = await apiRequest("PATCH", `/api/sections/${section.id}`, { trafficPercentage: pct });
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "sections"] });
+    },
+  });
+
   const toggleMutation = useMutation({
     mutationFn: async (active: boolean) => {
       const res = await apiRequest("PATCH", `/api/sections/${section.id}`, { isActive: active });
@@ -3442,6 +3454,38 @@ function TestSectionCard({
       {!isNotTestable && expanded && (
         <div className="border-t border-border">
           <CardContent className="pt-4">
+            {/* Traffic allocation slider */}
+            {section.isActive && (
+              <div className="mb-4 p-3 rounded-lg bg-muted/30 border border-border">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-1.5">
+                    <Activity className="w-3 h-3 text-muted-foreground" />
+                    <span className="text-xs font-medium">Traffic Allocation</span>
+                  </div>
+                  <span className="text-xs font-semibold tabular-nums">
+                    {trafficPct}% in test · {100 - trafficPct}% see control
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="10"
+                  max="100"
+                  step="10"
+                  value={trafficPct}
+                  onChange={e => setTrafficPct(Number(e.target.value))}
+                  onMouseUp={e => trafficMutation.mutate(Number((e.target as HTMLInputElement).value))}
+                  onTouchEnd={e => trafficMutation.mutate(Number((e.target as HTMLInputElement).value))}
+                  className="w-full h-1.5 accent-primary cursor-pointer"
+                  data-testid={`slider-traffic-${section.id}`}
+                />
+                <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                  <span>10% test</span>
+                  <span>50/50 split</span>
+                  <span>100% test</span>
+                </div>
+              </div>
+            )}
+
             {/* Control text from scan */}
             {section.currentText && (
               <div className="mb-4 p-3 rounded-lg bg-muted/40 border border-border">

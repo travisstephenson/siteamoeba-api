@@ -80,6 +80,7 @@ export const campaigns = pgTable("campaigns", {
   pageGoal: text("page_goal"), // direct_purchase, lead_capture, webinar_signup, free_trial, demo_request
   pricePoint: text("price_point"), // product price if applicable
   niche: text("niche"), // auto-detected from page scan
+  pageFacts: text("page_facts"), // verified facts: testimonials, numbers, credentials — AI uses ONLY these for social proof variants
   // Status
   isActive: boolean("is_active").notNull().default(true),
   status: text("status").notNull().default("active"), // 'active' | 'archived' | 'completed'
@@ -135,6 +136,9 @@ export const testSections = pgTable("test_sections", {
   category: text("category").notNull(), // headline, cta, social_proof, etc.
   currentText: text("current_text"), // original text from the page
   testPriority: integer("test_priority").notNull().default(1),
+  // Percentage of incoming traffic that enters this test (1-100). Default 100.
+  // E.g. 20 = 20% see a random variant, 80% see control (original page untouched).
+  trafficPercentage: integer("traffic_percentage").default(100),
   isActive: boolean("is_active").notNull().default(false),
   // Test method: "text_swap" | "visibility_toggle" | "reorder" | "not_testable"
   testMethod: text("test_method").notNull().default("text_swap"),

@@ -18,6 +18,9 @@ export interface GenerationContext {
   existingPersuasionTags?: string[];
   type: string; // headline, subheadline, cta, guarantee, social_proof, etc.
   brainKnowledge?: string; // injected winning patterns from the shared brain
+  // Verified facts about this page — AI must ONLY use these for social proof claims
+  // If not provided, AI must avoid fabricating specific numbers/testimonials
+  pageFacts?: string;
 }
 
 // ============================================================
@@ -60,6 +63,14 @@ Generate high-converting headline or sub-headline variants for A/B testing. Ever
 - Headlines that are too similar to each other — each variant must test a DISTINCT angle
 - Long, convoluted sentences that bury the core promise
 - Starting with "We" or "Our" — focus on the customer, not yourself
+
+## CRITICAL: SOCIAL PROOF AND FACTUAL CLAIMS
+
+This is non-negotiable:
+- If VERIFIED PAGE FACTS are provided, you MUST use ONLY those facts for any social proof, numbers, testimonials, or specific claims
+- If no page facts are provided, DO NOT invent specific numbers, testimonials, customer counts, revenue figures, or any claim that would need to be true to be believable
+- For social proof variants WITHOUT verified facts: use aspirational framing ("What if you could...") or transformation-based copy instead of fabricated data
+- A fabricated social proof headline is worse than no social proof — it destroys trust when discovered
 - Passive voice: weaker than active constructions
 
 ## DIVERSITY REQUIREMENT (CRITICAL)
@@ -120,9 +131,12 @@ export function buildHeadlineGenerationPrompt(
     context.existingPersuasionTags && context.existingPersuasionTags.length > 0
       ? `\nPersuasion strategies already tested: ${context.existingPersuasionTags.join(", ")} — choose DIFFERENT angles`
       : "";
+  const pageFactsInfo = context.pageFacts
+    ? `\n\nVERIFIED PAGE FACTS (use ONLY these for any social proof, numbers, testimonials, or specific claims):\n${context.pageFacts}`
+    : `\n\nNO VERIFIED FACTS: Do not invent customer counts, testimonials, revenue numbers, or specific claims. Use transformation-based or curiosity-based framing instead of fabricated social proof.`;
 
   const userMessage = `Campaign: "${context.campaignName}"
-Page URL: ${context.pageUrl}${nicheInfo}
+Page URL: ${context.pageUrl}${nicheInfo}${pageFactsInfo}
 Section: ${sectionLabel}
 Section purpose: ${sectionPurpose}${controlInfo}${existingVariantsInfo}${tagsInfo}
 

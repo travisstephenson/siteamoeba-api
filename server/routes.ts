@@ -1528,6 +1528,8 @@ export async function registerRoutes(server: Server, app: Express) {
       pageGoal: campaign.pageGoal || undefined,
       pricePoint: campaign.pricePoint || undefined,
       niche: campaign.niche || undefined,
+      // Verified facts: prevents AI from fabricating social proof claims
+      pageFacts: (campaign as any).pageFacts || undefined,
     };
 
     // Get test section info for context — use sectionId if provided (precise), otherwise fall back to first match
@@ -2416,11 +2418,26 @@ export async function registerRoutes(server: Server, app: Express) {
     const headlineVariants = await storage.getActiveVariantsByCampaign(campaignId, "headline");
     const subheadlineVariants = await storage.getActiveVariantsByCampaign(campaignId, "subheadline");
 
+    // Respect traffic percentage for headline/subheadline sections too
+    const headlineSection = allTestSections.find((s: any) => s.isActive && s.category === "headline");
+    const subheadlineSection = allTestSections.find((s: any) => s.isActive && s.category === "subheadline");
+    const headlineTrafficPct = (headlineSection as any)?.trafficPercentage ?? 100;
+    const subheadlineTrafficPct = (subheadlineSection as any)?.trafficPercentage ?? 100;
+    const inHeadlinePool = Math.random() * 100 < headlineTrafficPct;
+    const inSubheadlinePool = Math.random() * 100 < subheadlineTrafficPct;
+
+    const headlineControl = headlineVariants.find((v: any) => v.isControl);
+    const subheadlineControl = subheadlineVariants.find((v: any) => v.isControl);
+
     const hVariant = headlineVariants.length > 0
-      ? headlineVariants[Math.floor(Math.random() * headlineVariants.length)]
+      ? (inHeadlinePool
+          ? headlineVariants[Math.floor(Math.random() * headlineVariants.length)]
+          : (headlineControl || headlineVariants[0]))
       : null;
     const sVariant = subheadlineVariants.length > 0
-      ? subheadlineVariants[Math.floor(Math.random() * subheadlineVariants.length)]
+      ? (inSubheadlinePool
+          ? subheadlineVariants[Math.floor(Math.random() * subheadlineVariants.length)]
+          : (subheadlineControl || subheadlineVariants[0]))
       : null;
 
     // === SECTION-LEVEL TESTS: assign variants for all active non-headline/subheadline sections ===
@@ -2431,13 +2448,19 @@ export async function registerRoutes(server: Server, app: Express) {
     for (const section of allTestSections) {
       if (!section.isActive) continue;
       if (section.category === "headline" || section.category === "subheadline") continue;
+      // Traffic percentage check: if section has e.g. 20% traffic allocation,
+      // 80% of visitors skip the test and see control (original page)
+      const trafficPct = (section as any).trafficPercentage ?? 100;
+      const inTestPool = Math.random() * 100 < trafficPct;
       // Get active variants for this section's category
       const sectionVars = await storage.getActiveVariantsByCampaign(campaignId, section.category);
       if (sectionVars.length === 0) continue;
-      // Randomly assign one
-      const chosen = sectionVars[Math.floor(Math.random() * sectionVars.length)];
-      sectionAssignments[String(section.id)] = chosen.id;
       const sectionControl = sectionVars.find((v: any) => v.isControl);
+      // If not in test pool, always assign control (no DOM change, original page)
+      const chosen = inTestPool
+        ? sectionVars[Math.floor(Math.random() * sectionVars.length)]
+        : (sectionControl || sectionVars[0]);
+      sectionAssignments[String(section.id)] = chosen.id;
       sectionPayloads.push({
         id: chosen.id,
         text: chosen.text,
