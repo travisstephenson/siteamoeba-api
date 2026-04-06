@@ -2145,7 +2145,9 @@ export async function registerRoutes(server: Server, app: Express) {
       isControl: !!variant.isControl,
       selector: section?.selector || campaign.headlineSelector || "",
       testMethod: section?.testMethod || "text_swap",
-      controlText, // used as fallback to find element by current text content
+      // currentText: the actual page text at scan time — most reliable cross-platform fingerprint
+      currentText: section?.currentText || controlText,
+      controlText,
       category: variant.type,
     };
 
@@ -2192,41 +2194,38 @@ export async function registerRoutes(server: Server, app: Express) {
     async function resolveVariantPayload(variant: any) {
       if (!variant) return null;
       const payload: any = { id: variant.id, text: variant.text, isControl: !!variant.isControl };
+      let matchedSection: any = null;
 
       // Strategy 1: Direct link — variant has testSectionId
       if (variant.testSectionId) {
         const section = await storage.getTestSectionById(variant.testSectionId);
-        if (section) {
-          payload.selector = section.selector;
-          payload.testMethod = section.testMethod || "text_swap";
-        }
+        if (section) { matchedSection = section; }
       }
 
       // Strategy 2: Find an active test section for this campaign+category
       // (handles control variants that weren't linked to a test section)
-      if (!payload.selector) {
+      if (!matchedSection) {
         if (!_testSectionsCache[campaignId]) {
           _testSectionsCache[campaignId] = await storage.getTestSectionsByCampaign(campaignId);
         }
         const sections = _testSectionsCache[campaignId] as any[];
-        const matchingSection = sections.find((s: any) =>
-          s.isActive && s.category === variant.type
-        );
-        if (matchingSection) {
-          payload.selector = matchingSection.selector;
-          payload.testMethod = matchingSection.testMethod || "text_swap";
-        }
+        const found = sections.find((s: any) => s.isActive && s.category === variant.type);
+        if (found) { matchedSection = found; }
       }
 
-      // Strategy 3: Campaign-level selector fallback
-      if (!payload.selector) {
-        if (variant.type === "headline" && campaign.headlineSelector) {
-          payload.selector = campaign.headlineSelector;
-        } else if (variant.type === "subheadline" && campaign.subheadlineSelector) {
-          payload.selector = campaign.subheadlineSelector;
-        }
+      if (matchedSection) {
+        payload.selector = matchedSection.selector;
+        payload.testMethod = matchedSection.testMethod || "text_swap";
+        // currentText is the actual rendered text captured at scan time
+        // It's the most reliable cross-platform fingerprint for finding the element
+        payload.currentText = matchedSection.currentText || "";
+      } else if (variant.type === "headline" && campaign.headlineSelector) {
+        payload.selector = campaign.headlineSelector;
+      } else if (variant.type === "subheadline" && campaign.subheadlineSelector) {
+        payload.selector = campaign.subheadlineSelector;
       }
 
+      payload.category = variant.type;
       return payload;
     }
 
@@ -2302,6 +2301,9 @@ export async function registerRoutes(server: Server, app: Express) {
         testMethod: section.testMethod || "text_swap",
         sectionId: section.id,
         category: section.category,
+        // currentText = actual page text captured at scan time (platform-agnostic fingerprint)
+        // controlText = the control variant text (may differ slightly from currentText)
+        currentText: section.currentText || sectionControl?.text || "",
         controlText: sectionControl?.text || "",
       });
     }

@@ -106,60 +106,103 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   //   3. For buttons/CTAs, also search by element type + text content
   // When a selector targets multiple elements (multi-line headlines),
   // distribute text proportionally — each element keeps its own CSS.
-  function applySectionVariant(selector, text, testMethod, controlText, category) {
-    if (!text) return;
+  // === ELEMENT LOOKUP — platform-agnostic, 3-strategy cascade ===
+  // Returns an array of DOM elements to update.
+  // Strategy order is designed to work across GHL, Shopify, WordPress, Clickfunnels, etc.
+  function findElements(selector, currentText, controlText, category) {
+    var elements = [];
 
-    var allElements = [];
-
-    // Strategy 1: Use the stored CSS selector
+    // STRATEGY 1: Exact CSS selector
+    // Fastest. Works if the page hasn't been republished since the scan.
+    // GHL, Clickfunnels, and some builders regenerate these on every publish,
+    // so this may fail — that's why we have fallbacks.
     if (selector) {
       var parts = selector.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
       for (var i = 0; i < parts.length; i++) {
         try {
           var matches = document.querySelectorAll(parts[i]);
           for (var j = 0; j < matches.length; j++) {
-            if (allElements.indexOf(matches[j]) === -1) allElements.push(matches[j]);
+            if (elements.indexOf(matches[j]) === -1) elements.push(matches[j]);
           }
         } catch(e) {}
       }
     }
+    if (elements.length > 0) return elements;
 
-    // Strategy 2: Selector failed (stale class names) — find by control text fingerprint
-    // Uses fuzzy matching: score each candidate by how many control words it contains.
-    // This handles GHL regenerating class names AND minor text differences (e.g. "SAVE MY SPOT" vs "YES, SAVE MY FREE SPOT")
-    if (allElements.length === 0 && controlText) {
-      var ctrlTokens = (controlText || "").trim().toLowerCase().split(/\\s+/).filter(function(w) { return w.length > 2; });
-      if (ctrlTokens.length > 0) {
-        var searchTags = (category === "cta" || category === "button")
-          ? ["button", "[class*='cbutton']", "[class*='btn']", "a"]
-          : ["h1", "h2", "h3", "[class*='cheading']", "[class*='heading']"];
-        var bestScore = 0;
-        var bestEl = null;
-        for (var st = 0; st < searchTags.length; st++) {
-          try {
-            var candidates = document.querySelectorAll(searchTags[st]);
-            for (var sc = 0; sc < candidates.length; sc++) {
-              var candidateText = (candidates[sc].textContent || "").trim().toLowerCase();
-              if (candidateText.length < 2) continue;
-              // Score = number of control tokens found in the candidate text
-              var score = 0;
-              for (var tk = 0; tk < ctrlTokens.length; tk++) {
-                if (candidateText.indexOf(ctrlTokens[tk]) !== -1) score++;
-              }
-              // Accept if 50%+ of tokens match (handles minor text changes)
-              if (score > 0 && score >= Math.ceil(ctrlTokens.length * 0.5)) {
-                if (score > bestScore) { bestScore = score; bestEl = candidates[sc]; }
-              }
+    // STRATEGY 2: Find by actual page text captured at scan time (currentText)
+    // This is the PRIMARY cross-platform approach. Text content is platform-agnostic.
+    // Works on GHL, Shopify, WordPress, Webflow, Clickfunnels, custom HTML — everything.
+    // Uses token scoring so minor text changes (added words, punctuation) still match.
+    var fingerprints = [currentText, controlText].filter(Boolean);
+    for (var fp = 0; fp < fingerprints.length; fp++) {
+      var tokens = (fingerprints[fp] || "").trim().toLowerCase().split(/\\s+/).filter(function(w) { return w.length > 2; });
+      if (tokens.length === 0) continue;
+
+      // Choose candidate tags based on element category
+      var isCTA = category === "cta" || category === "button";
+      var tagSets = isCTA
+        ? ["button", "[class*='btn']", "[class*='cbutton']", "[class*='cta']", "a[href*='#']", "a"]
+        : ["h1", "h2", "h3", "[class*='heading']", "[class*='cheading']", "[class*='title']", "p"];
+
+      var bestScore = 0;
+      var bestEl = null;
+      for (var ts = 0; ts < tagSets.length; ts++) {
+        try {
+          var candidates = document.querySelectorAll(tagSets[ts]);
+          for (var ci = 0; ci < candidates.length; ci++) {
+            var candidateText = (candidates[ci].textContent || "").trim().toLowerCase();
+            if (candidateText.length < 2) continue;
+            // Score: how many of our tokens appear in this candidate?
+            var score = 0;
+            for (var ti = 0; ti < tokens.length; ti++) {
+              if (candidateText.indexOf(tokens[ti]) !== -1) score++;
             }
-          } catch(e) {}
-          if (bestEl) break;
+            // Require 60%+ token match (generous enough for minor text changes,
+            // strict enough to avoid false positives on unrelated elements)
+            var threshold = Math.max(1, Math.ceil(tokens.length * 0.6));
+            if (score >= threshold && score > bestScore) {
+              bestScore = score;
+              bestEl = candidates[ci];
+            }
+          }
+        } catch(e) {}
+      }
+      if (bestEl) { elements.push(bestEl); break; }
+    }
+    if (elements.length > 0) return elements;
+
+    // STRATEGY 3: Broader fallback — any visible text node that partially overlaps
+    // Last resort. Searches all block-level elements for any token overlap.
+    if (fingerprints.length > 0) {
+      var anyTokens = (fingerprints[0] || "").trim().toLowerCase().split(/\\s+/)
+        .filter(function(w) { return w.length > 3; }).slice(0, 3);
+      if (anyTokens.length > 0) {
+        var allEls = document.querySelectorAll("h1,h2,h3,h4,p,button,a,span,div");
+        for (var ai = 0; ai < allEls.length; ai++) {
+          if (allEls[ai].children.length > 5) continue; // skip complex containers
+          var t = (allEls[ai].textContent || "").trim().toLowerCase();
+          if (t.length < 3 || t.length > 500) continue;
+          for (var at = 0; at < anyTokens.length; at++) {
+            if (t.indexOf(anyTokens[at]) !== -1) {
+              elements.push(allEls[ai]);
+              break;
+            }
+          }
+          if (elements.length >= 3) break;
         }
-        if (bestEl) allElements.push(bestEl);
       }
     }
 
+    return elements;
+  }
+
+  function applySectionVariant(selector, text, testMethod, controlText, category, currentText) {
+    if (!text) return;
+
+    var allElements = findElements(selector, currentText, controlText, category);
+
     if (allElements.length === 0) {
-      console.log("SiteAmoeba: no element found for selector '", selector, "' and controlText '", (controlText||'').substring(0,40), "'");
+      console.log("SiteAmoeba: element not found | selector:", selector, "| fingerprint:", (currentText || controlText || "").substring(0, 40));
       return;
     }
 
@@ -263,7 +306,8 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         applySectionVariant(
           data.headline.selector, data.headline.text,
           data.headline.testMethod || "text_swap",
-          data.headline.controlText, data.headline.category || "headline"
+          data.headline.controlText, data.headline.category || "headline",
+          data.headline.currentText
         );
       }
       // Apply subheadline variant — SKIP if control
@@ -271,7 +315,8 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         applySectionVariant(
           data.subheadline.selector, data.subheadline.text,
           data.subheadline.testMethod || "text_swap",
-          data.subheadline.controlText, data.subheadline.category || "subheadline"
+          data.subheadline.controlText, data.subheadline.category || "subheadline",
+          data.subheadline.currentText
         );
       }
       // Apply section variants (body_copy, CTAs, etc.) — SKIP controls
@@ -280,7 +325,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           if (!sv || !sv.text || sv.isControl) return;
           applySectionVariant(
             sv.selector, sv.text, sv.testMethod || "text_swap",
-            sv.controlText, sv.category
+            sv.controlText, sv.category, sv.currentText
           );
         });
       }
@@ -303,43 +348,17 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         var retries = [0, 500, 1000, 2000, 3000, 5000, 8000];
         var applied = false;
         function checkApplied(data) {
-          // Check if the target elements can be found — by selector OR by control text fallback
-          var varData = data.headline || data.subheadline;
-          if (varData) {
-            // Try stored selector first
-            if (varData.selector) {
-              try {
-                var firstSel = varData.selector.split(",")[0].trim();
-                if (document.querySelector(firstSel)) return true;
-              } catch(e) {}
-            }
-            // Try finding by control text (handles stale selectors)
-            if (varData.controlText) {
-              var ctrlSnippet = (varData.controlText || "").trim().toLowerCase().substring(0, 20);
-              var searchIn = document.querySelectorAll("h1, h2, h3, button, [class*='cheading']");
-              for (var s = 0; s < searchIn.length; s++) {
-                if ((searchIn[s].textContent || "").toLowerCase().indexOf(ctrlSnippet) !== -1) return true;
-              }
-            }
-          }
-          if (data.sections && data.sections.length > 0) {
-            for (var i = 0; i < data.sections.length; i++) {
-              var sv = data.sections[i];
-              // Try stored selector
-              if (sv.selector) {
-                try {
-                  if (document.querySelector(sv.selector.split(",")[0].trim())) return true;
-                } catch(e) {}
-              }
-              // Try by control text
-              if (sv.controlText) {
-                var ctrlSnip = (sv.controlText || "").trim().toLowerCase().substring(0, 20);
-                var btns = document.querySelectorAll("button, a, [class*='cbutton']");
-                for (var b = 0; b < btns.length; b++) {
-                  if ((btns[b].textContent || "").toLowerCase().indexOf(ctrlSnip) !== -1) return true;
-                }
-              }
-            }
+          // Use findElements() — the same lookup used at apply time.
+          // If it can find the element, we can apply the variant.
+          var checks = [];
+          if (data.headline) checks.push(data.headline);
+          if (data.subheadline) checks.push(data.subheadline);
+          if (data.sections) data.sections.forEach(function(s) { checks.push(s); });
+          for (var i = 0; i < checks.length; i++) {
+            var v = checks[i];
+            if (!v || !v.text) continue;
+            var found = findElements(v.selector, v.currentText, v.controlText, v.category);
+            if (found.length > 0) return true;
           }
           return false;
         }

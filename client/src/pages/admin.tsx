@@ -9,6 +9,7 @@
 import { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
+import { API_BASE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +30,6 @@ import {
 
 // ─── Admin token (in-memory, separate from user auth) ─────────────────────────
 
-const API_BASE = (window as any).__PORT_5000__ || "";
 let adminToken: string | null = null;
 
 function getAdminToken() { return adminToken; }
