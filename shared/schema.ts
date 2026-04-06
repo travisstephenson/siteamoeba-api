@@ -50,6 +50,8 @@ export const users = pgTable("users", {
   // Whop integration
   whopApiKey: text("whop_api_key"),
   whopConnectedAt: text("whop_connected_at"),
+  // Onboarding metrics
+  firstTestEnabledAt: text("first_test_enabled_at"), // ISO string — when user activated their first test section
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({

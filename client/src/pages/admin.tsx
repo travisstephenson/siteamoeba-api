@@ -25,7 +25,7 @@ import {
   Users, CreditCard, FlaskConical, Activity, TrendingUp,
   LogIn, UserPlus, Trash2, Search, ChevronRight, Building2,
   Shield, PlusCircle, ExternalLink, CheckCircle, XCircle,
-  AlertCircle, Share2, Eye, EyeOff,
+  AlertCircle, Share2, Eye, EyeOff, Clock, Zap, ArrowUpDown,
 } from "lucide-react";
 
 // ─── Admin token (in-memory, separate from user auth) ─────────────────────────
@@ -53,6 +53,12 @@ async function adminFetch(path: string, opts: RequestInit = {}) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatTTFT(minutes: number): string {
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 1440) return `${Math.round(minutes / 60)}h`;
+  return `${Math.round(minutes / 1440)}d`;
+}
 
 function planBadge(plan: string) {
   const config: Record<string, { label: string; className: string }> = {
@@ -515,6 +521,7 @@ export default function AdminPage() {
   const [search, setSearch] = useState("");
   const [filterPlan, setFilterPlan] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [sortBy, setSortBy] = useState<"newest" | "ttft" | "visitors" | "credits">("newest");
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [showCreateUser, setShowCreateUser] = useState(false);
 
@@ -556,6 +563,17 @@ export default function AdminPage() {
     const matchPlan = filterPlan === "all" || u.plan === filterPlan;
     const matchStatus = filterStatus === "all" || u.accountStatus === filterStatus;
     return matchSearch && matchPlan && matchStatus;
+  }).sort((a, b) => {
+    if (sortBy === "ttft") {
+      // Users with no TTFT go to end; lower TTFT (faster) first
+      if (a.ttftMinutes == null && b.ttftMinutes == null) return 0;
+      if (a.ttftMinutes == null) return 1;
+      if (b.ttftMinutes == null) return -1;
+      return a.ttftMinutes - b.ttftMinutes;
+    }
+    if (sortBy === "visitors") return (b.totalVisitors ?? 0) - (a.totalVisitors ?? 0);
+    if (sortBy === "credits") return (b.creditsUsed ?? 0) - (a.creditsUsed ?? 0);
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(); // newest
   });
 
   return (
@@ -631,6 +649,8 @@ export default function AdminPage() {
               <StatCard label="Tests Won" value={stats?.testsWon ?? 0} sub={`${stats?.testsCompleted ?? 0} completed`} icon={CheckCircle} color="text-emerald-500" />
               <StatCard label="Visitors (30d)" value={(stats?.visitorsLast30Days ?? 0).toLocaleString()} sub="all campaigns" icon={TrendingUp} color="text-teal-500" />
               <StatCard label="All-Time Visitors" value={(stats?.totalVisitorsAllTime ?? 0).toLocaleString()} sub={`${stats?.totalConversions ?? 0} conversions`} icon={Activity} color="text-teal-400" />
+              <StatCard label="Avg TTFT" value={stats?.avgTTFTMinutes != null ? formatTTFT(stats.avgTTFTMinutes) : "—"} sub={`${stats?.usersWithFirstTest ?? 0} users w/ test`} icon={Clock} color="text-amber-500" />
+              <StatCard label="Fastest TTFT" value={stats?.shortestTTFTMinutes != null ? formatTTFT(stats.shortestTTFTMinutes) : "—"} sub="account → first test" icon={Zap} color="text-green-500" />
             </>}
           </div>
           {stats?.planBreakdown && (
@@ -678,6 +698,15 @@ export default function AdminPage() {
                   ))}
                 </SelectContent>
               </Select>
+              <Select value={sortBy} onValueChange={v => setSortBy(v as any)}>
+                <SelectTrigger className="w-36 gap-1"><ArrowUpDown className="w-3 h-3" /><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="newest">Newest first</SelectItem>
+                  <SelectItem value="ttft">Fastest TTFT</SelectItem>
+                  <SelectItem value="visitors">Most visitors</SelectItem>
+                  <SelectItem value="credits">Most credits used</SelectItem>
+                </SelectContent>
+              </Select>
               <p className="text-xs text-muted-foreground self-center ml-1">
                 {filteredUsers.length} of {users?.length ?? 0}
               </p>
@@ -685,11 +714,12 @@ export default function AdminPage() {
 
             <Card>
               <div className="divide-y divide-border">
-                <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 px-4 py-2 text-xs font-medium text-muted-foreground">
+                <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] gap-4 px-4 py-2 text-xs font-medium text-muted-foreground">
                   <span>User</span>
                   <span className="text-center w-20">Plan</span>
                   <span className="text-center w-20">Credits</span>
                   <span className="text-center w-20">Campaigns</span>
+                  <span className="text-center w-16">TTFT</span>
                   <span className="text-center w-20">Status</span>
                   <span className="w-4" />
                 </div>
@@ -699,7 +729,7 @@ export default function AdminPage() {
                   <div className="py-12 text-center text-muted-foreground text-sm">No users match your filters</div>
                 ) : filteredUsers.map(u => (
                   <div key={u.id}
-                    className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 px-4 py-3 items-center cursor-pointer hover:bg-muted/40 transition-colors"
+                    className="grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] gap-4 px-4 py-3 items-center cursor-pointer hover:bg-muted/40 transition-colors"
                     onClick={() => setSelectedUserId(u.id)}
                     data-testid={`user-row-${u.id}`}>
                     <div className="min-w-0">
@@ -710,6 +740,11 @@ export default function AdminPage() {
                     <div className="w-20 flex justify-center">{planBadge(u.plan)}</div>
                     <div className="w-20 text-center"><span className="text-xs tabular-nums">{u.creditsUsed}/{u.creditsLimit}</span></div>
                     <div className="w-20 text-center"><span className="text-xs">{u.activeCampaigns} active</span></div>
+                    <div className="w-16 text-center">
+                      {u.ttftMinutes != null
+                        ? <span className="text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">{formatTTFT(u.ttftMinutes)}</span>
+                        : <span className="text-xs text-muted-foreground">—</span>}
+                    </div>
                     <div className="w-20 flex justify-center">{statusBadge(u.accountStatus)}</div>
                     <ChevronRight className="w-4 h-4 text-muted-foreground" />
                   </div>

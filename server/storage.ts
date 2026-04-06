@@ -615,6 +615,9 @@ class StorageImpl implements IStorage {
       ALTER TABLE users ADD COLUMN IF NOT EXISTS whop_api_key TEXT;
       ALTER TABLE users ADD COLUMN IF NOT EXISTS whop_connected_at TEXT;
     `);
+    await pool.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS first_test_enabled_at TEXT;
+    `);
   }
 
   // ===== Users =====
@@ -646,6 +649,7 @@ class StorageImpl implements IStorage {
       trialEndsAt: row.trial_ends_at,
       adminNotes: row.admin_notes_user,
       accountStatus: row.account_status || 'active',
+      firstTestEnabledAt: row.first_test_enabled_at || null,
     })) as User[];
   }
 

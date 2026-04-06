@@ -531,6 +531,12 @@ export async function registerRoutes(server: Server, app: Express) {
     }
     const totalARR = totalMRR * 12;
 
+    // TTFT calculations
+    const ttftUsers = (allUsers as any[]).filter(u => u.firstTestEnabledAt && u.createdAt);
+    const ttftMs = ttftUsers.map(u => new Date(u.firstTestEnabledAt).getTime() - new Date(u.createdAt).getTime()).filter(ms => ms > 0);
+    const avgTTFT = ttftMs.length ? Math.round(ttftMs.reduce((a, b) => a + b, 0) / ttftMs.length / 60000) : null; // minutes
+    const shortestTTFT = ttftMs.length ? Math.round(Math.min(...ttftMs) / 60000) : null; // minutes
+
     res.json({
       // Users
       totalUsers: allUsers.length,
@@ -554,6 +560,10 @@ export async function registerRoutes(server: Server, app: Express) {
       totalMRR,
       totalARR,
       platformRevenue: parseFloat(platformRevenue.rows[0]?.total) || 0,
+      // TTFT
+      avgTTFTMinutes: avgTTFT,
+      shortestTTFTMinutes: shortestTTFT,
+      usersWithFirstTest: ttftMs.length,
     });
   });
 
@@ -593,6 +603,10 @@ export async function registerRoutes(server: Server, app: Express) {
         activeCampaigns: parseInt(campaigns.rows[0]?.cnt) || 0,
         activeTests: parseInt(tests.rows[0]?.cnt) || 0,
         totalVisitors: parseInt(visitors.rows[0]?.cnt) || 0,
+        firstTestEnabledAt: (u as any).firstTestEnabledAt || null,
+        ttftMinutes: (u as any).firstTestEnabledAt && u.createdAt
+          ? Math.max(0, Math.round((new Date((u as any).firstTestEnabledAt).getTime() - new Date(u.createdAt).getTime()) / 60000))
+          : null,
       };
     }));
     res.json(enriched);
@@ -1474,6 +1488,18 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     const updated = await storage.updateTestSection(paramId(req.params.id), req.body);
+
+    // Track TTFT: record first time user ever activates a test
+    if (req.body.isActive === true && !result.isActive) {
+      const user = await storage.getUserById(req.userId!);
+      if (user && !(user as any).firstTestEnabledAt) {
+        await pool.query(
+          'UPDATE users SET first_test_enabled_at = $1 WHERE id = $2',
+          [new Date().toISOString(), req.userId]
+        );
+      }
+    }
+
     res.json(updated);
   });
 
