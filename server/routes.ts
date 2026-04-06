@@ -1941,10 +1941,32 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     // Gather campaign context
-    const variantStats = await storage.getVariantStats(campaign.id);
-    const testSections = await storage.getTestSectionsByCampaign(campaign.id);
+    const allVariantStats = await storage.getVariantStats(campaign.id);
+    const allTestSections = await storage.getTestSectionsByCampaign(campaign.id);
+
+    // === CRITICAL: Only surface ACTIVE test data to the Brain ===
+    // Inactive sections and their variants must NEVER be shown as part of a running test.
+    // The AI must know exactly what is live vs. paused, or it will fabricate test issues.
+    const activeTestSections = allTestSections.filter(s => s.isActive);
+    const activeSectionCategories = new Set(activeTestSections.map(s => s.category));
+
+    // Only include variant stats for sections that are actively testing
+    // (active section exists + at least one active non-control challenger)
+    const activeVariantStats = allVariantStats.filter(v => {
+      if (!v.isActive) return false;
+      // Must belong to an active section (by testSectionId or by category match to active section)
+      if (v.testSectionId) {
+        return activeTestSections.some(s => s.id === v.testSectionId);
+      }
+      return activeSectionCategories.has(v.type);
+    });
+
+    // Are any tests actually running right now?
+    const testsAreRunning = activeTestSections.length > 0 &&
+      activeVariantStats.some(v => !v.isControl);
+
     const totalVisitors = await storage.getVisitorCountByCampaign(campaign.id);
-    const totalConversions = variantStats.reduce((sum, v) => sum + (v.type === "headline" ? v.conversions : 0), 0);
+    const totalConversions = allVariantStats.reduce((sum, v) => sum + (v.type === "headline" ? v.conversions : 0), 0);
     const conversionRate = totalVisitors > 0 ? (totalConversions / totalVisitors) * 100 : 0;
 
     const brainKnowledge = getBrainPageAuditKnowledge();
@@ -1993,9 +2015,7 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     // Get relevant test lessons for context
-    const sectionTypesActive = testSections.map(s => s.category);
-    // Use most common section type from this campaign's active sections as the primary query
-    const primarySectionType = sectionTypesActive[0] || "headline";
+    const primarySectionType = activeTestSections[0]?.category || "headline";
     const testLessonsText = await getRelevantTestLessons(
       campaign.pageType || "sales_page",
       primarySectionType,
@@ -2005,37 +2025,39 @@ export async function registerRoutes(server: Server, app: Express) {
     const chatContext = {
       campaignUrl: campaign.url,
       campaignName: campaign.name,
-      pageContent, // actual text content from the page
-      sections: testSections.map(s => ({
+      pageContent,
+      // ONLY active sections with live tests
+      sections: activeTestSections.map(s => ({
         label: s.label,
         category: s.category,
         currentText: s.currentText,
-        isActive: s.isActive,
+        isActive: true,
         testMethod: s.testMethod,
       })),
-      variants: variantStats.map(v => ({
+      // ONLY variants from active sections
+      variants: activeVariantStats.map(v => ({
         id: v.variantId,
         text: v.text,
         type: v.type,
         isControl: v.isControl,
-        isActive: v.isActive,
+        isActive: true,
         visitors: v.impressions,
         conversions: v.conversions,
         conversionRate: v.conversionRate * 100,
         confidence: v.confidence,
         persuasionTags: v.persuasionTags,
       })),
+      // State of testing — explicitly included so AI never guesses
+      testsAreRunning,
       totalVisitors,
       totalConversions,
       conversionRate,
       brainKnowledge: brainKnowledge + dynamicBrainKnowledge,
       winConfidenceThreshold: user.winConfidenceThreshold,
-      // Page context fields
       pageType: campaign.pageType || undefined,
       pageGoal: campaign.pageGoal || undefined,
       pricePoint: campaign.pricePoint || undefined,
       niche: campaign.niche || undefined,
-      // Real test data from past lessons
       testLessons: testLessonsText || undefined,
     };
 
@@ -2053,11 +2075,15 @@ export async function registerRoutes(server: Server, app: Express) {
         `Total visitors: ${chatContext.totalVisitors}`,
         `Total conversions: ${chatContext.totalConversions}`,
         `Conversion rate: ${chatContext.conversionRate.toFixed(2)}%`,
-        chatContext.sections.length > 0
-          ? `\nActive sections:\n${chatContext.sections.map(s => `  - ${s.label} (${s.category}): "${(s.currentText || "").slice(0, 80)}"`).join("\n")}`
+        // CRITICAL: Explicitly state testing state so AI never fabricates split-test issues
+        chatContext.testsAreRunning
+          ? `\nTEST STATUS: ACTIVE — ${chatContext.sections.length} section(s) currently being tested.`
+          : `\nTEST STATUS: NO TESTS RUNNING — All test sections are currently paused or disabled. The page is showing 100% original content to all visitors. Do NOT suggest split-test issues as a cause of any conversion problems.`,
+        chatContext.sections.length > 0 && chatContext.testsAreRunning
+          ? `\nActive test sections:\n${chatContext.sections.map(s => `  - ${s.label} (${s.category}): "${(s.currentText || "").slice(0, 80)}"`).join("\n")}`
           : "",
-        chatContext.variants.length > 0
-          ? `\nVariants:\n${chatContext.variants.map(v => `  - "${(v.text || "").slice(0, 60)}" | ${v.visitors} visitors | ${v.conversions} conversions | ${v.conversionRate.toFixed(2)}% CVR | ${v.confidence.toFixed(0)}% confidence${v.isControl ? " (control)" : ""}${v.isActive ? " [active]" : ""}`).join("\n")}`
+        chatContext.variants.length > 0 && chatContext.testsAreRunning
+          ? `\nActive variants:\n${chatContext.variants.map(v => `  - "${(v.text || "").slice(0, 60)}" | ${v.visitors} visitors | ${v.conversions} conversions | ${v.conversionRate.toFixed(2)}% CVR | ${v.confidence.toFixed(0)}% confidence${v.isControl ? " (CONTROL)" : " (CHALLENGER)"}`).join("\n")}`
           : "",
         chatContext.pageContent ? `\nPage content excerpt:\n${chatContext.pageContent.slice(0, 2000)}` : "",
         chatContext.brainKnowledge ? `\n${chatContext.brainKnowledge.slice(0, 1500)}` : "",

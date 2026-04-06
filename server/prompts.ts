@@ -595,6 +595,8 @@ export interface BrainChatContext {
   pageContent?: string; // actual text scraped from the page
   sections: BrainChatSectionContext[];
   variants: BrainChatVariantContext[];
+  // Explicit testing state flag — MUST be surfaced to the AI so it never fabricates test issues
+  testsAreRunning?: boolean;
   totalVisitors: number;
   totalConversions: number;
   conversionRate: number;
@@ -648,8 +650,22 @@ ${context.testLessons}
 `
     : "";
 
+  // Explicit testing state banner — shown prominently so the AI can't miss it
+  const testStatusBanner = context.testsAreRunning === false
+    ? `## ⚠️ IMPORTANT: NO ACTIVE TESTS RUNNING
+All test sections for this campaign are currently PAUSED or DISABLED.
+The page is showing its ORIGINAL content to 100% of visitors — there is NO split testing in progress.
+Do NOT attribute any conversion rate changes to split testing or variant delivery.
+Do NOT suggest that "uneven traffic splits" or "too many variants" are causing problems.
+Any conversion rate issues are caused by the page itself, traffic sources, or external factors — NOT by testing.
+`
+    : context.sections.length > 0
+      ? `## TESTING STATUS: ACTIVE\n${context.sections.length} section(s) are actively being tested with live traffic splits.\n`
+      : `## TESTING STATUS: NO SECTIONS CONFIGURED YET\nNo test sections have been set up for this campaign.\n`;
+
   const systemPrompt = `You are the SiteAmoeba Brain — an expert conversion rate optimization consultant embedded inside the SiteAmoeba dashboard. You have full context about this user's A/B testing campaign and page performance.
 
+${testStatusBanner}
 ## CAMPAIGN CONTEXT
 Page URL: ${context.campaignUrl}
 Campaign: ${context.campaignName}
@@ -661,11 +677,7 @@ Confidence Threshold Setting: ${context.winConfidenceThreshold ?? 95}%
 ## ACTUAL PAGE CONTENT (scraped from ${context.campaignUrl})
 ${context.pageContent ? context.pageContent : "(Page content could not be fetched. Base your analysis on the test sections and variant data below.)"}
 
-## TEST SECTIONS
-${sectionSummary}
-
-## VARIANT PERFORMANCE
-${variantSummary}
+${context.testsAreRunning !== false ? `## ACTIVE TEST SECTIONS\n${sectionSummary}\n\n## VARIANT PERFORMANCE\n${variantSummary}` : "(No test data to show — tests are paused)"}
 
 ## YOUR ROLE
 - You have READ the actual page content above. When the user asks about their page, reference SPECIFIC text, sections, and elements you can see in the content.
