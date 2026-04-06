@@ -143,6 +143,11 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 }
 
 export async function registerRoutes(server: Server, app: Express) {
+  // Health check — used by Railway and monitoring
+  app.get("/api/health", (_req, res) => {
+    res.json({ status: "ok", ts: Date.now() });
+  });
+
   // ============== AUTH (JWT-based) ==============
 
   app.post("/api/auth/register", authLimiter, async (req: Request, res: Response) => {
