@@ -59,36 +59,103 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     return params;
   })();
 
+  // === HELPER: Find the innermost text node of an element ===
+  // GHL buttons, CTAs, and some headings use nested divs for text.
+  // e.g. <button><div class="main-heading-group"><div class="main-heading-button">TEXT</div>...
+  // We need to find the actual text-bearing child, not just set textContent on the parent.
+  function findTextTarget(el) {
+    // Known GHL text container classes
+    var GHL_TEXT_CLASSES = [
+      "main-heading-button", "main-heading", "button-text",
+      "text-output", "heading-text", "hl-text"
+    ];
+    for (var k = 0; k < GHL_TEXT_CLASSES.length; k++) {
+      var inner = el.querySelector("." + GHL_TEXT_CLASSES[k]);
+      if (inner && (inner.textContent || "").trim().length > 0) return inner;
+    }
+    // Fallback: find the deepest child that has meaningful text and no sub-elements with text
+    var candidates = el.querySelectorAll("*");
+    var bestLeaf = el; // default to the element itself
+    for (var c = 0; c < candidates.length; c++) {
+      var candidate = candidates[c];
+      var directText = (candidate.textContent || "").trim();
+      if (directText.length > 2 && candidate.children.length === 0) {
+        bestLeaf = candidate;
+        break;
+      }
+    }
+    return bestLeaf;
+  }
+
+  // === HELPER: Apply text to an element, targeting inner text nodes correctly ===
+  function applyTextToElement(el, text, testMethod) {
+    if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
+      el.innerHTML = text;
+      return;
+    }
+    // Find the actual text target inside the element
+    var target = findTextTarget(el);
+    target.textContent = text;
+  }
+
   // === HELPER: Apply variant text to a section ===
   // DESIGN PRINCIPLE: Preserve the original page formatting.
-  // When a selector targets multiple elements (e.g., 3 H1s forming one visual headline),
-  // we DISTRIBUTE the variant text across all elements proportionally by word count.
-  // Each element keeps its own CSS (colors, sizes, weights) — we only change the text.
-  // This ensures the visual rhythm, color accents, and layout remain intact.
-  function applySectionVariant(selector, text, testMethod) {
-    if (!selector || !text) return;
+  // Three strategies for finding the right element:
+  //   1. Use the stored CSS selector directly
+  //   2. If selector fails (GHL regenerates class names), find by control text fingerprint
+  //   3. For buttons/CTAs, also search by element type + text content
+  // When a selector targets multiple elements (multi-line headlines),
+  // distribute text proportionally — each element keeps its own CSS.
+  function applySectionVariant(selector, text, testMethod, controlText, category) {
+    if (!text) return;
 
-    // Split comma-separated selectors into individual parts
-    var parts = selector.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
     var allElements = [];
-    for (var i = 0; i < parts.length; i++) {
-      try {
-        var matches = document.querySelectorAll(parts[i]);
-        for (var j = 0; j < matches.length; j++) {
-          if (allElements.indexOf(matches[j]) === -1) allElements.push(matches[j]);
-        }
-      } catch(e) {}
+
+    // Strategy 1: Use the stored CSS selector
+    if (selector) {
+      var parts = selector.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+      for (var i = 0; i < parts.length; i++) {
+        try {
+          var matches = document.querySelectorAll(parts[i]);
+          for (var j = 0; j < matches.length; j++) {
+            if (allElements.indexOf(matches[j]) === -1) allElements.push(matches[j]);
+          }
+        } catch(e) {}
+      }
     }
 
-    if (allElements.length === 0) return;
+    // Strategy 2: Selector failed (stale class names) — find by control text fingerprint
+    // This handles GHL's habit of regenerating unique class names on every page publish
+    if (allElements.length === 0 && controlText) {
+      var ctrlWords = (controlText || "").trim().toLowerCase().split(/\s+/).slice(0, 4).join(" ");
+      if (ctrlWords.length > 3) {
+        // Which tag to search depends on section category
+        var searchTags = category === "cta" || category === "button"
+          ? ["button", "a", "[class*='btn']", "[class*='cbutton']", "[class*='cta']"]
+          : ["h1", "h2", "h3", "p", "[class*='cheading']", "[class*='heading']"];
+        for (var st = 0; st < searchTags.length; st++) {
+          try {
+            var candidates = document.querySelectorAll(searchTags[st]);
+            for (var sc = 0; sc < candidates.length; sc++) {
+              var candidateText = (candidates[sc].textContent || "").trim().toLowerCase();
+              if (candidateText.indexOf(ctrlWords) !== -1 || ctrlWords.indexOf(candidateText.substring(0, 20)) !== -1) {
+                if (allElements.indexOf(candidates[sc]) === -1) allElements.push(candidates[sc]);
+              }
+            }
+          } catch(e) {}
+          if (allElements.length > 0) break;
+        }
+      }
+    }
+
+    if (allElements.length === 0) {
+      console.log("SiteAmoeba: no element found for selector '", selector, "' and controlText '", (controlText||'').substring(0,40), "'");
+      return;
+    }
 
     // === SINGLE ELEMENT: simple replacement ===
     if (allElements.length === 1) {
-      if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
-        allElements[0].innerHTML = text;
-      } else {
-        allElements[0].textContent = text;
-      }
+      applyTextToElement(allElements[0], text, testMethod);
       return;
     }
 
@@ -127,11 +194,10 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     for (var n = 0; n < allElements.length; n++) {
       var lineText = lines[n] || "";
       if (!lineText) {
-        // If a line is empty (variant text shorter than # of elements), hide it
         allElements[n].style.display = "none";
         allElements[n].setAttribute("data-sa-hidden", "true");
       } else {
-        allElements[n].textContent = lineText;
+        applyTextToElement(allElements[n], lineText, testMethod);
       }
     }
   }
@@ -184,27 +250,28 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   function handleAssignData(data) {
       // Apply headline variant — SKIP if control (let original page be the control)
       if (data.headline && data.headline.text && !data.headline.isControl) {
-        if (data.headline.selector) {
-          applySectionVariant(data.headline.selector, data.headline.text, data.headline.testMethod || "text_swap");
-        } else {
-          applyLegacyVariant("h1", data.headline.text, "text_swap");
-        }
+        applySectionVariant(
+          data.headline.selector, data.headline.text,
+          data.headline.testMethod || "text_swap",
+          data.headline.controlText, data.headline.category || "headline"
+        );
       }
       // Apply subheadline variant — SKIP if control
       if (data.subheadline && data.subheadline.text && !data.subheadline.isControl) {
-        if (data.subheadline.selector) {
-          applySectionVariant(data.subheadline.selector, data.subheadline.text, data.subheadline.testMethod || "text_swap");
-        } else {
-          applyLegacyVariant("h2", data.subheadline.text, "text_swap");
-        }
+        applySectionVariant(
+          data.subheadline.selector, data.subheadline.text,
+          data.subheadline.testMethod || "text_swap",
+          data.subheadline.controlText, data.subheadline.category || "subheadline"
+        );
       }
       // Apply section variants (body_copy, CTAs, etc.) — SKIP controls
       if (data.sections && Array.isArray(data.sections)) {
         data.sections.forEach(function(sv) {
           if (!sv || !sv.text || sv.isControl) return;
-          if (sv.selector) {
-            applySectionVariant(sv.selector, sv.text, sv.testMethod || "text_swap");
-          }
+          applySectionVariant(
+            sv.selector, sv.text, sv.testMethod || "text_swap",
+            sv.controlText, sv.category
+          );
         });
       }
       // Final page integrity check — only if any non-control variants were applied
@@ -226,17 +293,41 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         var retries = [0, 500, 1000, 2000, 3000, 5000, 8000];
         var applied = false;
         function checkApplied(data) {
-          // For headline/subheadline, check if the selector elements exist
+          // Check if the target elements can be found — by selector OR by control text fallback
           var varData = data.headline || data.subheadline;
-          if (varData && varData.selector) {
-            var firstSel = varData.selector.split(",")[0].trim();
-            try { return !!document.querySelector(firstSel); } catch(e) { return false; }
+          if (varData) {
+            // Try stored selector first
+            if (varData.selector) {
+              try {
+                var firstSel = varData.selector.split(",")[0].trim();
+                if (document.querySelector(firstSel)) return true;
+              } catch(e) {}
+            }
+            // Try finding by control text (handles stale selectors)
+            if (varData.controlText) {
+              var ctrlSnippet = (varData.controlText || "").trim().toLowerCase().substring(0, 20);
+              var searchIn = document.querySelectorAll("h1, h2, h3, button, [class*='cheading']");
+              for (var s = 0; s < searchIn.length; s++) {
+                if ((searchIn[s].textContent || "").toLowerCase().indexOf(ctrlSnippet) !== -1) return true;
+              }
+            }
           }
-          // For sections, check if any section selector exists
           if (data.sections && data.sections.length > 0) {
             for (var i = 0; i < data.sections.length; i++) {
-              if (data.sections[i].selector) {
-                try { return !!document.querySelector(data.sections[i].selector.split(",")[0].trim()); } catch(e) {}
+              var sv = data.sections[i];
+              // Try stored selector
+              if (sv.selector) {
+                try {
+                  if (document.querySelector(sv.selector.split(",")[0].trim())) return true;
+                } catch(e) {}
+              }
+              // Try by control text
+              if (sv.controlText) {
+                var ctrlSnip = (sv.controlText || "").trim().toLowerCase().substring(0, 20);
+                var btns = document.querySelectorAll("button, a, [class*='cbutton']");
+                for (var b = 0; b < btns.length; b++) {
+                  if ((btns[b].textContent || "").toLowerCase().indexOf(ctrlSnip) !== -1) return true;
+                }
               }
             }
           }

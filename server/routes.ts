@@ -2132,12 +2132,21 @@ export async function registerRoutes(server: Server, app: Express) {
       section = testSections.find(s => s.isActive && s.category === variant.type);
     }
 
+    // Also get the control text so the widget can find elements by content fingerprint
+    const controlVariant = await pool.query(
+      `SELECT text FROM variants WHERE campaign_id = $1 AND type = $2 AND is_control = true AND is_active = true LIMIT 1`,
+      [campaignId, variant.type]
+    );
+    const controlText = controlVariant.rows[0]?.text || "";
+
     const payload: any = {
       id: variant.id,
       text: variant.text,
       isControl: !!variant.isControl,
       selector: section?.selector || campaign.headlineSelector || "",
       testMethod: section?.testMethod || "text_swap",
+      controlText, // used as fallback to find element by current text content
+      category: variant.type,
     };
 
     // Return in the same shape as the assign endpoint
@@ -2145,8 +2154,7 @@ export async function registerRoutes(server: Server, app: Express) {
     if (variant.type === "headline") result.headline = payload;
     else if (variant.type === "subheadline") result.subheadline = payload;
     else {
-      // For non-headline/subheadline types, return as sections array
-      result.sections = [{ ...payload, selector: payload.selector }];
+      result.sections = [{ ...payload }];
     }
 
     res.json(result);
@@ -2285,6 +2293,7 @@ export async function registerRoutes(server: Server, app: Express) {
       // Randomly assign one
       const chosen = sectionVars[Math.floor(Math.random() * sectionVars.length)];
       sectionAssignments[String(section.id)] = chosen.id;
+      const sectionControl = sectionVars.find((v: any) => v.isControl);
       sectionPayloads.push({
         id: chosen.id,
         text: chosen.text,
@@ -2292,6 +2301,8 @@ export async function registerRoutes(server: Server, app: Express) {
         selector: section.selector,
         testMethod: section.testMethod || "text_swap",
         sectionId: section.id,
+        category: section.category,
+        controlText: sectionControl?.text || "",
       });
     }
 
