@@ -40,7 +40,6 @@ function SidebarLayout() {
               <Route path="/billing" component={BillingPage} />
               <Route path="/referrals" component={ReferralsPage} />
               <Route path="/settings" component={SettingsPage} />
-              <Route path="/admin" component={AdminPage} />
               <Route component={NotFound} />
             </Switch>
           </main>
@@ -53,8 +52,9 @@ function SidebarLayout() {
 function AppRouter() {
   return (
     <Switch>
-      {/* Auth page — full page, no sidebar */}
+      {/* Standalone full-page routes — no sidebar */}
       <Route path="/auth" component={AuthPage} />
+      <Route path="/admin" component={AdminPage} />
       {/* All other routes — with sidebar */}
       <Route component={SidebarLayout} />
     </Switch>
