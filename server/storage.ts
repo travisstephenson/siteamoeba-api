@@ -619,7 +619,34 @@ class StorageImpl implements IStorage {
 
   // ===== Users =====
   async getAllUsers(): Promise<User[]> {
-    return db.select().from(users).orderBy(users.createdAt).all() as User[];
+    const result = await pool.query('SELECT * FROM users ORDER BY created_at DESC');
+    return result.rows.map((row: any) => ({
+      id: row.id,
+      email: row.email,
+      name: row.name,
+      passwordHash: row.password_hash,
+      stripeCustomerId: row.stripe_customer_id,
+      stripeSubscriptionId: row.stripe_subscription_id,
+      plan: row.plan,
+      creditsUsed: row.credits_used,
+      creditsLimit: row.credits_limit,
+      campaignsLimit: row.campaigns_limit,
+      createdAt: row.created_at,
+      llmProvider: row.llm_provider,
+      llmApiKey: row.llm_api_key,
+      llmModel: row.llm_model,
+      minVisitorsPerVariant: row.min_visitors_per_variant,
+      winConfidenceThreshold: row.win_confidence_threshold,
+      allowOverage: row.allow_overage,
+      overageCreditsUsed: row.overage_credits_used,
+      concurrentTestLimit: row.concurrent_test_limit,
+      referralCode: row.referral_code,
+      referredBy: row.referred_by,
+      isAdmin: row.is_admin,
+      trialEndsAt: row.trial_ends_at,
+      adminNotes: row.admin_notes_user,
+      accountStatus: row.account_status || 'active',
+    })) as User[];
   }
 
   async getUserById(id: number): Promise<User | undefined> {

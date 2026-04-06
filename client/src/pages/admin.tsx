@@ -595,7 +595,7 @@ export default function AdminPage() {
               <StatCard label="Visitors (30d)" value={(stats?.visitorsLast30Days ?? 0).toLocaleString()} icon={TrendingUp} color="text-teal-500" />
             </>}
           </div>
-          {stats && (
+          {stats?.planBreakdown && (
             <div className="flex flex-wrap gap-2 mt-3">
               {Object.entries(stats.planBreakdown).map(([plan, count]) => (
                 <div key={plan} className="flex items-center gap-1.5 bg-muted/60 rounded-full px-3 py-1">
