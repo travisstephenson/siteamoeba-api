@@ -27,9 +27,9 @@ export type LLMOperation =
 
 // Model tiers: fast (cheapest), balanced, quality (most expensive)
 const PLATFORM_MODELS: Record<"fast" | "balanced" | "quality", { provider: "anthropic"; model: string }> = {
-  fast:     { provider: "anthropic", model: "claude-haiku-4-20250514" },
-  balanced: { provider: "anthropic", model: "claude-sonnet-4-20250514" },
-  quality:  { provider: "anthropic", model: "claude-sonnet-4-20250514" },
+  fast:     { provider: "anthropic", model: "claude-haiku-4-5-20251001" },  // Haiku 4.5 — fast + cheap
+  balanced: { provider: "anthropic", model: "claude-sonnet-4-20250514" },   // Sonnet 4 — balanced
+  quality:  { provider: "anthropic", model: "claude-sonnet-4-20250514" },   // Sonnet 4 — quality
 };
 
 // Map each operation to a model tier
