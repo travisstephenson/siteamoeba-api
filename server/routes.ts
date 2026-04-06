@@ -1057,7 +1057,7 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(500).json({ error: "Stripe Connect not configured. Contact support." });
     }
     const state = `${req.userId!}_${Date.now()}`; // simple state for CSRF
-    const authorizeUrl = `https://connect.stripe.com/oauth/authorize?response_type=code&client_id=${STRIPE_CONNECT_CLIENT_ID}&scope=read_only&state=${encodeURIComponent(state)}&redirect_uri=${encodeURIComponent(STRIPE_REDIRECT_URI)}`;
+    const authorizeUrl = `https://connect.stripe.com/oauth/authorize?response_type=code&client_id=${STRIPE_CONNECT_CLIENT_ID}&scope=read_write&state=${encodeURIComponent(state)}&redirect_uri=${encodeURIComponent(STRIPE_REDIRECT_URI)}`;
     res.json({ url: authorizeUrl, state });
   });
 
