@@ -61,6 +61,7 @@ import {
   Share2,
   FileText,
   RotateCcw,
+  Activity,
 } from "lucide-react";
 import {
   Breadcrumb,
