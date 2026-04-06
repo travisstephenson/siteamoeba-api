@@ -4002,9 +4002,28 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
   const [isTyping, setIsTyping] = useState(false);
   const [useCounsel, setUseCounsel] = useState(false);
   const [expandedCounsel, setExpandedCounsel] = useState<Record<number, boolean>>({});
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { toast } = useToast();
+
+  const generateCROReport = async () => {
+    if (!llmConfigured || isTyping || isGeneratingReport) return;
+    setIsGeneratingReport(true);
+    setMessages(prev => [...prev, { role: "user", content: "Generate a full CRO report for this page." }]);
+    try {
+      const res = await apiRequest("POST", "/api/ai/cro-report", { campaignId });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setMessages(prev => [...prev, { role: "assistant", content: data.report }]);
+    } catch (err: any) {
+      toast({ title: "CRO Report Error", description: err.message, variant: "destructive" });
+      setMessages(prev => prev.slice(0, -1));
+    } finally {
+      setIsGeneratingReport(false);
+      setTimeout(scrollToBottom, 100);
+    }
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -4230,8 +4249,18 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
 
           {/* Suggested prompts (when chat is empty / only welcome msg) */}
           {isEmpty && (
-            <div className="px-4 pb-2">
-              <p className="text-xs text-muted-foreground mb-2">Suggested questions:</p>
+            <div className="px-4 pb-2 space-y-2">
+              {/* CRO Report — featured action */}
+              <button
+                className="w-full text-xs px-3 py-2 rounded-lg border border-primary/40 bg-primary/5 text-primary hover:bg-primary/10 transition-colors cursor-pointer flex items-center gap-2 font-medium"
+                onClick={generateCROReport}
+                disabled={isGeneratingReport || !llmConfigured}
+                data-testid="button-generate-cro-report"
+              >
+                <FileText className="w-3.5 h-3.5 shrink-0" />
+                {isGeneratingReport ? "Generating CRO Report..." : "Generate Full CRO Report"}
+              </button>
+              <p className="text-xs text-muted-foreground">Or ask a specific question:</p>
               <div className="flex flex-wrap gap-1.5">
                 {SUGGESTED_PROMPTS.map((prompt) => (
                   <button

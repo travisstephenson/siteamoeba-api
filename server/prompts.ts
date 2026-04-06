@@ -790,6 +790,88 @@ Write a 2-3 sentence lesson explaining WHY the winner won and what principle thi
 }
 
 // ============================================================
+// CRO REPORT PROMPT
+// ============================================================
+
+export function buildCROReportPrompt(pageContent: string, campaignMeta: {
+  url: string;
+  pageType?: string;
+  pageGoal?: string;
+  niche?: string;
+  pricePoint?: string;
+  pageFacts?: string;
+}): LLMMessage[] {
+  const systemPrompt = `You are a world-class Conversion Rate Optimization consultant who has audited hundreds of sales pages and opt-in pages. You write specific, honest, actionable CRO reports that give business owners a clear roadmap to improving conversions.
+
+Your reports:
+- Reference SPECIFIC text, sections, and elements from the actual page
+- Score each weakness on its own — not everything is a 2/10, not everything is a 7/10
+- Give fixes with actual copy examples, not just "add social proof"
+- Are direct and honest, not encouraging or generic
+- Never reference frameworks by acronym (no FATE, RICE, etc.) — explain the principle in plain English
+- Never recommend restructuring the page layout — focus on copy and messaging changes that can be tested`;
+
+  const userMessage = `Analyze this sales page and write a comprehensive CRO Assessment Report.
+
+## PAGE DETAILS
+URL: ${campaignMeta.url}
+${campaignMeta.pageType ? `Page type: ${campaignMeta.pageType}` : ''}
+${campaignMeta.pageGoal ? `Goal: ${campaignMeta.pageGoal}` : ''}
+${campaignMeta.niche ? `Niche: ${campaignMeta.niche}` : ''}
+${campaignMeta.pricePoint ? `Price point: ${campaignMeta.pricePoint}` : ''}
+${campaignMeta.pageFacts ? `\nVERIFIED PAGE FACTS (use these for any data references):\n${campaignMeta.pageFacts}` : ''}
+
+## ACTUAL PAGE CONTENT
+${pageContent || '(Could not fetch page content — base analysis on URL and metadata provided)'}
+
+## OUTPUT FORMAT
+Write the report in this exact structure:
+
+# CRO ASSESSMENT REPORT
+**[Page/Product Name]**
+**Overall Score: X.X/10**
+
+[2–3 sentence overall assessment]
+
+---
+## MAJOR STRENGTHS
+[3–4 specific strengths with quotes from the actual page]
+
+---
+## CRITICAL WEAKNESSES & FIXES
+[5–7 weaknesses, each with: score (X/10), what's wrong, specific fix with example copy]
+
+---
+## COGNITIVE BIASES SCORECARD
+Score each on 1–10 with specific notes on what the page does or doesn't do:
+- **Social Proof**: X/10 — [specific notes]
+- **Authority**: X/10 — [specific notes]
+- **Risk Reversal**: X/10 — [specific notes]
+- **Clarity/Specificity**: X/10 — [specific notes]
+- **Urgency**: X/10 — [specific notes]
+- **Scarcity**: X/10 — [specific notes]
+
+---
+## OPTIMIZATION PRIORITIES (ranked by impact)
+1. [Highest impact]
+2...
+
+---
+## CONVERSION POTENTIAL
+**Current estimate:** X–X%
+**With top fixes applied:** X–X%
+
+---
+## VERDICT
+[2–3 direct sentences about this page's single biggest opportunity]`;
+
+  return [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userMessage },
+  ];
+}
+
+// ============================================================
 // CLASSIFICATION PROMPT (for manually added variants)
 // ============================================================
 

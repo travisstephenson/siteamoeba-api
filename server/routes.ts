@@ -9,7 +9,7 @@ import { storage, pool } from "./storage";
 import { callLLM, resolveLLMConfig } from "./llm";
 import { runCounsel, runPostMortem } from "./counsel";
 import { encryptApiKey, decryptApiKey } from "./encryption";
-import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildSectionGenerationPrompt, buildClassificationPrompt, buildPageScanPrompt, buildBrainChatPrompt, buildTestLessonPrompt, type GenerationContext } from "./prompts";
+import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildSectionGenerationPrompt, buildClassificationPrompt, buildPageScanPrompt, buildBrainChatPrompt, buildTestLessonPrompt, buildCROReportPrompt, type GenerationContext } from "./prompts";
 import { getBrainPageAuditKnowledge, getRelevantTestLessons } from "./brain-selector";
 import { loginSchema, registerSchema, insertCampaignSchema, insertVariantSchema, insertTestSectionSchema, insertFeedbackSchema } from "@shared/schema";
 import { evaluateAutopilotTests, advanceAutopilot, generateAutopilotVariants, declareWinnerForSection } from "./autopilot-engine";
@@ -2123,6 +2123,80 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     res.json({ response });
+  });
+
+  // ============== CRO REPORT ==============
+
+  app.post("/api/ai/cro-report", aiLimiter, requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    let llmConfigResolved;
+    try {
+      llmConfigResolved = resolveLLMConfig({
+        operation: "chat",
+        userPlan: user.plan || "free",
+        userProvider: user.llmProvider,
+        userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : null,
+        userModel: user.llmModel,
+      });
+    } catch {
+      return res.status(400).json({ error: "CRO Report requires a paid plan or your own API key in Settings." });
+    }
+
+    const { campaignId, url } = req.body;
+    if (!campaignId && !url) return res.status(400).json({ error: "campaignId or url required" });
+
+    // Get campaign metadata if available
+    let reportUrl = url;
+    let campaignMeta: any = { url: reportUrl };
+    if (campaignId) {
+      const campaign = await storage.getCampaign(parseInt(campaignId));
+      if (campaign && campaign.userId === req.userId) {
+        reportUrl = campaign.url;
+        campaignMeta = {
+          url: campaign.url,
+          pageType: campaign.pageType || undefined,
+          pageGoal: campaign.pageGoal || undefined,
+          niche: campaign.niche || undefined,
+          pricePoint: campaign.pricePoint || undefined,
+          pageFacts: (campaign as any).pageFacts || undefined,
+        };
+      }
+    }
+
+    // Fetch page content
+    let pageContent = "";
+    try {
+      const pageResponse = await fetch(reportUrl, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; SiteAmoeba/1.0)" },
+        signal: AbortSignal.timeout(12000),
+      });
+      if (pageResponse.ok) {
+        let html = await pageResponse.text();
+        html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+                   .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+                   .replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, "")
+                   .replace(/<[^>]+>/g, " ")
+                   .replace(/\s+/g, " ")
+                   .trim();
+        pageContent = html.substring(0, 6000); // More content for a full report
+      }
+    } catch (err) {
+      console.log("CRO report: could not fetch page:", (err as any)?.message);
+    }
+
+    const messages = buildCROReportPrompt(pageContent, campaignMeta);
+    const llmConfig = llmConfigResolved.config;
+
+    let report: string;
+    try {
+      report = await callLLM(llmConfig, messages, { maxTokens: 3000 });
+    } catch (err: any) {
+      return res.status(502).json({ error: err.message || "AI provider error." });
+    }
+
+    res.json({ report, url: reportUrl });
   });
 
   // ============== TRAFFIC SOURCE HELPERS ==============
