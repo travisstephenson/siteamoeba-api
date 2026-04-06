@@ -583,16 +583,54 @@ export default function AdminPage() {
 
       <div className="max-w-7xl mx-auto px-6 py-8 space-y-8">
 
-        {/* Overview stats */}
+        {/* Revenue section */}
         <div>
-          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Overview</h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {statsLoading ? Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-24" />) : <>
+          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Revenue</h2>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+            {statsLoading ? Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24" />) : <>
+              <StatCard
+                label="Monthly Recurring Revenue"
+                value={`$${(stats?.totalMRR ?? 0).toLocaleString()}`}
+                sub="active paid subscriptions"
+                icon={CreditCard}
+                color="text-emerald-500"
+              />
+              <StatCard
+                label="Annual Run Rate"
+                value={`$${(stats?.totalARR ?? 0).toLocaleString()}`}
+                sub="MRR × 12"
+                icon={TrendingUp}
+                color="text-emerald-600"
+              />
+              <StatCard
+                label="Platform Revenue Tracked"
+                value={`$${(stats?.platformRevenue ?? 0).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+                sub="via conversion tracking"
+                icon={Activity}
+                color="text-teal-500"
+              />
+              <StatCard
+                label="Paid Users"
+                value={stats?.paidUsers ?? 0}
+                sub={`${stats?.freeUsers ?? 0} free · ${stats?.trialUsers ?? 0} trial`}
+                icon={Users}
+                color="text-blue-500"
+              />
+            </>}
+          </div>
+        </div>
+
+        {/* Users & Tests overview */}
+        <div>
+          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Platform</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            {statsLoading ? Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-24" />) : <>
               <StatCard label="Total Users" value={stats?.totalUsers ?? 0} sub={`+${stats?.newUsersThisWeek ?? 0} this week`} icon={Users} color="text-blue-500" />
-              <StatCard label="Paid Users" value={stats?.paidUsers ?? 0} sub={`${stats?.freeUsers ?? 0} free`} icon={CreditCard} color="text-emerald-500" />
-              <StatCard label="On Trial" value={stats?.trialUsers ?? 0} icon={Activity} color="text-amber-500" />
-              <StatCard label="Active Tests" value={stats?.activeTests ?? 0} sub={`${stats?.activeCampaigns ?? 0} campaigns`} icon={FlaskConical} color="text-purple-500" />
-              <StatCard label="Visitors (30d)" value={(stats?.visitorsLast30Days ?? 0).toLocaleString()} icon={TrendingUp} color="text-teal-500" />
+              <StatCard label="Active Campaigns" value={stats?.activeCampaigns ?? 0} icon={FlaskConical} color="text-purple-400" />
+              <StatCard label="Tests Running" value={stats?.activeTests ?? 0} sub="active sections" icon={FlaskConical} color="text-purple-500" />
+              <StatCard label="Tests Won" value={stats?.testsWon ?? 0} sub={`${stats?.testsCompleted ?? 0} completed`} icon={CheckCircle} color="text-emerald-500" />
+              <StatCard label="Visitors (30d)" value={(stats?.visitorsLast30Days ?? 0).toLocaleString()} sub="all campaigns" icon={TrendingUp} color="text-teal-500" />
+              <StatCard label="All-Time Visitors" value={(stats?.totalVisitorsAllTime ?? 0).toLocaleString()} sub={`${stats?.totalConversions ?? 0} conversions`} icon={Activity} color="text-teal-400" />
             </>}
           </div>
           {stats?.planBreakdown && (

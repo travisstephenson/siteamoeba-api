@@ -483,11 +483,41 @@ export async function registerRoutes(server: Server, app: Express) {
       `SELECT COUNT(*) as cnt FROM visitors WHERE first_seen > $1`,
       [thirtyDaysAgo.toISOString()]
     );
-    const totalRevenue = await pool.query(
+    const platformRevenue = await pool.query(
       `SELECT COALESCE(SUM(revenue), 0) as total FROM visitors WHERE converted = true`
     );
+    const totalTestsEver = await pool.query(
+      `SELECT COUNT(*) as cnt FROM test_sections`
+    );
+    const testsWon = await pool.query(
+      `SELECT COUNT(*) as cnt FROM test_lessons WHERE winner_variant_id IS NOT NULL`
+    );
+    const testsCompleted = await pool.query(
+      `SELECT COUNT(*) as cnt FROM test_lessons`
+    );
+    const totalAllVisitors = await pool.query(
+      `SELECT COUNT(*) as cnt FROM visitors`
+    );
+    const totalConversions = await pool.query(
+      `SELECT COUNT(*) as cnt FROM visitors WHERE converted = true`
+    );
+
+    // MRR calculation based on active paid subscriptions
+    const planMRR: Record<string, number> = {
+      pro: 47,
+      business: 97,
+      autopilot: 299,
+    };
+    let totalMRR = 0;
+    for (const u of allUsers) {
+      const pu = u as any;
+      if (pu.accountStatus === 'cancelled' || pu.accountStatus === 'suspended') continue;
+      if (planMRR[pu.plan]) totalMRR += planMRR[pu.plan];
+    }
+    const totalARR = totalMRR * 12;
 
     res.json({
+      // Users
       totalUsers: allUsers.length,
       newUsersThisWeek: newThisWeek,
       newUsersThisMonth: newThisMonth,
@@ -495,10 +525,20 @@ export async function registerRoutes(server: Server, app: Express) {
       freeUsers: freeCount,
       trialUsers: trialCount,
       planBreakdown: planCounts,
+      // Campaigns & tests
       activeCampaigns: parseInt(totalCampaigns.rows[0]?.cnt) || 0,
       activeTests: parseInt(activeTests.rows[0]?.cnt) || 0,
+      totalTestsEver: parseInt(totalTestsEver.rows[0]?.cnt) || 0,
+      testsWon: parseInt(testsWon.rows[0]?.cnt) || 0,
+      testsCompleted: parseInt(testsCompleted.rows[0]?.cnt) || 0,
+      // Traffic
       visitorsLast30Days: parseInt(totalVisitors.rows[0]?.cnt) || 0,
-      totalRevenue: parseFloat(totalRevenue.rows[0]?.total) || 0,
+      totalVisitorsAllTime: parseInt(totalAllVisitors.rows[0]?.cnt) || 0,
+      totalConversions: parseInt(totalConversions.rows[0]?.cnt) || 0,
+      // Revenue
+      totalMRR,
+      totalARR,
+      platformRevenue: parseFloat(platformRevenue.rows[0]?.total) || 0,
     });
   });
 
