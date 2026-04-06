@@ -480,7 +480,7 @@ export async function registerRoutes(server: Server, app: Express) {
       `SELECT COUNT(*) as cnt FROM campaigns WHERE status = 'active'`
     );
     const totalVisitors = await pool.query(
-      `SELECT COUNT(*) as cnt FROM visitors WHERE created_at > $1`,
+      `SELECT COUNT(*) as cnt FROM visitors WHERE first_seen > $1`,
       [thirtyDaysAgo.toISOString()]
     );
     const totalRevenue = await pool.query(
