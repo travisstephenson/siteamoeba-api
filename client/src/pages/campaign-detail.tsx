@@ -1009,16 +1009,19 @@ function AIVariantGenerator({
   sectionId,
   onAdded,
   userPlan,
+  isByok,
 }: {
   campaignId: number;
   type: string;
   sectionId?: number;
   onAdded: () => void;
   userPlan: string;
+  isByok?: boolean;
 }) {
   const [variants, setVariants] = useState<AIVariant[]>([]);
   const [addingVariantIndex, setAddingVariantIndex] = useState<number | null>(null);
   const [showManual, setShowManual] = useState(false);
+  const [showByokWarning, setShowByokWarning] = useState(false);
   const { toast } = useToast();
 
   const generateMutation = useMutation({
@@ -1084,12 +1087,36 @@ function AIVariantGenerator({
 
   return (
     <div className="mt-3 space-y-3">
+      {/* BYOK accuracy warning */}
+      {isByok && showByokWarning && variants.length === 0 && (
+        <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">Please note before generating</p>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                You are on a free account using your own AI, which means it will pull information from your AI's training data and <strong>NOT</strong> necessarily from this offer. You will want to check variants for accuracy and edit where needed. Or you can{" "}
+                <a href="/#/billing" className="text-primary underline underline-offset-2 font-medium">upgrade to our Base plan</a>
+                {" "}— this lets our tool feed your AI specific information about your product, and gives it access to our brain of over 2,500 tests.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setShowByokWarning(false)}>Cancel</Button>
+            <Button size="sm" className="h-7 text-xs" onClick={() => generateMutation.mutate()}>Generate anyway</Button>
+          </div>
+        </div>
+      )}
+
       {/* Generate button */}
-      {variants.length === 0 && (
+      {variants.length === 0 && !showByokWarning && (
         <Button
           variant="outline"
           size="sm"
-          onClick={() => generateMutation.mutate()}
+          onClick={() => {
+            if (isByok && !showByokWarning) { setShowByokWarning(true); return; }
+            generateMutation.mutate();
+          }}
           disabled={generateMutation.isPending}
           data-testid={`button-generate-ai-${type}`}
           className="gap-1.5 text-primary border-primary/30 hover:bg-primary/5"
@@ -1098,6 +1125,7 @@ function AIVariantGenerator({
           {generateMutation.isPending ? "Generating variants..." : "Generate with AI"}
         </Button>
       )}
+
 
       {/* No LLM configured message */}
       {noConfig && (
@@ -1318,12 +1346,14 @@ function AddVariantForm({
   sectionId,
   onAdded,
   userPlan,
+  isByok,
 }: {
   campaignId: number;
   type: string;
   sectionId?: number;
   onAdded: () => void;
   userPlan: string;
+  isByok?: boolean;
 }) {
   return (
     <AIVariantGenerator
@@ -1332,6 +1362,7 @@ function AddVariantForm({
       sectionId={sectionId}
       onAdded={onAdded}
       userPlan={userPlan}
+      isByok={isByok}
     />
   );
 }
@@ -1930,6 +1961,27 @@ function VariantCard({
     },
   });
 
+  // Inline editing
+  const [isEditing, setIsEditing] = useState(false);
+  const [editText, setEditText] = useState(variant.text);
+
+  const editMutation = useMutation({
+    mutationFn: async (newText: string) => {
+      const res = await apiRequest("PATCH", `/api/variants/${variant.id}`, { text: newText });
+      if (!res.ok) throw new Error("Failed to save");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "variants"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] });
+      setIsEditing(false);
+      toast({ title: "Variant updated" });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   // vs control delta
   const vsControl = controlVariant && !variant.isControl
     ? ((variant.conversionRate ?? 0) - (controlVariant.conversionRate ?? 0))
@@ -2027,6 +2079,15 @@ function VariantCard({
           <Button
             size="icon"
             variant="ghost"
+            onClick={() => { setEditText(variant.text); setIsEditing(true); }}
+            data-testid={`button-edit-variant-${variant.id}`}
+            aria-label="Edit variant text"
+          >
+            <TextCursorInput className="w-3.5 h-3.5 text-muted-foreground" />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
             onClick={() => deleteMutation.mutate()}
             disabled={deleteMutation.isPending}
             data-testid={`button-delete-variant-${variant.id}`}
@@ -2037,13 +2098,35 @@ function VariantCard({
         </div>
       </div>
 
-      {/* Text content — styled preview when styles available, plain fallback otherwise */}
+      {/* Text content — editable inline or styled preview */}
       <div className="mb-3" data-testid={`text-variant-${variant.id}`}>
-        <StyledPreview
-          text={variant.text}
-          styles={elementStyles}
-          sectionType={sectionType}
-        />
+        {isEditing ? (
+          <div className="space-y-2">
+            <Textarea
+              value={editText}
+              onChange={e => setEditText(e.target.value)}
+              className="text-sm min-h-[80px] resize-none"
+              autoFocus
+            />
+            <div className="flex gap-2 justify-end">
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setIsEditing(false)}>Cancel</Button>
+              <Button
+                size="sm"
+                className="h-7 text-xs"
+                disabled={editMutation.isPending || editText.trim() === variant.text.trim()}
+                onClick={() => editMutation.mutate(editText.trim())}
+              >
+                {editMutation.isPending ? "Saving..." : "Save"}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <StyledPreview
+            text={variant.text}
+            styles={elementStyles}
+            sectionType={sectionType}
+          />
+        )}
       </div>
 
       {/* Persuasion tags (strategy) */}
@@ -3580,6 +3663,7 @@ function TestSectionCard({
               type={section.category}
               sectionId={section.id}
               userPlan={userPlan}
+              isByok={userPlan === "free" && !!user?.llmProvider}
               onAdded={() =>
                 queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] })
               }

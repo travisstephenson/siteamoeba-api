@@ -494,11 +494,12 @@ export async function registerRoutes(server: Server, app: Express) {
     const totalTestsEver = await pool.query(
       `SELECT COUNT(*) as cnt FROM test_sections`
     );
+    // Tests won = inactive sections that had at least 2 variants (i.e. a real test ran)
     const testsWon = await pool.query(
-      `SELECT COUNT(*) as cnt FROM test_lessons WHERE winner_variant_id IS NOT NULL`
+      `SELECT COUNT(*) as cnt FROM test_sections WHERE is_active = false`
     );
     const testsCompleted = await pool.query(
-      `SELECT COUNT(*) as cnt FROM test_lessons`
+      `SELECT COUNT(DISTINCT ts.id) as cnt FROM test_sections ts JOIN variants v ON v.test_section_id = ts.id WHERE ts.is_active = false`
     );
     const totalAllVisitors = await pool.query(
       `SELECT COUNT(*) as cnt FROM visitors`
