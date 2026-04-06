@@ -125,26 +125,36 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     }
 
     // Strategy 2: Selector failed (stale class names) — find by control text fingerprint
-    // This handles GHL's habit of regenerating unique class names on every page publish
+    // Uses fuzzy matching: score each candidate by how many control words it contains.
+    // This handles GHL regenerating class names AND minor text differences (e.g. "SAVE MY SPOT" vs "YES, SAVE MY FREE SPOT")
     if (allElements.length === 0 && controlText) {
-      var ctrlWords = (controlText || "").trim().toLowerCase().split(/\s+/).slice(0, 4).join(" ");
-      if (ctrlWords.length > 3) {
-        // Which tag to search depends on section category
-        var searchTags = category === "cta" || category === "button"
-          ? ["button", "a", "[class*='btn']", "[class*='cbutton']", "[class*='cta']"]
-          : ["h1", "h2", "h3", "p", "[class*='cheading']", "[class*='heading']"];
+      var ctrlTokens = (controlText || "").trim().toLowerCase().split(/\\s+/).filter(function(w) { return w.length > 2; });
+      if (ctrlTokens.length > 0) {
+        var searchTags = (category === "cta" || category === "button")
+          ? ["button", "[class*='cbutton']", "[class*='btn']", "a"]
+          : ["h1", "h2", "h3", "[class*='cheading']", "[class*='heading']"];
+        var bestScore = 0;
+        var bestEl = null;
         for (var st = 0; st < searchTags.length; st++) {
           try {
             var candidates = document.querySelectorAll(searchTags[st]);
             for (var sc = 0; sc < candidates.length; sc++) {
               var candidateText = (candidates[sc].textContent || "").trim().toLowerCase();
-              if (candidateText.indexOf(ctrlWords) !== -1 || ctrlWords.indexOf(candidateText.substring(0, 20)) !== -1) {
-                if (allElements.indexOf(candidates[sc]) === -1) allElements.push(candidates[sc]);
+              if (candidateText.length < 2) continue;
+              // Score = number of control tokens found in the candidate text
+              var score = 0;
+              for (var tk = 0; tk < ctrlTokens.length; tk++) {
+                if (candidateText.indexOf(ctrlTokens[tk]) !== -1) score++;
+              }
+              // Accept if 50%+ of tokens match (handles minor text changes)
+              if (score > 0 && score >= Math.ceil(ctrlTokens.length * 0.5)) {
+                if (score > bestScore) { bestScore = score; bestEl = candidates[sc]; }
               }
             }
           } catch(e) {}
-          if (allElements.length > 0) break;
+          if (bestEl) break;
         }
+        if (bestEl) allElements.push(bestEl);
       }
     }
 
