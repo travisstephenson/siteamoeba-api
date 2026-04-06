@@ -1049,7 +1049,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // ============== STRIPE CONNECT OAUTH ==============
   const STRIPE_CONNECT_CLIENT_ID = process.env.STRIPE_CONNECT_CLIENT_ID || "";
-  const STRIPE_REDIRECT_URI = (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : "https://api.siteamoeba.com") + "/api/settings/stripe-callback";
+  const STRIPE_REDIRECT_URI = (process.env.STRIPE_REDIRECT_URI || "https://api.siteamoeba.com") + "/api/settings/stripe-callback";
 
   // A) GET /api/settings/stripe-connect-url — generates the OAuth authorize URL
   app.get("/api/settings/stripe-connect-url", requireAuth, async (req: Request, res: Response) => {
