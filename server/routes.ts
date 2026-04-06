@@ -4427,3 +4427,4 @@ function generateEmbedCode(baseUrl: string, campaign: any): string {
 </script>`;
 }
 // build Mon Apr  6 16:56:50 UTC 2026
+// deploy trigger 1775504740
