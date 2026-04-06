@@ -13,6 +13,7 @@ import CampaignDetailPage from "@/pages/campaign-detail";
 import BillingPage from "@/pages/billing";
 import SettingsPage from "@/pages/settings";
 import ReferralsPage from "@/pages/referrals";
+import AdminPage from "@/pages/admin";
 import NotFound from "@/pages/not-found";
 
 const sidebarStyle = {
@@ -39,6 +40,7 @@ function SidebarLayout() {
               <Route path="/billing" component={BillingPage} />
               <Route path="/referrals" component={ReferralsPage} />
               <Route path="/settings" component={SettingsPage} />
+              <Route path="/admin" component={AdminPage} />
               <Route component={NotFound} />
             </Switch>
           </main>

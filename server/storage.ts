@@ -85,6 +85,7 @@ export interface ReferralStats {
 export interface IStorage {
   // Users
   getUserById(id: number): Promise<User | undefined>;
+  getAllUsers(): Promise<User[]>;
   getUserByEmail(email: string): Promise<User | undefined>;
   getUserByStripeCustomerId(customerId: string): Promise<User | undefined>;
   getUserByReferralCode(code: string): Promise<User | undefined>;
@@ -617,6 +618,10 @@ class StorageImpl implements IStorage {
   }
 
   // ===== Users =====
+  async getAllUsers(): Promise<User[]> {
+    return db.select().from(users).orderBy(users.createdAt).all() as User[];
+  }
+
   async getUserById(id: number): Promise<User | undefined> {
     const rows = await db.select().from(users).where(eq(users.id, id));
     return rows[0];

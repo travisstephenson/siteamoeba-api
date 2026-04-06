@@ -34,6 +34,10 @@ export const users = pgTable("users", {
   // Referral
   referralCode: text("referral_code"),
   referredBy: integer("referred_by"),
+  isAdmin: integer("is_admin").default(0), // 1 = admin, 0 = regular user
+  trialEndsAt: text("trial_ends_at"), // ISO date string, null = not on trial
+  adminNotes: text("admin_notes_user"), // internal notes about this user
+  accountStatus: text("account_status").default("active"), // active, suspended, cancelled
   // Stripe account-level connection
   stripeAccountId: text("stripe_account_id"),
   stripeAccessToken: text("stripe_access_token"),

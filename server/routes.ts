@@ -120,6 +120,25 @@ function paramId(id: string | string[]): number {
   return parseInt(Array.isArray(id) ? id[0] : id, 10);
 }
 
+async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Not authenticated" });
+  }
+  try {
+    const token = authHeader.split(" ")[1];
+    const payload = jwt.verify(token, JWT_SECRET) as { userId: number };
+    req.userId = payload.userId;
+    const user = await storage.getUserById(payload.userId);
+    if (!user || !(user as any).isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+    next();
+  } catch {
+    return res.status(401).json({ error: "Invalid or expired token" });
+  }
+}
+
 export async function registerRoutes(server: Server, app: Express) {
   // ============== AUTH (JWT-based) ==============
 
@@ -398,6 +417,251 @@ export async function registerRoutes(server: Server, app: Express) {
     }
     const updated = await storage.unarchiveCampaign(campaign.id);
     res.json({ success: true, campaign: updated });
+  });
+
+  // ============== ADMIN API ==============
+
+  // GET /api/admin/stats — overview numbers
+  app.get("/api/admin/stats", requireAdmin, async (req: Request, res: Response) => {
+    const allUsers = await storage.getAllUsers();
+    const now = new Date();
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const planCounts: Record<string, number> = {};
+    let trialCount = 0, paidCount = 0, freeCount = 0, newThisWeek = 0, newThisMonth = 0;
+    for (const u of allUsers) {
+      const pu = u as any;
+      planCounts[pu.plan] = (planCounts[pu.plan] || 0) + 1;
+      if (pu.plan === 'free') freeCount++;
+      else paidCount++;
+      if (pu.trialEndsAt && new Date(pu.trialEndsAt) > now) trialCount++;
+      if (new Date(pu.createdAt) > sevenDaysAgo) newThisWeek++;
+      if (new Date(pu.createdAt) > thirtyDaysAgo) newThisMonth++;
+    }
+
+    const activeTests = await pool.query(
+      `SELECT COUNT(*) as cnt FROM test_sections WHERE is_active = true`
+    );
+    const totalCampaigns = await pool.query(
+      `SELECT COUNT(*) as cnt FROM campaigns WHERE status = 'active'`
+    );
+    const totalVisitors = await pool.query(
+      `SELECT COUNT(*) as cnt FROM visitors WHERE created_at > $1`,
+      [thirtyDaysAgo.toISOString()]
+    );
+    const totalRevenue = await pool.query(
+      `SELECT COALESCE(SUM(revenue), 0) as total FROM visitors WHERE converted = true`
+    );
+
+    res.json({
+      totalUsers: allUsers.length,
+      newUsersThisWeek: newThisWeek,
+      newUsersThisMonth: newThisMonth,
+      paidUsers: paidCount,
+      freeUsers: freeCount,
+      trialUsers: trialCount,
+      planBreakdown: planCounts,
+      activeCampaigns: parseInt(totalCampaigns.rows[0]?.cnt) || 0,
+      activeTests: parseInt(activeTests.rows[0]?.cnt) || 0,
+      visitorsLast30Days: parseInt(totalVisitors.rows[0]?.cnt) || 0,
+      totalRevenue: parseFloat(totalRevenue.rows[0]?.total) || 0,
+    });
+  });
+
+  // GET /api/admin/users — list all users
+  app.get("/api/admin/users", requireAdmin, async (req: Request, res: Response) => {
+    const users = await storage.getAllUsers();
+    // Enrich with campaign/test counts
+    const enriched = await Promise.all(users.map(async (u: any) => {
+      const campaigns = await pool.query(
+        `SELECT COUNT(*) as cnt FROM campaigns WHERE user_id = $1 AND status = 'active'`,
+        [u.id]
+      );
+      const tests = await pool.query(
+        `SELECT COUNT(*) as cnt FROM test_sections ts JOIN campaigns c ON c.id = ts.campaign_id WHERE c.user_id = $1 AND ts.is_active = true`,
+        [u.id]
+      );
+      const visitors = await pool.query(
+        `SELECT COUNT(*) as cnt FROM visitors v JOIN campaigns c ON c.id = v.campaign_id WHERE c.user_id = $1`,
+        [u.id]
+      );
+      return {
+        id: u.id,
+        email: u.email,
+        name: u.name,
+        plan: u.plan,
+        creditsUsed: u.creditsUsed,
+        creditsLimit: u.creditsLimit,
+        createdAt: u.createdAt,
+        isAdmin: (u as any).isAdmin || 0,
+        trialEndsAt: (u as any).trialEndsAt,
+        accountStatus: (u as any).accountStatus || 'active',
+        adminNotes: (u as any).adminNotes,
+        referralCode: u.referralCode,
+        referredBy: u.referredBy,
+        stripeCustomerId: u.stripeCustomerId,
+        stripeSubscriptionId: u.stripeSubscriptionId,
+        activeCampaigns: parseInt(campaigns.rows[0]?.cnt) || 0,
+        activeTests: parseInt(tests.rows[0]?.cnt) || 0,
+        totalVisitors: parseInt(visitors.rows[0]?.cnt) || 0,
+      };
+    }));
+    res.json(enriched);
+  });
+
+  // GET /api/admin/users/:id — single user detail
+  app.get("/api/admin/users/:id", requireAdmin, async (req: Request, res: Response) => {
+    const userId = paramId(req.params.id);
+    const u = await storage.getUserById(userId) as any;
+    if (!u) return res.status(404).json({ error: "User not found" });
+    const campaigns = await pool.query(
+      `SELECT id, name, url, status, created_at FROM campaigns WHERE user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    const referrals = await pool.query(
+      `SELECT * FROM referrals WHERE referrer_user_id = $1 ORDER BY created_at DESC`,
+      [userId]
+    );
+    const totalVisitors = await pool.query(
+      `SELECT COUNT(*) as cnt FROM visitors v JOIN campaigns c ON c.id = v.campaign_id WHERE c.user_id = $1`,
+      [userId]
+    );
+    const totalConversions = await pool.query(
+      `SELECT COUNT(*) as cnt FROM visitors v JOIN campaigns c ON c.id = v.campaign_id WHERE c.user_id = $1 AND v.converted = true`,
+      [userId]
+    );
+    res.json({
+      id: u.id, email: u.email, name: u.name, plan: u.plan,
+      creditsUsed: u.creditsUsed, creditsLimit: u.creditsLimit,
+      createdAt: u.createdAt, isAdmin: u.isAdmin || 0,
+      trialEndsAt: u.trialEndsAt, accountStatus: u.accountStatus || 'active',
+      adminNotes: u.adminNotes, referralCode: u.referralCode, referredBy: u.referredBy,
+      stripeCustomerId: u.stripeCustomerId, stripeSubscriptionId: u.stripeSubscriptionId,
+      campaigns: campaigns.rows,
+      referrals: referrals.rows,
+      totalVisitors: parseInt(totalVisitors.rows[0]?.cnt) || 0,
+      totalConversions: parseInt(totalConversions.rows[0]?.cnt) || 0,
+    });
+  });
+
+  // PATCH /api/admin/users/:id — update user (plan, credits, status, notes)
+  app.patch("/api/admin/users/:id", requireAdmin, async (req: Request, res: Response) => {
+    const userId = paramId(req.params.id);
+    const { plan, creditsLimit, accountStatus, adminNotes, trialEndsAt, isAdmin, name } = req.body;
+    const setParts: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+    if (plan !== undefined) { setParts.push(`plan = $${idx++}`); values.push(plan); }
+    if (creditsLimit !== undefined) { setParts.push(`credits_limit = $${idx++}`); values.push(creditsLimit); }
+    if (accountStatus !== undefined) { setParts.push(`account_status = $${idx++}`); values.push(accountStatus); }
+    if (adminNotes !== undefined) { setParts.push(`admin_notes_user = $${idx++}`); values.push(adminNotes); }
+    if (trialEndsAt !== undefined) { setParts.push(`trial_ends_at = $${idx++}`); values.push(trialEndsAt); }
+    if (isAdmin !== undefined) { setParts.push(`is_admin = $${idx++}`); values.push(isAdmin ? 1 : 0); }
+    if (name !== undefined) { setParts.push(`name = $${idx++}`); values.push(name); }
+    if (setParts.length === 0) return res.status(400).json({ error: "Nothing to update" });
+    values.push(userId);
+    await pool.query(`UPDATE users SET ${setParts.join(", ")} WHERE id = $${idx}`, values);
+    res.json({ success: true });
+  });
+
+  // POST /api/admin/users/:id/add-credits — add credits to an account
+  app.post("/api/admin/users/:id/add-credits", requireAdmin, async (req: Request, res: Response) => {
+    const userId = paramId(req.params.id);
+    const { amount } = req.body;
+    if (!amount || amount <= 0) return res.status(400).json({ error: "Invalid amount" });
+    await pool.query(
+      `UPDATE users SET credits_limit = credits_limit + $1 WHERE id = $2`,
+      [amount, userId]
+    );
+    res.json({ success: true });
+  });
+
+  // POST /api/admin/users — create a new user
+  app.post("/api/admin/users", requireAdmin, async (req: Request, res: Response) => {
+    const { email, password, name, plan } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+    const existing = await storage.getUserByEmail(email);
+    if (existing) return res.status(409).json({ error: "Email already in use" });
+    const passwordHash = await bcrypt.hash(password, 10);
+    const planLimits: Record<string, { creditsLimit: number; campaignsLimit: number }> = {
+      free: { creditsLimit: 10, campaignsLimit: 1 },
+      pro: { creditsLimit: 1000, campaignsLimit: 5 },
+      business: { creditsLimit: 2400, campaignsLimit: 20 },
+      autopilot: { creditsLimit: 6000, campaignsLimit: 100 },
+    };
+    const limits = planLimits[plan || 'free'] || planLimits.free;
+    const referralCode = `admin-${Math.random().toString(36).slice(2, 6)}`;
+    const result = await pool.query(
+      `INSERT INTO users (email, password_hash, name, plan, credits_limit, credits_used, campaigns_limit, referral_code)
+       VALUES ($1, $2, $3, $4, $5, 0, $6, $7) RETURNING id, email, name, plan`,
+      [email, passwordHash, name || email.split('@')[0], plan || 'free', limits.creditsLimit, limits.campaignsLimit, referralCode]
+    );
+    res.json({ success: true, user: result.rows[0] });
+  });
+
+  // DELETE /api/admin/users/:id — cancel/delete user account
+  app.delete("/api/admin/users/:id", requireAdmin, async (req: Request, res: Response) => {
+    const userId = paramId(req.params.id);
+    const adminId = req.userId!;
+    if (userId === adminId) return res.status(400).json({ error: "Cannot delete your own account" });
+    // Soft delete — mark as cancelled rather than destroying data
+    await pool.query(
+      `UPDATE users SET account_status = 'cancelled' WHERE id = $1`,
+      [userId]
+    );
+    res.json({ success: true });
+  });
+
+  // POST /api/admin/users/:id/impersonate — get a token that logs in as this user
+  app.post("/api/admin/users/:id/impersonate", requireAdmin, async (req: Request, res: Response) => {
+    const userId = paramId(req.params.id);
+    const user = await storage.getUserById(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
+    // Issue a short-lived token (2 hours) with an impersonation flag
+    const token = jwt.sign(
+      { userId: user.id, impersonatedBy: req.userId, isImpersonation: true },
+      JWT_SECRET,
+      { expiresIn: "2h" }
+    );
+    res.json({ token, userId: user.id, email: user.email });
+  });
+
+  // GET /api/admin/referrals — referral dashboard
+  app.get("/api/admin/referrals", requireAdmin, async (req: Request, res: Response) => {
+    const referrals = await pool.query(`
+      SELECT r.*,
+        u1.email as referrer_email, u1.name as referrer_name,
+        u2.email as referred_email, u2.name as referred_name, u2.plan as referred_plan
+      FROM referrals r
+      LEFT JOIN users u1 ON r.referrer_user_id = u1.id
+      LEFT JOIN users u2 ON r.referred_user_id = u2.id
+      ORDER BY r.created_at DESC
+    `);
+    // Referral stats per user
+    const stats = await pool.query(`
+      SELECT referrer_user_id, u.email, u.name,
+        COUNT(*) as total_referrals,
+        SUM(CASE WHEN status = 'converted' THEN 1 ELSE 0 END) as converted,
+        COALESCE(SUM(commission_amount), 0) as total_commission
+      FROM referrals r
+      LEFT JOIN users u ON r.referrer_user_id = u.id
+      GROUP BY referrer_user_id, u.email, u.name
+      ORDER BY total_referrals DESC
+    `);
+    res.json({ referrals: referrals.rows, leaderboard: stats.rows });
+  });
+
+  // POST /api/admin/users/:id/reset-test — admin restart test
+  // (different from user restart — admin can target a specific campaign)
+  app.post("/api/admin/campaigns/:id/reset", requireAdmin, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    await pool.query('DELETE FROM behavioral_events WHERE campaign_id = $1', [campaignId]);
+    await pool.query('DELETE FROM visitor_sessions WHERE campaign_id = $1', [campaignId]);
+    await pool.query('DELETE FROM impressions WHERE campaign_id = $1', [campaignId]);
+    await pool.query('DELETE FROM visitors WHERE campaign_id = $1', [campaignId]);
+    await pool.query('DELETE FROM daily_observations WHERE campaign_id = $1', [campaignId]);
+    res.json({ success: true });
   });
 
   // POST /api/campaigns/:id/restart-test — reset all visitor/impression/session/event data
