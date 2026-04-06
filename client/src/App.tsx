@@ -1,6 +1,8 @@
 import { Switch, Route, Router } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { queryClient } from "./lib/queryClient";
+import { ErrorBoundary, initGlobalErrorCapture } from "@/components/error-boundary";
+import { useEffect } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -62,15 +64,19 @@ function AppRouter() {
 }
 
 function App() {
+  useEffect(() => { initGlobalErrorCapture(); }, []);
+
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Router hook={useHashLocation}>
-          <AppRouter />
-        </Router>
-        <Toaster />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Router hook={useHashLocation}>
+            <AppRouter />
+          </Router>
+          <Toaster />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

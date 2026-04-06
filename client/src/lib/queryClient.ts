@@ -8,6 +8,16 @@ export const API_BASE = "__PORT_5000__".startsWith("__") ? "https://api.siteamoe
 let authToken: string | null = null;
 
 function getTokenFromHash(): string | null {
+  // Check URL query string first (used by admin impersonation)
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlToken = urlParams.get("token");
+  if (urlToken) {
+    // Clean it from the URL immediately so it doesn't persist
+    const cleanUrl = window.location.pathname + (window.location.hash || "#/");
+    window.history.replaceState(null, "", cleanUrl);
+    return decodeURIComponent(urlToken);
+  }
+  // Fall back to hash-embedded token (normal login persistence)
   const hash = window.location.hash;
   const match = hash.match(/[?&]token=([^&]+)/);
   return match ? decodeURIComponent(match[1]) : null;

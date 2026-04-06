@@ -252,7 +252,7 @@ function UserDetailSheet({ userId, onClose }: { userId: number | null; onClose: 
     },
     onSuccess: (data) => {
       // Open the app as this user in a new tab — token goes in hash
-      window.open(`${window.location.origin}/#/?token=${encodeURIComponent(data.token)}`, "_blank");
+      window.open(`${window.location.origin}/?token=${encodeURIComponent(data.token)}#/`, "_blank");
     },
   });
 

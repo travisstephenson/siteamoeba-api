@@ -144,6 +144,15 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 
 export async function registerRoutes(server: Server, app: Express) {
   // Health check — used by Railway and monitoring
+  // Client-side error logging — no auth required, just store for admin review
+  app.post("/api/client-errors", async (req: Request, res: Response) => {
+    try {
+      const { message, stack, type, url, ts } = req.body;
+      console.error(`[CLIENT ERROR] ${type || "boundary"} at ${url}\n${message}\n${stack?.slice(0, 500) || ""}`);
+      res.json({ ok: true });
+    } catch { res.json({ ok: true }); }
+  });
+
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", ts: Date.now() });
   });
