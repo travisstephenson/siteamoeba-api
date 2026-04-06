@@ -16,7 +16,6 @@ import {
   Gift,
   Zap,
   Lightbulb,
-  Shield,
 } from "lucide-react";
 import {
   Sidebar,
@@ -489,17 +488,6 @@ export function AppSidebar() {
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
-
-          {(user as any)?.isAdmin ? (
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild isActive={location === "/admin"}>
-                <Link href="/admin" data-testid="link-admin">
-                  <Shield className="w-4 h-4" />
-                  <span className="text-sm">Admin</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ) : null}
 
           <SidebarMenuItem>
             <SidebarMenuButton

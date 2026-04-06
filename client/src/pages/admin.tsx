@@ -1,7 +1,13 @@
-import { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
-import { useAuth } from "@/hooks/use-auth";
+/**
+ * Admin Panel — completely separate from the user-facing app.
+ * - Has its own login form (credentials come from env vars on the server)
+ * - Uses adminToken stored in memory (never mixed with user auth)
+ * - No link exists in the user-facing sidebar
+ * - Users have no idea this exists
+ */
+
+import { useState, useCallback } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
@@ -17,55 +23,43 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Users, CreditCard, FlaskConical, Activity, TrendingUp,
   LogIn, UserPlus, Trash2, Search, ChevronRight, Building2,
-  Shield, RefreshCw, PlusCircle, Lock, X, Eye, ExternalLink,
-  CheckCircle, XCircle, AlertCircle, Info, Share2,
+  Shield, PlusCircle, ExternalLink, CheckCircle, XCircle,
+  AlertCircle, Share2, Eye, EyeOff,
 } from "lucide-react";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Admin token (in-memory, separate from user auth) ─────────────────────────
 
-interface AdminStats {
-  totalUsers: number;
-  newUsersThisWeek: number;
-  newUsersThisMonth: number;
-  paidUsers: number;
-  freeUsers: number;
-  trialUsers: number;
-  planBreakdown: Record<string, number>;
-  activeCampaigns: number;
-  activeTests: number;
-  visitorsLast30Days: number;
-  totalRevenue: number;
-}
+const API_BASE = (window as any).__PORT_5000__ || "";
+let adminToken: string | null = null;
 
-interface AdminUser {
-  id: number;
-  email: string;
-  name: string;
-  plan: string;
-  creditsUsed: number;
-  creditsLimit: number;
-  createdAt: string;
-  isAdmin: number;
-  trialEndsAt: string | null;
-  accountStatus: string;
-  adminNotes: string | null;
-  referralCode: string | null;
-  referredBy: number | null;
-  stripeCustomerId: string | null;
-  stripeSubscriptionId: string | null;
-  activeCampaigns: number;
-  activeTests: number;
-  totalVisitors: number;
+function getAdminToken() { return adminToken; }
+function setAdminToken(t: string | null) { adminToken = t; }
+
+async function adminFetch(path: string, opts: RequestInit = {}) {
+  const token = getAdminToken();
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...opts,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(opts.headers || {}),
+    },
+  });
+  if (res.status === 401 || res.status === 403) {
+    setAdminToken(null);
+    throw new Error("Session expired");
+  }
+  return res;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function planBadge(plan: string) {
   const config: Record<string, { label: string; className: string }> = {
-    free: { label: "Free", className: "bg-muted text-muted-foreground" },
-    pro: { label: "Pro", className: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
-    business: { label: "Business", className: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
-    autopilot: { label: "Autopilot", className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
+    free:      { label: "Free",       className: "bg-muted text-muted-foreground" },
+    pro:       { label: "Pro",        className: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400" },
+    business:  { label: "Business",   className: "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400" },
+    autopilot: { label: "Autopilot",  className: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400" },
   };
   const c = config[plan] || config.free;
   return <Badge className={`text-xs ${c.className}`}>{c.label}</Badge>;
@@ -73,9 +67,9 @@ function planBadge(plan: string) {
 
 function statusBadge(status: string) {
   const config: Record<string, { label: string; icon: any; className: string }> = {
-    active: { label: "Active", icon: CheckCircle, className: "text-emerald-600 dark:text-emerald-400" },
-    suspended: { label: "Suspended", icon: AlertCircle, className: "text-amber-600 dark:text-amber-400" },
-    cancelled: { label: "Cancelled", icon: XCircle, className: "text-rose-600 dark:text-rose-400" },
+    active:    { label: "Active",     icon: CheckCircle,  className: "text-emerald-600 dark:text-emerald-400" },
+    suspended: { label: "Suspended",  icon: AlertCircle,  className: "text-amber-600 dark:text-amber-400" },
+    cancelled: { label: "Cancelled",  icon: XCircle,      className: "text-rose-600 dark:text-rose-400" },
   };
   const c = config[status] || config.active;
   const Icon = c.icon;
@@ -85,8 +79,6 @@ function statusBadge(status: string) {
     </span>
   );
 }
-
-// ─── Stat Card ────────────────────────────────────────────────────────────────
 
 function StatCard({ label, value, sub, icon: Icon, color = "text-muted-foreground" }: {
   label: string; value: string | number; sub?: string; icon: any; color?: string;
@@ -107,71 +99,170 @@ function StatCard({ label, value, sub, icon: Icon, color = "text-muted-foregroun
   );
 }
 
-// ─── User Card / Detail Sheet ──────────────────────────────────────────────────
+// ─── Admin Login Screen ───────────────────────────────────────────────────────
+
+function AdminLogin({ onSuccess }: { onSuccess: () => void }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function handleLogin(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/auth`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Invalid credentials");
+        return;
+      }
+      setAdminToken(data.token);
+      onSuccess();
+    } catch {
+      setError("Connection error");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+        <div className="flex items-center justify-center gap-2 mb-8">
+          <Shield className="w-6 h-6 text-primary" />
+          <span className="text-xl font-bold">SiteAmoeba Admin</span>
+        </div>
+        <Card>
+          <CardContent className="pt-6">
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Email</label>
+                <Input
+                  type="email"
+                  value={email}
+                  onChange={e => setEmail(e.target.value)}
+                  placeholder="admin@siteamoeba.com"
+                  autoComplete="email"
+                  required
+                  data-testid="input-admin-email"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Password</label>
+                <div className="relative">
+                  <Input
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={e => setPassword(e.target.value)}
+                    placeholder="••••••••••"
+                    autoComplete="current-password"
+                    required
+                    className="pr-9"
+                    data-testid="input-admin-password"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowPassword(s => !s)}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+              {error && (
+                <p className="text-sm text-destructive" data-testid="admin-login-error">{error}</p>
+              )}
+              <Button type="submit" className="w-full" disabled={loading} data-testid="button-admin-login">
+                {loading ? "Signing in..." : "Sign In"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── User Detail Sheet ────────────────────────────────────────────────────────
 
 function UserDetailSheet({ userId, onClose }: { userId: number | null; onClose: () => void }) {
   const { toast } = useToast();
+  const adminQC = useQueryClient();
   const [addCreditsAmount, setAddCreditsAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [editingPlan, setEditingPlan] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const { data: user, isLoading } = useQuery<any>({
-    queryKey: ["/api/admin/users", userId],
+    queryKey: ["admin-user", userId],
     queryFn: async () => {
-      const res = await apiRequest("GET", `/api/admin/users/${userId}`);
-      return res.json();
+      const res = await adminFetch(`/api/admin/users/${userId}`);
+      const d = await res.json();
+      setNotes(d.adminNotes || "");
+      return d;
     },
     enabled: !!userId,
-    onSuccess: (d) => setNotes(d.adminNotes || ""),
   });
 
   const updateMutation = useMutation({
     mutationFn: async (data: any) => {
-      const res = await apiRequest("PATCH", `/api/admin/users/${userId}`, data);
+      const res = await adminFetch(`/api/admin/users/${userId}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      });
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users", userId] });
+      adminQC.invalidateQueries({ queryKey: ["admin-users"] });
+      adminQC.invalidateQueries({ queryKey: ["admin-user", userId] });
       toast({ title: "Updated" });
     },
   });
 
   const addCreditsMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/admin/users/${userId}/add-credits`, {
-        amount: parseInt(addCreditsAmount),
+      const res = await adminFetch(`/api/admin/users/${userId}/add-credits`, {
+        method: "POST",
+        body: JSON.stringify({ amount: parseInt(addCreditsAmount) }),
       });
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users", userId] });
+      adminQC.invalidateQueries({ queryKey: ["admin-user", userId] });
+      adminQC.invalidateQueries({ queryKey: ["admin-users"] });
       setAddCreditsAmount("");
-      toast({ title: "Credits added" });
+      toast({ title: `${addCreditsAmount} credits added` });
     },
   });
 
   const impersonateMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", `/api/admin/users/${userId}/impersonate`, {});
+      const res = await adminFetch(`/api/admin/users/${userId}/impersonate`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
       return res.json();
     },
     onSuccess: (data) => {
-      // Open the app with the impersonation token in a new tab
-      // The app reads ?token= from the hash on load
-      const url = `${window.location.origin}/#/?token=${encodeURIComponent(data.token)}`;
-      window.open(url, "_blank");
+      // Open the app as this user in a new tab — token goes in hash
+      window.open(`${window.location.origin}/#/?token=${encodeURIComponent(data.token)}`, "_blank");
     },
   });
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("DELETE", `/api/admin/users/${userId}`, {});
+      const res = await adminFetch(`/api/admin/users/${userId}`, { method: "DELETE" });
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      adminQC.invalidateQueries({ queryKey: ["admin-users"] });
       setShowDeleteConfirm(false);
       onClose();
       toast({ title: "Account cancelled" });
@@ -179,19 +270,16 @@ function UserDetailSheet({ userId, onClose }: { userId: number | null; onClose: 
   });
 
   return (
-    <Sheet open={!!userId} onOpenChange={(open) => !open && onClose()}>
+    <Sheet open={!!userId} onOpenChange={open => !open && onClose()}>
       <SheetContent className="w-[480px] sm:w-[520px] overflow-y-auto" data-testid="user-detail-sheet">
         <SheetHeader className="pb-4">
           <SheetTitle className="flex items-center gap-2">
-            <Users className="w-4 h-4" />
-            User Profile
+            <Users className="w-4 h-4" /> User Profile
           </SheetTitle>
         </SheetHeader>
 
         {isLoading || !user ? (
-          <div className="space-y-3">
-            {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}
-          </div>
+          <div className="space-y-3">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
         ) : (
           <div className="space-y-6">
             {/* Identity */}
@@ -208,49 +296,37 @@ function UserDetailSheet({ userId, onClose }: { userId: number | null; onClose: 
               </div>
               <p className="text-xs text-muted-foreground mt-1">
                 Joined {new Date(user.createdAt).toLocaleDateString()} · ID #{user.id}
-                {user.isAdmin ? " · Admin" : ""}
               </p>
             </div>
 
             {/* Quick stats */}
             <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="bg-muted/50 rounded-lg py-2.5 px-2">
-                <p className="text-base font-bold">{user.activeCampaigns}</p>
-                <p className="text-xs text-muted-foreground">Campaigns</p>
-              </div>
-              <div className="bg-muted/50 rounded-lg py-2.5 px-2">
-                <p className="text-base font-bold">{user.totalVisitors}</p>
-                <p className="text-xs text-muted-foreground">Visitors</p>
-              </div>
-              <div className="bg-muted/50 rounded-lg py-2.5 px-2">
-                <p className="text-base font-bold">{user.creditsUsed ?? 0}/{user.creditsLimit ?? 0}</p>
-                <p className="text-xs text-muted-foreground">Credits</p>
-              </div>
+              {[
+                { label: "Campaigns", value: user.activeCampaigns },
+                { label: "Visitors", value: user.totalVisitors },
+                { label: "Credits", value: `${user.creditsUsed ?? 0}/${user.creditsLimit ?? 0}` },
+              ].map(s => (
+                <div key={s.label} className="bg-muted/50 rounded-lg py-2.5 px-2">
+                  <p className="text-base font-bold">{s.value}</p>
+                  <p className="text-xs text-muted-foreground">{s.label}</p>
+                </div>
+              ))}
             </div>
 
-            {/* Change plan */}
+            {/* Plan */}
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-1.5">Plan</p>
               <div className="flex gap-2">
-                <Select
-                  value={editingPlan ?? user.plan}
-                  onValueChange={setEditingPlan}
-                >
-                  <SelectTrigger className="flex-1">
-                    <SelectValue />
-                  </SelectTrigger>
+                <Select value={editingPlan ?? user.plan} onValueChange={setEditingPlan}>
+                  <SelectTrigger className="flex-1"><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="free">Free</SelectItem>
-                    <SelectItem value="pro">Pro ($47/mo)</SelectItem>
-                    <SelectItem value="business">Business ($97/mo)</SelectItem>
-                    <SelectItem value="autopilot">Autopilot ($299/mo)</SelectItem>
+                    {["free", "pro", "business", "autopilot"].map(p => (
+                      <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-                <Button
-                  size="sm"
-                  disabled={!editingPlan || editingPlan === user.plan || updateMutation.isPending}
-                  onClick={() => updateMutation.mutate({ plan: editingPlan })}
-                >
+                <Button size="sm" disabled={!editingPlan || editingPlan === user.plan || updateMutation.isPending}
+                  onClick={() => updateMutation.mutate({ plan: editingPlan })}>
                   Save
                 </Button>
               </div>
@@ -260,22 +336,13 @@ function UserDetailSheet({ userId, onClose }: { userId: number | null; onClose: 
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-1.5">Add Credits</p>
               <div className="flex gap-2">
-                <Input
-                  type="number"
-                  placeholder="Amount"
-                  value={addCreditsAmount}
-                  onChange={(e) => setAddCreditsAmount(e.target.value)}
-                  className="flex-1"
-                  data-testid="input-add-credits"
-                />
-                <Button
-                  size="sm"
-                  onClick={() => addCreditsMutation.mutate()}
+                <Input type="number" placeholder="Amount" value={addCreditsAmount}
+                  onChange={e => setAddCreditsAmount(e.target.value)} className="flex-1"
+                  data-testid="input-add-credits" />
+                <Button size="sm" onClick={() => addCreditsMutation.mutate()}
                   disabled={!addCreditsAmount || addCreditsMutation.isPending}
-                  data-testid="button-add-credits-confirm"
-                >
-                  <PlusCircle className="w-3.5 h-3.5 mr-1" />
-                  Add
+                  data-testid="button-add-credits-confirm">
+                  <PlusCircle className="w-3.5 h-3.5 mr-1" /> Add
                 </Button>
               </div>
             </div>
@@ -284,15 +351,10 @@ function UserDetailSheet({ userId, onClose }: { userId: number | null; onClose: 
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-1.5">Account Status</p>
               <div className="flex gap-2">
-                {["active", "suspended"].map((s) => (
-                  <Button
-                    key={s}
-                    size="sm"
-                    variant={user.accountStatus === s ? "default" : "outline"}
+                {["active", "suspended"].map(s => (
+                  <Button key={s} size="sm" variant={user.accountStatus === s ? "default" : "outline"}
                     onClick={() => updateMutation.mutate({ accountStatus: s })}
-                    disabled={updateMutation.isPending}
-                    className="capitalize"
-                  >
+                    disabled={updateMutation.isPending} className="capitalize">
                     {s}
                   </Button>
                 ))}
@@ -302,20 +364,12 @@ function UserDetailSheet({ userId, onClose }: { userId: number | null; onClose: 
             {/* Admin notes */}
             <div>
               <p className="text-xs font-medium text-muted-foreground mb-1.5">Internal Notes</p>
-              <Textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                placeholder="Notes visible only to admins..."
-                rows={3}
-                data-testid="input-admin-notes"
-              />
-              <Button
-                size="sm"
-                variant="outline"
-                className="mt-1.5"
+              <Textarea value={notes} onChange={e => setNotes(e.target.value)}
+                placeholder="Notes visible only to admins..." rows={3}
+                data-testid="input-admin-notes" />
+              <Button size="sm" variant="outline" className="mt-1.5"
                 onClick={() => updateMutation.mutate({ adminNotes: notes })}
-                disabled={updateMutation.isPending}
-              >
+                disabled={updateMutation.isPending}>
                 Save Notes
               </Button>
             </div>
@@ -335,10 +389,10 @@ function UserDetailSheet({ userId, onClose }: { userId: number | null; onClose: 
               </div>
             )}
 
-            {/* Referral info */}
+            {/* Referral */}
             {user.referralCode && (
               <div>
-                <p className="text-xs font-medium text-muted-foreground mb-1.5">Referral</p>
+                <p className="text-xs font-medium text-muted-foreground mb-1.5">Referral Code</p>
                 <div className="flex items-center gap-2 bg-muted/50 rounded px-3 py-2 text-sm">
                   <Share2 className="w-3.5 h-3.5 text-muted-foreground" />
                   <span className="font-mono">{user.referralCode}</span>
@@ -349,39 +403,39 @@ function UserDetailSheet({ userId, onClose }: { userId: number | null; onClose: 
               </div>
             )}
 
+            {/* Stripe */}
+            {user.stripeCustomerId && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-1.5">Stripe</p>
+                <p className="text-xs font-mono text-muted-foreground bg-muted/50 rounded px-3 py-2">
+                  {user.stripeCustomerId}
+                </p>
+              </div>
+            )}
+
             {/* Actions */}
             <div className="border-t pt-4 space-y-2">
-              <Button
-                variant="outline"
-                className="w-full gap-2"
+              <Button variant="outline" className="w-full gap-2"
                 onClick={() => impersonateMutation.mutate()}
                 disabled={impersonateMutation.isPending}
-                data-testid="button-impersonate"
-              >
+                data-testid="button-impersonate">
                 <LogIn className="w-4 h-4" />
                 {impersonateMutation.isPending ? "Opening..." : "Log In As User"}
               </Button>
-              <p className="text-xs text-center text-muted-foreground">
-                Opens a 2-hour session as this user in a new tab
-              </p>
-              <Button
-                variant="destructive"
-                className="w-full gap-2"
+              <p className="text-xs text-center text-muted-foreground">Opens a 2-hour session as this user in a new tab</p>
+              <Button variant="destructive" className="w-full gap-2"
                 onClick={() => setShowDeleteConfirm(true)}
-                data-testid="button-cancel-account"
-              >
-                <Trash2 className="w-4 h-4" />
-                Cancel Account
+                data-testid="button-cancel-account">
+                <Trash2 className="w-4 h-4" /> Cancel Account
               </Button>
             </div>
 
-            {/* Delete confirm */}
             <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Cancel this account?</DialogTitle>
                   <DialogDescription>
-                    This will mark the account as cancelled. The user's data is preserved but they won't be able to log in. This can be reversed by setting status to Active.
+                    Marks the account as cancelled. Data is preserved but the user can't log in. Reversible by setting status to Active.
                   </DialogDescription>
                 </DialogHeader>
                 <DialogFooter>
@@ -403,68 +457,47 @@ function UserDetailSheet({ userId, onClose }: { userId: number | null; onClose: 
 
 function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { toast } = useToast();
+  const adminQC = useQueryClient();
   const [form, setForm] = useState({ email: "", password: "", name: "", plan: "free" });
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/admin/users", form);
+      const res = await adminFetch("/api/admin/users", {
+        method: "POST",
+        body: JSON.stringify(form),
+      });
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/users"] });
+      adminQC.invalidateQueries({ queryKey: ["admin-users"] });
       toast({ title: "User created" });
       setForm({ email: "", password: "", name: "", plan: "free" });
       onClose();
     },
-    onError: (err: any) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
-    },
   });
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+    <Dialog open={open} onOpenChange={o => !o && onClose()}>
       <DialogContent data-testid="dialog-create-user">
-        <DialogHeader>
-          <DialogTitle>Create New User</DialogTitle>
-        </DialogHeader>
+        <DialogHeader><DialogTitle>Create New User</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
-          <Input
-            placeholder="Email"
-            value={form.email}
-            onChange={(e) => setForm(f => ({ ...f, email: e.target.value }))}
-            data-testid="input-new-user-email"
-          />
-          <Input
-            placeholder="Full Name (optional)"
-            value={form.name}
-            onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
-          />
-          <Input
-            type="password"
-            placeholder="Password"
-            value={form.password}
-            onChange={(e) => setForm(f => ({ ...f, password: e.target.value }))}
-            data-testid="input-new-user-password"
-          />
-          <Select value={form.plan} onValueChange={(v) => setForm(f => ({ ...f, plan: v }))}>
-            <SelectTrigger>
-              <SelectValue placeholder="Plan" />
-            </SelectTrigger>
+          <Input placeholder="Email" value={form.email} onChange={e => setForm(f => ({ ...f, email: e.target.value }))} data-testid="input-new-user-email" />
+          <Input placeholder="Full Name (optional)" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} />
+          <Input type="password" placeholder="Password" value={form.password} onChange={e => setForm(f => ({ ...f, password: e.target.value }))} data-testid="input-new-user-password" />
+          <Select value={form.plan} onValueChange={v => setForm(f => ({ ...f, plan: v }))}>
+            <SelectTrigger><SelectValue placeholder="Plan" /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="free">Free</SelectItem>
-              <SelectItem value="pro">Pro</SelectItem>
-              <SelectItem value="business">Business</SelectItem>
-              <SelectItem value="autopilot">Autopilot</SelectItem>
+              {["free", "pro", "business", "autopilot"].map(p => (
+                <SelectItem key={p} value={p} className="capitalize">{p}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button
-            onClick={() => createMutation.mutate()}
+          <Button onClick={() => createMutation.mutate()}
             disabled={!form.email || !form.password || createMutation.isPending}
-            data-testid="button-create-user-confirm"
-          >
+            data-testid="button-create-user-confirm">
             {createMutation.isPending ? "Creating..." : "Create User"}
           </Button>
         </DialogFooter>
@@ -473,49 +506,50 @@ function CreateUserDialog({ open, onClose }: { open: boolean; onClose: () => voi
   );
 }
 
-// ─── Main Admin Page ──────────────────────────────────────────────────────────
+// ─── Main Admin Panel ─────────────────────────────────────────────────────────
 
 export default function AdminPage() {
-  const { user, isLoading: authLoading } = useAuth();
-  const [, navigate] = useLocation();
+  const { toast } = useToast();
+  const adminQC = useQueryClient();
+  const [loggedIn, setLoggedIn] = useState(!!getAdminToken());
   const [search, setSearch] = useState("");
   const [filterPlan, setFilterPlan] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [showCreateUser, setShowCreateUser] = useState(false);
 
-  const { data: stats, isLoading: statsLoading } = useQuery<AdminStats>({
-    queryKey: ["/api/admin/stats"],
+  const handleLoginSuccess = useCallback(() => setLoggedIn(true), []);
+
+  const { data: stats, isLoading: statsLoading } = useQuery<any>({
+    queryKey: ["admin-stats"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/admin/stats");
+      const res = await adminFetch("/api/admin/stats");
       return res.json();
     },
+    enabled: loggedIn,
   });
 
-  const { data: users, isLoading: usersLoading } = useQuery<AdminUser[]>({
-    queryKey: ["/api/admin/users"],
+  const { data: users, isLoading: usersLoading } = useQuery<any[]>({
+    queryKey: ["admin-users"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/admin/users");
+      const res = await adminFetch("/api/admin/users");
       return res.json();
     },
+    enabled: loggedIn,
   });
 
   const { data: referralData } = useQuery<any>({
-    queryKey: ["/api/admin/referrals"],
+    queryKey: ["admin-referrals"],
     queryFn: async () => {
-      const res = await apiRequest("GET", "/api/admin/referrals");
+      const res = await adminFetch("/api/admin/referrals");
       return res.json();
     },
+    enabled: loggedIn,
   });
 
-  // Guard: redirect non-admins
-  if (!authLoading && user && !(user as any).isAdmin) {
-    navigate("/");
-    return null;
-  }
+  if (!loggedIn) return <AdminLogin onSuccess={handleLoginSuccess} />;
 
-  // Filter users
-  const filteredUsers = (users || []).filter((u) => {
+  const filteredUsers = (users || []).filter(u => {
     const matchSearch = !search ||
       u.email.toLowerCase().includes(search.toLowerCase()) ||
       (u.name || "").toLowerCase().includes(search.toLowerCase());
@@ -527,23 +561,21 @@ export default function AdminPage() {
   return (
     <div className="min-h-screen bg-background" data-testid="admin-page">
       {/* Header */}
-      <div className="border-b bg-card">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+      <div className="border-b bg-card sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Shield className="w-5 h-5 text-primary" />
             <div>
-              <h1 className="text-lg font-bold">Admin Panel</h1>
-              <p className="text-xs text-muted-foreground">SiteAmoeba internal control center</p>
+              <h1 className="text-base font-bold">SiteAmoeba Admin</h1>
+              <p className="text-xs text-muted-foreground">Internal control center</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => navigate("/")}>
-              <ExternalLink className="w-3.5 h-3.5 mr-1.5" />
-              Back to App
+            <Button variant="outline" size="sm" onClick={() => { setAdminToken(null); setLoggedIn(false); }}>
+              Sign Out
             </Button>
             <Button size="sm" onClick={() => setShowCreateUser(true)} data-testid="button-create-user">
-              <UserPlus className="w-3.5 h-3.5 mr-1.5" />
-              New User
+              <UserPlus className="w-3.5 h-3.5 mr-1.5" /> New User
             </Button>
           </div>
         </div>
@@ -553,24 +585,22 @@ export default function AdminPage() {
 
         {/* Overview stats */}
         <div>
-          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Overview</h2>
+          <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Overview</h2>
           <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {statsLoading ? Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-24" />) : <>
               <StatCard label="Total Users" value={stats?.totalUsers ?? 0} sub={`+${stats?.newUsersThisWeek ?? 0} this week`} icon={Users} color="text-blue-500" />
               <StatCard label="Paid Users" value={stats?.paidUsers ?? 0} sub={`${stats?.freeUsers ?? 0} free`} icon={CreditCard} color="text-emerald-500" />
-              <StatCard label="Trial Users" value={stats?.trialUsers ?? 0} icon={Activity} color="text-amber-500" />
+              <StatCard label="On Trial" value={stats?.trialUsers ?? 0} icon={Activity} color="text-amber-500" />
               <StatCard label="Active Tests" value={stats?.activeTests ?? 0} sub={`${stats?.activeCampaigns ?? 0} campaigns`} icon={FlaskConical} color="text-purple-500" />
               <StatCard label="Visitors (30d)" value={(stats?.visitorsLast30Days ?? 0).toLocaleString()} icon={TrendingUp} color="text-teal-500" />
             </>}
           </div>
-
-          {/* Plan breakdown */}
           {stats && (
             <div className="flex flex-wrap gap-2 mt-3">
               {Object.entries(stats.planBreakdown).map(([plan, count]) => (
                 <div key={plan} className="flex items-center gap-1.5 bg-muted/60 rounded-full px-3 py-1">
                   {planBadge(plan)}
-                  <span className="text-xs font-semibold">{count}</span>
+                  <span className="text-xs font-semibold">{count as number}</span>
                 </div>
               ))}
             </div>
@@ -585,115 +615,80 @@ export default function AdminPage() {
             <TabsTrigger value="enterprise" className="gap-1.5"><Building2 className="w-3.5 h-3.5" />Enterprise</TabsTrigger>
           </TabsList>
 
-          {/* ─── Users Tab ─── */}
+          {/* Users */}
           <TabsContent value="users" className="mt-4">
-            {/* Filters */}
             <div className="flex flex-wrap gap-2 mb-4">
               <div className="relative flex-1 min-w-[200px]">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-                <Input
-                  placeholder="Search by email or name..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-9"
-                  data-testid="input-search-users"
-                />
+                <Input placeholder="Search by email or name..." value={search}
+                  onChange={e => setSearch(e.target.value)} className="pl-9"
+                  data-testid="input-search-users" />
               </div>
               <Select value={filterPlan} onValueChange={setFilterPlan}>
-                <SelectTrigger className="w-36">
-                  <SelectValue placeholder="All plans" />
-                </SelectTrigger>
+                <SelectTrigger className="w-36"><SelectValue placeholder="All plans" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Plans</SelectItem>
-                  <SelectItem value="free">Free</SelectItem>
-                  <SelectItem value="pro">Pro</SelectItem>
-                  <SelectItem value="business">Business</SelectItem>
-                  <SelectItem value="autopilot">Autopilot</SelectItem>
+                  {["all", "free", "pro", "business", "autopilot"].map(p => (
+                    <SelectItem key={p} value={p} className="capitalize">{p === "all" ? "All Plans" : p}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="w-36">
-                  <SelectValue placeholder="All statuses" />
-                </SelectTrigger>
+                <SelectTrigger className="w-36"><SelectValue placeholder="All statuses" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  <SelectItem value="active">Active</SelectItem>
-                  <SelectItem value="suspended">Suspended</SelectItem>
-                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                  {[["all", "All Statuses"], ["active", "Active"], ["suspended", "Suspended"], ["cancelled", "Cancelled"]].map(([v, l]) => (
+                    <SelectItem key={v} value={v}>{l}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground self-center ml-1">
-                {filteredUsers.length} of {users?.length ?? 0} users
+                {filteredUsers.length} of {users?.length ?? 0}
               </p>
             </div>
 
-            {/* Users table */}
             <Card>
               <div className="divide-y divide-border">
-                {/* Header row */}
                 <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 px-4 py-2 text-xs font-medium text-muted-foreground">
                   <span>User</span>
                   <span className="text-center w-20">Plan</span>
                   <span className="text-center w-20">Credits</span>
                   <span className="text-center w-20">Campaigns</span>
                   <span className="text-center w-20">Status</span>
-                  <span className="w-6" />
+                  <span className="w-4" />
                 </div>
-
-                {usersLoading ? (
-                  Array.from({ length: 4 }).map((_, i) => (
-                    <div key={i} className="px-4 py-3">
-                      <Skeleton className="h-10 w-full" />
+                {usersLoading ? Array.from({ length: 4 }).map((_, i) => (
+                  <div key={i} className="px-4 py-3"><Skeleton className="h-10 w-full" /></div>
+                )) : filteredUsers.length === 0 ? (
+                  <div className="py-12 text-center text-muted-foreground text-sm">No users match your filters</div>
+                ) : filteredUsers.map(u => (
+                  <div key={u.id}
+                    className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 px-4 py-3 items-center cursor-pointer hover:bg-muted/40 transition-colors"
+                    onClick={() => setSelectedUserId(u.id)}
+                    data-testid={`user-row-${u.id}`}>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{u.name || u.email}</p>
+                      <p className="text-xs text-muted-foreground truncate">{u.email}</p>
+                      <p className="text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleDateString()}</p>
                     </div>
-                  ))
-                ) : filteredUsers.length === 0 ? (
-                  <div className="py-12 text-center text-muted-foreground text-sm">
-                    No users match your filters
+                    <div className="w-20 flex justify-center">{planBadge(u.plan)}</div>
+                    <div className="w-20 text-center"><span className="text-xs tabular-nums">{u.creditsUsed}/{u.creditsLimit}</span></div>
+                    <div className="w-20 text-center"><span className="text-xs">{u.activeCampaigns} active</span></div>
+                    <div className="w-20 flex justify-center">{statusBadge(u.accountStatus)}</div>
+                    <ChevronRight className="w-4 h-4 text-muted-foreground" />
                   </div>
-                ) : (
-                  filteredUsers.map((u) => (
-                    <div
-                      key={u.id}
-                      className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] gap-4 px-4 py-3 items-center cursor-pointer hover:bg-muted/40 transition-colors"
-                      onClick={() => setSelectedUserId(u.id)}
-                      data-testid={`user-row-${u.id}`}
-                    >
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium truncate">
-                          {u.name || u.email}
-                          {u.isAdmin ? <span className="ml-1.5 text-xs text-amber-500">(admin)</span> : null}
-                        </p>
-                        <p className="text-xs text-muted-foreground truncate">{u.email}</p>
-                        <p className="text-xs text-muted-foreground">{new Date(u.createdAt).toLocaleDateString()}</p>
-                      </div>
-                      <div className="w-20 flex justify-center">{planBadge(u.plan)}</div>
-                      <div className="w-20 text-center">
-                        <span className="text-xs tabular-nums">{u.creditsUsed}/{u.creditsLimit}</span>
-                      </div>
-                      <div className="w-20 text-center">
-                        <span className="text-xs">{u.activeCampaigns} active</span>
-                      </div>
-                      <div className="w-20 flex justify-center">{statusBadge(u.accountStatus)}</div>
-                      <ChevronRight className="w-4 h-4 text-muted-foreground" />
-                    </div>
-                  ))
-                )}
+                ))}
               </div>
             </Card>
           </TabsContent>
 
-          {/* ─── Referrals Tab ─── */}
+          {/* Referrals */}
           <TabsContent value="referrals" className="mt-4">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Leaderboard */}
               <div>
-                <h3 className="text-sm font-semibold mb-3">Referral Leaderboard</h3>
+                <h3 className="text-sm font-semibold mb-3">Leaderboard</h3>
                 <Card>
                   <div className="divide-y">
                     {!referralData?.leaderboard?.length ? (
-                      <div className="py-10 text-center text-sm text-muted-foreground">
-                        No referrals yet
-                      </div>
+                      <div className="py-10 text-center text-sm text-muted-foreground">No referrals yet</div>
                     ) : referralData.leaderboard.map((r: any, i: number) => (
                       <div key={i} className="flex items-center justify-between px-4 py-3">
                         <div>
@@ -709,16 +704,12 @@ export default function AdminPage() {
                   </div>
                 </Card>
               </div>
-
-              {/* All referrals */}
               <div>
                 <h3 className="text-sm font-semibold mb-3">All Referrals</h3>
                 <Card>
                   <div className="divide-y">
                     {!referralData?.referrals?.length ? (
-                      <div className="py-10 text-center text-sm text-muted-foreground">
-                        No referrals yet
-                      </div>
+                      <div className="py-10 text-center text-sm text-muted-foreground">No referrals yet</div>
                     ) : referralData.referrals.map((r: any, i: number) => (
                       <div key={i} className="px-4 py-3">
                         <div className="flex items-center justify-between">
@@ -740,7 +731,7 @@ export default function AdminPage() {
             </div>
           </TabsContent>
 
-          {/* ─── Enterprise Tab ─── */}
+          {/* Enterprise */}
           <TabsContent value="enterprise" className="mt-4">
             <Card>
               <CardContent className="py-12 text-center">
@@ -748,13 +739,11 @@ export default function AdminPage() {
                 <h3 className="font-semibold text-base mb-1.5">Enterprise Accounts</h3>
                 <p className="text-sm text-muted-foreground max-w-sm mx-auto">
                   Enterprise account management will be available once the first enterprise client is onboarded.
-                  This section will include data isolation controls, one-way Brain access, custom pricing, and dedicated account management.
                 </p>
                 <div className="mt-6 grid grid-cols-3 gap-3 max-w-sm mx-auto text-left">
-                  {["Data isolation", "Custom Brain access", "White-label options", "SLA monitoring", "Dedicated support", "$50K+/year minimum"].map((f) => (
+                  {["Data isolation", "Custom Brain access", "White-label options", "SLA monitoring", "Dedicated support", "$50K+/year minimum"].map(f => (
                     <div key={f} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <CheckCircle className="w-3 h-3 text-emerald-500 shrink-0" />
-                      {f}
+                      <CheckCircle className="w-3 h-3 text-emerald-500 shrink-0" /> {f}
                     </div>
                   ))}
                 </div>
@@ -764,10 +753,7 @@ export default function AdminPage() {
         </Tabs>
       </div>
 
-      {/* User Detail Sheet */}
       <UserDetailSheet userId={selectedUserId} onClose={() => setSelectedUserId(null)} />
-
-      {/* Create User Dialog */}
       <CreateUserDialog open={showCreateUser} onClose={() => setShowCreateUser(false)} />
     </div>
   );

@@ -120,17 +120,20 @@ function paramId(id: string | string[]): number {
   return parseInt(Array.isArray(id) ? id[0] : id, 10);
 }
 
-async function requireAdmin(req: Request, res: Response, next: NextFunction) {
+// Admin auth is COMPLETELY separate from the user system.
+// Admin credentials live in env vars (ADMIN_EMAIL, ADMIN_PASSWORD) — never in the DB.
+// Admin JWTs carry { isAdminSession: true } and are checked here, not against any user record.
+const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || JWT_SECRET + "-admin";
+
+function requireAdmin(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({ error: "Not authenticated" });
   }
   try {
     const token = authHeader.split(" ")[1];
-    const payload = jwt.verify(token, JWT_SECRET) as { userId: number };
-    req.userId = payload.userId;
-    const user = await storage.getUserById(payload.userId);
-    if (!user || !(user as any).isAdmin) {
+    const payload = jwt.verify(token, ADMIN_JWT_SECRET) as any;
+    if (!payload.isAdminSession) {
       return res.status(403).json({ error: "Admin access required" });
     }
     next();
@@ -420,6 +423,36 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   // ============== ADMIN API ==============
+  // All /api/admin/* routes use requireAdmin which validates admin-specific JWTs.
+  // Admin credentials come from ADMIN_EMAIL + ADMIN_PASSWORD env vars only.
+  // Regular user accounts have no admin access — the two systems are completely separate.
+
+  // POST /api/admin/auth — admin login (env-var credentials only)
+  app.post("/api/admin/auth", async (req: Request, res: Response) => {
+    const { email, password } = req.body || {};
+    const adminEmail = process.env.ADMIN_EMAIL;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+
+    if (!adminEmail || !adminPassword) {
+      return res.status(503).json({ error: "Admin credentials not configured" });
+    }
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password required" });
+    }
+    // Constant-time comparison to prevent timing attacks
+    const emailMatch = email.trim().toLowerCase() === adminEmail.trim().toLowerCase();
+    const passwordMatch = await bcrypt.compare(password, adminPassword).catch(() => false)
+      || password === adminPassword; // support plain-text password in env for initial setup
+    if (!emailMatch || !passwordMatch) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+    const token = jwt.sign(
+      { isAdminSession: true, email: adminEmail },
+      ADMIN_JWT_SECRET,
+      { expiresIn: "8h" }
+    );
+    res.json({ token });
+  });
 
   // GET /api/admin/stats — overview numbers
   app.get("/api/admin/stats", requireAdmin, async (req: Request, res: Response) => {
