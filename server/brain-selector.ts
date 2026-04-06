@@ -14,42 +14,38 @@ function getPool(): Pool {
 }
 
 // Section-to-knowledge mapping: which parts of the knowledge base are relevant for each section type
+// FATE removed as a default mapping. It caused the AI to audit pages against
+// a structural sequence rather than diagnosing the actual problem. Framework
+// knowledge is still available but only loaded when specifically relevant.
 const SECTION_KNOWLEDGE_MAP: Record<string, string[]> = {
   headline: [
-    "1.1 THE F.A.T.E. MODEL", // Focus through novelty
     "1.2 THE WALLPAPER FILTER", // Pattern interrupt
-    "1.4 THE LEGO METHOD", // Most powerful technique
     "7. HEADLINE FORMULAS", // All headline formulas
     "10. WEAK VS STRONG EXAMPLES", // Before/after examples
+    "8. COGNITIVE BIAS MASTER", // Specificity, curiosity
   ],
   subheadline: [
-    "1.1 THE F.A.T.E. MODEL",
-    "4. SALES PAGE STRUCTURE", // Where subheadlines fit
-    "1.7 THE NEW BAD GUY", // Emotional relief
     "10. WEAK VS STRONG EXAMPLES",
+    "8. COGNITIVE BIAS MASTER",
+    "1.7 THE NEW BAD GUY", // Objection removal
   ],
   cta: [
     "1.6 COMMITMENT AND CONSISTENCY", // Micro-commitments
-    "4. SALES PAGE STRUCTURE",
-    "6. AUDIT CHECKLIST", // CTA checks
     "10. WEAK VS STRONG EXAMPLES",
+    "8. COGNITIVE BIAS MASTER", // Loss aversion, urgency
   ],
   guarantee: [
     "2. OFFER ARCHITECTURE", // Risk reversal
-    "1.6 COMMITMENT AND CONSISTENCY",
-    "6. AUDIT CHECKLIST",
+    "8. COGNITIVE BIAS MASTER",
     "10. WEAK VS STRONG EXAMPLES",
   ],
   social_proof: [
-    "1.1 THE F.A.T.E. MODEL", // Tribe stage
-    "8. COGNITIVE BIAS MASTER", // Social proof bias
-    "6. AUDIT CHECKLIST",
+    "8. COGNITIVE BIAS MASTER", // Social proof bias — quantity, specificity
     "10. WEAK VS STRONG EXAMPLES",
   ],
   product_stack: [
     "2. OFFER ARCHITECTURE", // Value stacking
     "3. UNIQUE MECHANISM", // Mechanism naming
-    "6. AUDIT CHECKLIST",
   ],
   bonus: [
     "2. OFFER ARCHITECTURE", // Bonus structuring
@@ -65,15 +61,12 @@ const SECTION_KNOWLEDGE_MAP: Record<string, string[]> = {
     "1.4 THE LEGO METHOD",
     "1.5 PRE-SUASION AND PRIMING",
     "1.7 THE NEW BAD GUY",
-    "5. NLP, HYPNOTIC TECHNIQUES",
-    "4. SALES PAGE STRUCTURE",
     "10. WEAK VS STRONG EXAMPLES",
   ],
   hero_journey: [
-    "1.8 THE R.I.C.E. FRAMEWORK", // Ideology over reward
     "1.7 THE NEW BAD GUY",
-    "5. NLP, HYPNOTIC TECHNIQUES",
     "3. UNIQUE MECHANISM",
+    "1.8 THE R.I.C.E. FRAMEWORK",
   ],
   faq: [
     "6. AUDIT CHECKLIST",
