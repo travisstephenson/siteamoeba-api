@@ -618,6 +618,10 @@ class StorageImpl implements IStorage {
     await pool.query(`
       ALTER TABLE users ADD COLUMN IF NOT EXISTS first_test_enabled_at TEXT;
     `);
+    await pool.query(`
+      ALTER TABLE visitors ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+      CREATE INDEX IF NOT EXISTS visitors_fingerprint_campaign ON visitors (fingerprint, campaign_id);
+    `);
   }
 
   // ===== Users =====

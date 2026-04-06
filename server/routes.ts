@@ -2346,11 +2346,29 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   app.get("/api/widget/assign", widgetLimiter, async (req: Request, res: Response) => {
-    const visitorId = req.query.vid as string;
+    let visitorId = req.query.vid as string;
     const campaignId = parseInt(req.query.cid as string);
+    const fingerprint = req.query.fp as string | undefined;
 
     if (!visitorId || !campaignId) {
       return res.status(400).json({ error: "Missing vid or cid" });
+    }
+
+    // Fingerprint recovery: if this visitor ID is new but we have a fingerprint,
+    // look up a prior visitor with the same fingerprint to preserve variant assignment
+    // across sessions (catches Safari ITP resets, private browsing, etc.)
+    if (fingerprint) {
+      try {
+        const fpMatch = await pool.query(
+          `SELECT id FROM visitors WHERE fingerprint = $1 AND campaign_id = $2 ORDER BY first_seen DESC LIMIT 1`,
+          [fingerprint, campaignId]
+        );
+        if (fpMatch.rows.length > 0) {
+          const recoveredId = fpMatch.rows[0].id;
+          // Use the recovered visitor ID instead of the fresh random one
+          visitorId = recoveredId;
+        }
+      } catch(e) { /* fingerprint column may not exist yet, ignore */ }
     }
 
     const campaign = await storage.getCampaign(campaignId);
@@ -2548,7 +2566,8 @@ export async function registerRoutes(server: Server, app: Express) {
       sectionVariantAssignments: Object.keys(sectionAssignments).length > 0
         ? JSON.stringify(sectionAssignments)
         : null,
-    });
+      fingerprint: fingerprint || null,
+    } as any);
 
     await storage.createImpression({
       visitorId: visitor.id,
