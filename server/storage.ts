@@ -1064,11 +1064,19 @@ class StorageImpl implements IStorage {
         [campaign.id]
       );
       const convResult = await pool.query(
-        "SELECT COUNT(*) as count FROM visitors v INNER JOIN variants var ON var.id = v.headline_variant_id WHERE v.campaign_id = $1 AND v.converted = true",
+        `SELECT (
+           SELECT COUNT(*) FROM visitors v INNER JOIN variants var ON var.id = v.headline_variant_id WHERE v.campaign_id = $1 AND v.converted = true
+         ) + (
+           SELECT COUNT(DISTINCT re.external_id) FROM revenue_events re WHERE re.campaign_id = $1 AND re.visitor_id IS NULL AND re.event_type = 'purchase'
+         ) AS count`,
         [campaign.id]
       );
       const revResult = await pool.query(
-        "SELECT COALESCE(SUM(v.revenue), 0) as total FROM visitors v INNER JOIN variants var ON var.id = v.headline_variant_id WHERE v.campaign_id = $1 AND v.converted = true",
+        `SELECT (
+           SELECT COALESCE(SUM(v.revenue), 0) FROM visitors v INNER JOIN variants var ON var.id = v.headline_variant_id WHERE v.campaign_id = $1 AND v.converted = true
+         ) + (
+           SELECT COALESCE(SUM(re.amount), 0) FROM revenue_events re WHERE re.campaign_id = $1 AND re.visitor_id IS NULL AND re.event_type = 'purchase'
+         ) AS total`,
         [campaign.id]
       );
       const varResult = await pool.query(

@@ -990,8 +990,22 @@ export async function registerRoutes(server: Server, app: Express) {
     // Calculate totals from headline variants only (primary split dimension)
     const headlineStats = variantStats.filter(v => v.type === "headline");
     const totalVisitors = headlineStats.reduce((sum, v) => sum + v.impressions, 0);
-    const totalConversions = headlineStats.reduce((sum, v) => sum + v.conversions, 0);
-    const totalRevenue = headlineStats.reduce((sum, v) => sum + v.revenue, 0);
+    const visitorConversions = headlineStats.reduce((sum, v) => sum + v.conversions, 0);
+    const visitorRevenue = headlineStats.reduce((sum, v) => sum + v.revenue, 0);
+
+    // ALSO count revenue_events directly — covers Stripe/Whop synced purchases
+    // where no visitor email match was found (no pixel visitor record)
+    const reRow = await pool.query(
+      `SELECT COUNT(DISTINCT re.external_id) FILTER (WHERE re.visitor_id IS NULL AND re.event_type = 'purchase') AS unmatched_conversions,
+              COALESCE(SUM(re.amount) FILTER (WHERE re.visitor_id IS NULL AND re.event_type = 'purchase'), 0) AS unmatched_revenue
+       FROM revenue_events re WHERE re.campaign_id = $1`,
+      [campaign.id]
+    );
+    const unmatchedConversions = parseInt(reRow.rows[0]?.unmatched_conversions || "0");
+    const unmatchedRevenue = parseFloat(reRow.rows[0]?.unmatched_revenue || "0");
+
+    const totalConversions = visitorConversions + unmatchedConversions;
+    const totalRevenue = visitorRevenue + unmatchedRevenue;
     const conversionRate = totalVisitors > 0 ? totalConversions / totalVisitors : 0;
 
     // Map to the shape the frontend expects
@@ -1171,12 +1185,14 @@ export async function registerRoutes(server: Server, app: Express) {
 
       if (!matchedCampaignId) continue;
 
+      const chargeAmount = charge.amount / 100;
+
       await storage.addRevenueEvent({
         visitorId: matchedVisitorId || undefined,
         campaignId: matchedCampaignId,
         source: "stripe_account",
         eventType: charge.refunded ? "refund" : "purchase",
-        amount: charge.amount / 100,
+        amount: chargeAmount,
         currency: charge.currency?.toUpperCase() || "USD",
         externalId: charge.id,
         customerEmail: customerEmail,
@@ -1185,6 +1201,23 @@ export async function registerRoutes(server: Server, app: Express) {
           paymentMethod: charge.payment_method_details?.type,
         }),
       });
+
+      // Mark visitor converted + store revenue so it shows in campaign stats
+      if (matchedVisitorId && !charge.refunded) {
+        try {
+          const visitor = await storage.getVisitor(matchedVisitorId);
+          if (visitor && !visitor.converted) {
+            await storage.markConverted(matchedVisitorId, charge.id, chargeAmount, customerEmail || undefined);
+          } else if (visitor && visitor.converted && chargeAmount > 0) {
+            // Additional purchase — accumulate revenue
+            await pool.query(
+              `UPDATE visitors SET revenue = COALESCE(revenue, 0) + $1 WHERE id = $2`,
+              [chargeAmount, matchedVisitorId]
+            );
+          }
+        } catch { /* non-fatal: revenue_event is already stored */ }
+      }
+
       matched++;
     }
 
@@ -3956,6 +3989,17 @@ export async function registerRoutes(server: Server, app: Express) {
           customerEmail: email,
           metadata: JSON.stringify({ product: mem.product, plan: mem.plan, status: mem.status }),
         });
+
+        // Mark visitor converted so stats pick it up
+        if (matchedVisitorId && amount > 0) {
+          try {
+            const visitor = await storage.getVisitor(matchedVisitorId);
+            if (visitor && !visitor.converted) {
+              await storage.markConverted(matchedVisitorId, externalId, amount, email);
+            }
+          } catch { /* non-fatal */ }
+        }
+
         synced++;
       }
 
