@@ -1478,25 +1478,28 @@ export async function registerRoutes(server: Server, app: Express) {
 
     let rawResponse: string;
     try {
-      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 3000 });
+      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 6000 });
     } catch (err: any) {
       console.error("Page scan LLM call failed:", err);
       scanJobs.set(jobId, { status: "error", error: err.message || "AI provider error. Check your API key and credits in Settings.", createdAt: Date.now() }); return;
     }
 
-    // Parse the JSON response
+    // Parse the JSON response — use outermost {…} extraction to handle any preamble/postamble
     let scanResult: { pageName: string; pageType: string; pageGoal?: string; pricePoint?: string; niche?: string; sections: any[] };
     try {
-      const cleanedResponse = rawResponse
-        .replace(/^```(?:json)?\s*/i, "")
-        .replace(/\s*```\s*$/, "")
-        .trim();
-      scanResult = JSON.parse(cleanedResponse);
+      // Find the outermost JSON object (handles markdown code blocks, leading text, etc.)
+      const firstBrace = rawResponse.indexOf("{");
+      const lastBrace = rawResponse.lastIndexOf("}");
+      if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+        throw new Error("No JSON object found in AI response");
+      }
+      const jsonStr = rawResponse.slice(firstBrace, lastBrace + 1);
+      scanResult = JSON.parse(jsonStr);
       if (!scanResult.sections || !Array.isArray(scanResult.sections)) {
         throw new Error("Expected sections array");
       }
     } catch (err: any) {
-      console.error("Failed to parse page scan response:", rawResponse);
+      console.error("[scan] Failed to parse AI response (first 500 chars):", rawResponse?.slice(0, 500));
       scanJobs.set(jobId, { status: "error", error: "AI returned invalid response. Please try again.", createdAt: Date.now() }); return;
     }
 

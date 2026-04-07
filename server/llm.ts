@@ -298,7 +298,7 @@ async function _callLLMInternal(
   const response = await client.chat.completions.create({
     model,
     messages: openaiMessages,
-    max_tokens: 2048,
+    max_tokens: maxTokens || 2048,
   });
 
   const content = response.choices[0]?.message?.content;
