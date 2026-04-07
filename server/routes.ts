@@ -1383,11 +1383,11 @@ export async function registerRoutes(server: Server, app: Express) {
     (async () => {
       try {
 
-    // Fetch the page HTML — stream first 80KB only to avoid downloading multi-MB pages
+    // Fetch the full page HTML — background job has no timeout constraint
     let rawHtml = "";
     try {
       const fetchController = new AbortController();
-      const fetchTimeout = setTimeout(() => fetchController.abort(), 15000);
+      const fetchTimeout = setTimeout(() => fetchController.abort(), 60000); // 60s timeout for background
 
       let fetchResponse: Response;
       try {
@@ -1402,7 +1402,7 @@ export async function registerRoutes(server: Server, app: Express) {
       } catch (fetchErr: any) {
         clearTimeout(fetchTimeout);
         const isTimeout = fetchErr.name === "AbortError";
-        const fetchErrMsg = isTimeout ? "Page fetch timed out (15s). The URL may be slow or unreachable." : `Could not fetch page: ${fetchErr.message || "Network error"}`;
+        const fetchErrMsg = isTimeout ? "Page fetch timed out. The URL may be slow or unreachable." : `Could not fetch page: ${fetchErr.message || "Network error"}`;
         scanJobs.set(jobId, { status: "error", error: fetchErrMsg, createdAt: Date.now() }); return;
       }
 
@@ -1411,41 +1411,21 @@ export async function registerRoutes(server: Server, app: Express) {
         scanJobs.set(jobId, { status: "error", error: `Could not fetch page: HTTP ${fetchResponse.status}`, createdAt: Date.now() }); return;
       }
 
-      // Read up to 80KB of the body then forcibly close the connection
-      const MAX_BYTES = 80000;
-      const reader = fetchResponse.body!.getReader();
-      const chunks: Uint8Array[] = [];
-      let totalBytes = 0;
-      try {
-        while (totalBytes < MAX_BYTES) {
-          const { done, value } = await reader.read();
-          if (done || !value) break;
-          chunks.push(value);
-          totalBytes += value.byteLength;
-        }
-      } finally {
-        // Destroy the stream so Node doesn't wait to drain the remaining 1.5MB
-        try { await reader.cancel("size_limit"); } catch (_) {}
-        fetchController.abort();
-      }
-      rawHtml = Buffer.concat(chunks.map(c => Buffer.from(c))).toString("utf-8");
+      rawHtml = await fetchResponse.text();
     } catch (err: any) {
       scanJobs.set(jobId, { status: "error", error: `Could not fetch page: ${err.message || "Network error"}`, createdAt: Date.now() }); return;
     }
 
-    // Fast tag stripping using character-class regex (no dot-all, no backtracking issues)
-    // Strip script/style blocks by removing from '<s' or '<S' to '>', then strip remaining tags
-    let cleaned = rawHtml
-      .replace(/<script[^>]*>[\s\S]{0,50000}<\/script>/gi, " ")  // cap inner content to prevent backtracking
-      .replace(/<style[^>]*>[\s\S]{0,20000}<\/style>/gi, " ")
-      .replace(/<[^>]{0,500}>/g, " ")  // strip remaining tags (capped attribute length)
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 8000);
-    if (!cleaned || cleaned.length < 100) {
-      // Fallback: if stripping removed everything (all-JS page), just use raw slice
-      cleaned = rawHtml.slice(5000, 35000); // Skip the first 5KB of headers/scripts
-    }
+    // Smart content extraction: find </head> and take 30KB from the body
+    // GHL pages have their content starting after a very large <head> section
+    const headEnd = rawHtml.toLowerCase().indexOf("</head>");
+    const bodyStart = headEnd > 0 ? headEnd + 7 : 0;
+    // Take 30KB of body content (where actual page text lives)
+    const bodySlice = rawHtml.slice(bodyStart, bodyStart + 30000);
+    // Also include page title from head for context
+    const titleMatch = rawHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
+    const titleText = titleMatch ? `Page title: ${titleMatch[1].trim()}\n\n` : "";
+    const cleaned = (titleText + bodySlice).slice(0, 10000);
 
     const messages = buildPageScanPrompt(url, cleaned);
 
