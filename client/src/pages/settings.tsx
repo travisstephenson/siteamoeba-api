@@ -1127,21 +1127,8 @@ function WhopIntegration({ userId }: { userId?: number }) {
                 </p>
               </div>
 
-              {webhookUrl && (
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Your webhook URL</p>
-                  <UrlRow url={webhookUrl} testId="whop-webhook-url-disconnected" />
-                </div>
-              )}
-
-              <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
-                <p className="font-medium text-foreground">Webhook setup in Whop</p>
-                <ol className="list-decimal list-inside space-y-1">
-                  <li>Go to <strong className="text-foreground">Whop Dashboard</strong> → Developer → Webhooks</li>
-                  <li>Click <strong className="text-foreground">Create webhook</strong></li>
-                  <li>Paste the webhook URL above</li>
-                  <li>Select events: <em>payment.succeeded</em>, <em>payment.failed</em></li>
-                </ol>
+              <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
+                Once connected, SiteAmoeba automatically syncs your Whop purchases and attributes them to your campaigns — no webhook setup required.
               </div>
             </div>
           )}
