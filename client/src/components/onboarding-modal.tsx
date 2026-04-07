@@ -146,7 +146,7 @@ const STEPS = [
         {[
           {
             n: "1",
-            title: "Click "+ New Campaign" in the sidebar",
+            title: 'Click "+ New Campaign" in the sidebar',
             desc: "You'll find it under the Campaigns section.",
           },
           {
