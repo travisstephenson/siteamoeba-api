@@ -3619,20 +3619,12 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json(items);
   });
 
-  app.get("/api/admin/feedback", requireAuth, async (req: Request, res: Response) => {
-    const user = await storage.getUserById(req.userId!);
-    if (!user || user.email !== "test@test.com") {
-      return res.status(403).json({ error: "Forbidden" });
-    }
+  app.get("/api/admin/feedback", requireAdmin, async (req: Request, res: Response) => {
     const items = await storage.getAllFeedback();
     res.json(items);
   });
 
-  app.patch("/api/admin/feedback/:id", requireAuth, async (req: Request, res: Response) => {
-    const user = await storage.getUserById(req.userId!);
-    if (!user || user.email !== "test@test.com") {
-      return res.status(403).json({ error: "Forbidden" });
-    }
+  app.patch("/api/admin/feedback/:id", requireAdmin, async (req: Request, res: Response) => {
     const id = paramId(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
     const { status, adminNotes } = req.body;
