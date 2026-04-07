@@ -1322,6 +1322,51 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   // ============== PAGE SCANNER ==============
+
+  /**
+   * extractPageText — strip a raw HTML page down to compact, LLM-friendly structured text.
+   * Returns [H1], [H2], [BUTTON], [•] markers so the AI understands element types
+   * while fitting 10x more content into the same token budget vs raw HTML.
+   */
+  function extractPageText(html: string): string {
+    return html
+      // Remove noise blocks entirely
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<noscript[^>]*>[\s\S]*?<\/noscript>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      // Annotate structural elements
+      .replace(/<h1[^>]*>/gi, '\n[H1] ')
+      .replace(/<h2[^>]*>/gi, '\n[H2] ')
+      .replace(/<h3[^>]*>/gi, '\n[H3] ')
+      .replace(/<h4[^>]*>/gi, '\n[H4] ')
+      .replace(/<h5[^>]*>/gi, '\n[H5] ')
+      .replace(/<\/h[1-5]>/gi, '\n')
+      .replace(/<button[^>]*>/gi, '\n[BUTTON] ')
+      .replace(/<\/button>/gi, '\n')
+      .replace(/<li[^>]*>/gi, '\n[•] ')
+      .replace(/<\/li>/gi, '')
+      .replace(/<p[^>]*>/gi, '\n')
+      .replace(/<\/p>/gi, '\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/(?:div|section|article|main|header|footer|aside|nav|tr)>/gi, '\n')
+      // Strip all remaining tags
+      .replace(/<[^>]+>/g, ' ')
+      // Decode HTML entities
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&#\d+;/g, ' ')
+      // Collapse whitespace
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n[ \t]+/g, '\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
   // Async job store — in-memory, TTL 10 minutes
   const scanJobs = new Map<string, { status: "pending" | "done" | "error"; result?: any; error?: string; createdAt: number }>();
   setInterval(() => {
@@ -1416,22 +1461,24 @@ export async function registerRoutes(server: Server, app: Express) {
       scanJobs.set(jobId, { status: "error", error: `Could not fetch page: ${err.message || "Network error"}`, createdAt: Date.now() }); return;
     }
 
-    // Smart content extraction: find </head> and take 30KB from the body
-    // GHL pages have their content starting after a very large <head> section
+    // Smart content extraction:
+    // 1. Find </head> to isolate body HTML
+    // 2. Strip scripts/styles/tags → compact structured text with [H1]/[H2]/[BUTTON]/[•] markers
+    // 3. Send up to 40KB — covers the FULL page (vs old 10KB slice of raw HTML)
     const headEnd = rawHtml.toLowerCase().indexOf("</head>");
-    const bodyStart = headEnd > 0 ? headEnd + 7 : 0;
-    // Take 30KB of body content (where actual page text lives)
-    const bodySlice = rawHtml.slice(bodyStart, bodyStart + 30000);
-    // Also include page title from head for context
+    const bodyHtml = headEnd > 0 ? rawHtml.slice(headEnd + 7) : rawHtml;
+    const bodyText = extractPageText(bodyHtml);
+
     const titleMatch = rawHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
     const titleText = titleMatch ? `Page title: ${titleMatch[1].trim()}\n\n` : "";
-    const cleaned = (titleText + bodySlice).slice(0, 10000);
+    // 40KB covers essentially every sales/landing page in full
+    const cleaned = (titleText + bodyText).slice(0, 40000);
 
     const messages = buildPageScanPrompt(url, cleaned);
 
     let rawResponse: string;
     try {
-      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 1500 });
+      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 3000 });
     } catch (err: any) {
       console.error("Page scan LLM call failed:", err);
       scanJobs.set(jobId, { status: "error", error: err.message || "AI provider error. Check your API key and credits in Settings.", createdAt: Date.now() }); return;

@@ -339,14 +339,14 @@ Return ONLY valid JSON in this exact format:
   ]
 }`;
 
-  const userMessage = `Analyze this web page and identify all testable sections.
+  const userMessage = `Analyze this web page and identify ALL testable sections.
 
 Page URL: ${url}
 
-HTML Content:
+Page Content (structured text extracted from HTML — [H1]/[H2]/[BUTTON]/[•] markers indicate element types):
 ${htmlContent}
 
-Identify every section that could be A/B tested. Return valid JSON only.`;
+This is a FULL sales page — expect 15-25+ distinct testable sections including multiple body_copy blocks, CTAs, social proof elements, guarantees, bonuses, pricing, and FAQs. Do NOT stop at 4-5 sections. Identify every distinct section a copywriter could improve. Return valid JSON only.`;
 
   return [
     { role: "system", content: systemPrompt },
