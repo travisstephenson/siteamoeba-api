@@ -4344,16 +4344,22 @@ export async function registerRoutes(server: Server, app: Express) {
         };
       });
 
-      // Query grouped by device_category
+      // Query grouped into Mobile vs Desktop (the meaningful split for conversion analysis)
+      // mobile = ios + android, desktop = desktop_mac + desktop_windows, tablet = tablet
       const deviceRows = await pgPool.query(
         `SELECT
-          COALESCE(device_category, 'other') AS device,
+          CASE
+            WHEN COALESCE(device_category, 'other') IN ('ios', 'android') THEN 'mobile'
+            WHEN COALESCE(device_category, 'other') IN ('desktop_mac', 'desktop_windows') THEN 'desktop'
+            WHEN COALESCE(device_category, 'other') = 'tablet' THEN 'tablet'
+            ELSE 'other'
+          END AS device,
           COUNT(*) AS visitors,
           SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) AS conversions,
           COALESCE(SUM(CASE WHEN converted = true THEN revenue ELSE 0 END), 0) AS revenue
         FROM visitors
         WHERE campaign_id = $1
-        GROUP BY COALESCE(device_category, 'other')
+        GROUP BY 1
         ORDER BY COUNT(*) DESC`,
         [campaignId]
       );
@@ -4371,6 +4377,23 @@ export async function registerRoutes(server: Server, app: Express) {
           revenuePerVisitor: vis > 0 ? parseFloat((rev / vis).toFixed(2)) : 0,
         };
       });
+
+      // Add device insight: mobile vs desktop CVR comparison
+      const mobile = devices.find((d: any) => d.device === 'mobile');
+      const desktop = devices.find((d: any) => d.device === 'desktop');
+      let deviceInsight = "";
+      if (mobile && desktop && mobile.visitors > 10 && desktop.visitors > 10) {
+        if (desktop.conversionRate > mobile.conversionRate && mobile.conversionRate > 0) {
+          const ratio = (desktop.conversionRate / mobile.conversionRate).toFixed(1);
+          deviceInsight = `Desktop converts at ${ratio}x the rate of mobile (${desktop.conversionRate}% vs ${mobile.conversionRate}%). Consider optimizing your mobile experience.`;
+        } else if (mobile.conversionRate > desktop.conversionRate && desktop.conversionRate > 0) {
+          const ratio = (mobile.conversionRate / desktop.conversionRate).toFixed(1);
+          deviceInsight = `Mobile converts at ${ratio}x the rate of desktop (${mobile.conversionRate}% vs ${desktop.conversionRate}%). Your mobile experience is a strength.`;
+        }
+      } else if (mobile && mobile.visitors > 0) {
+        const mobilePct = devices.length > 0 ? Math.round((mobile.visitors / devices.reduce((s: number, d: any) => s + d.visitors, 0)) * 100) : 0;
+        if (mobilePct > 60) deviceInsight = `${mobilePct}% of your traffic is mobile. Make sure your page converts well on small screens.`;
+      }
 
       // Build top insight: compare best source vs second
       let topInsight = "";
@@ -4392,7 +4415,9 @@ export async function registerRoutes(server: Server, app: Express) {
         topInsight = `All traffic coming from ${label.charAt(0).toUpperCase() + label.slice(1)}`;
       }
 
-      return res.json({ sources, devices, topInsight });
+      // Combine source + device insights
+      const combinedInsight = [topInsight, deviceInsight].filter(Boolean).join(" · ");
+      return res.json({ sources, devices, topInsight: combinedInsight, deviceInsight });
     } finally {
       await pgPool.end();
     }

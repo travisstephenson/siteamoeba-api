@@ -2400,12 +2400,17 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 const DEVICE_LABELS: Record<string, string> = {
-  ios: "iOS",
-  android: "Android",
-  desktop_mac: "Mac",
-  desktop_windows: "Windows",
+  mobile: "Mobile",
+  desktop: "Desktop",
   tablet: "Tablet",
   other: "Other",
+};
+
+const DEVICE_COLORS: Record<string, { text: string; bar: string; bg: string }> = {
+  mobile:  { text: "hsl(217 91% 55%)",  bar: "hsl(217 91% 55%)",  bg: "hsl(217 91% 55% / 0.08)" },
+  desktop: { text: "hsl(258 80% 58%)",  bar: "hsl(258 80% 58%)",  bg: "hsl(258 80% 58% / 0.08)" },
+  tablet:  { text: "hsl(160 70% 42%)",  bar: "hsl(160 70% 42%)",  bg: "hsl(160 70% 42% / 0.08)" },
+  other:   { text: "hsl(240 5% 55%)",   bar: "hsl(240 5% 55%)",   bg: "hsl(240 5% 55% / 0.08)" },
 };
 
 const SOURCE_COLORS: Record<string, string> = {
@@ -2499,35 +2504,89 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
               })}
             </div>
 
-            {/* Device breakdown */}
+            {/* Device breakdown — Mobile vs Desktop as primary comparison */}
             {devices.length > 0 && (
-              <div className="space-y-2">
-                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Devices</p>
-                <div className="grid grid-cols-2 gap-2">
-                  {devices.map((row) => {
-                    const label = DEVICE_LABELS[row.device] ?? row.device;
-                    const pct = maxDeviceVisitors > 0 ? (row.visitors / maxDeviceVisitors) * 100 : 0;
+              <div className="space-y-3">
+                <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">Device Performance</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {["mobile", "desktop"].map((key) => {
+                    const row = devices.find((d) => d.device === key);
+                    if (!row && key !== "mobile" && key !== "desktop") return null;
+                    const col = DEVICE_COLORS[key] ?? DEVICE_COLORS.other;
+                    const label = DEVICE_LABELS[key] ?? key;
+                    const totalVisitors = devices.reduce((s, d) => s + d.visitors, 0);
+                    const sharePct = totalVisitors > 0 && row ? Math.round((row.visitors / totalVisitors) * 100) : 0;
                     return (
                       <div
-                        key={row.device}
-                        className="rounded-md border border-border p-2 space-y-1"
-                        data-testid={`traffic-device-row-${row.device}`}
+                        key={key}
+                        className="rounded-lg border border-border p-3 space-y-2.5"
+                        style={{ background: col.bg }}
+                        data-testid={`traffic-device-row-${key}`}
                       >
+                        {/* Header */}
                         <div className="flex items-center justify-between">
-                          <span className="text-xs font-medium text-foreground">{label}</span>
-                          <span className="text-[11px] text-muted-foreground">{row.conversionRate}% CVR</span>
+                          <span className="text-xs font-semibold" style={{ color: col.text }}>{label}</span>
+                          {row && <span className="text-[10px] text-muted-foreground">{sharePct}% of traffic</span>}
                         </div>
-                        <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className="h-full rounded-full bg-primary transition-all duration-500"
-                            style={{ width: `${pct}%` }}
-                          />
-                        </div>
-                        <div className="text-[10px] text-muted-foreground">{row.visitors.toLocaleString()} visitors</div>
+
+                        {row ? (
+                          <>
+                            {/* CVR — the headline metric */}
+                            <div>
+                              <span className="text-2xl font-bold" style={{ color: col.text }}>
+                                {row.conversionRate}%
+                              </span>
+                              <span className="text-[10px] text-muted-foreground ml-1">CVR</span>
+                            </div>
+
+                            {/* Visitor + conversion counts */}
+                            <div className="grid grid-cols-2 gap-1.5">
+                              <div className="rounded-md bg-background/60 px-2 py-1.5 text-center">
+                                <p className="text-sm font-semibold text-foreground">{row.visitors.toLocaleString()}</p>
+                                <p className="text-[9px] text-muted-foreground uppercase tracking-wide">Visitors</p>
+                              </div>
+                              <div className="rounded-md bg-background/60 px-2 py-1.5 text-center">
+                                <p className="text-sm font-semibold text-foreground">{row.conversions.toLocaleString()}</p>
+                                <p className="text-[9px] text-muted-foreground uppercase tracking-wide">Conversions</p>
+                              </div>
+                            </div>
+
+                            {/* Revenue if available */}
+                            {row.revenue > 0 && (
+                              <p className="text-[11px] text-muted-foreground">
+                                ${row.revenue.toLocaleString()} revenue
+                              </p>
+                            )}
+                          </>
+                        ) : (
+                          <p className="text-xs text-muted-foreground py-2">No data yet</p>
+                        )}
                       </div>
                     );
                   })}
                 </div>
+
+                {/* Tablet/other rows if they have meaningful traffic */}
+                {devices.filter((d) => d.device !== "mobile" && d.device !== "desktop" && d.visitors > 0).map((row) => {
+                  const col = DEVICE_COLORS[row.device] ?? DEVICE_COLORS.other;
+                  const label = DEVICE_LABELS[row.device] ?? row.device;
+                  const totalVisitors = devices.reduce((s, d) => s + d.visitors, 0);
+                  const pct = totalVisitors > 0 ? (row.visitors / totalVisitors) * 100 : 0;
+                  return (
+                    <div key={row.device} className="space-y-0.5" data-testid={`traffic-device-row-${row.device}`}>
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">{label}</span>
+                        <div className="flex gap-3 text-[11px] text-muted-foreground">
+                          <span>{row.visitors.toLocaleString()} visitors</span>
+                          <span style={{ color: col.text }}>{row.conversionRate}% CVR</span>
+                        </div>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: col.bar }} />
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </>
