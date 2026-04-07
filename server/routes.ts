@@ -52,6 +52,34 @@ const widgetLimiter = rateLimit({
  * Sanitize user-supplied HTML content. Allows safe inline styling
  * (spans with style for colored headlines) while stripping XSS vectors.
  */
+/**
+ * Keeps an HTTP connection alive by sending whitespace every N seconds.
+ * Prevents Cloudflare's 30s "no data" timeout for long AI operations.
+ * The JSON response body is written after the AI completes — leading
+ * whitespace before JSON is valid and ignored by all JSON parsers.
+ */
+function keepAliveJson(res: Response, intervalMs = 8000): { send: (data: object) => void; fail: (status: number, body: object) => void } {
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Transfer-Encoding", "chunked");
+  res.status(200);
+  // Write an initial space so the connection starts streaming immediately
+  res.write(" ");
+  const timer = setInterval(() => { try { res.write(" "); } catch(e) {} }, intervalMs);
+  return {
+    send(data: object) {
+      clearInterval(timer);
+      res.write(JSON.stringify(data));
+      res.end();
+    },
+    fail(status: number, body: object) {
+      clearInterval(timer);
+      // Can't change status after headers sent, embed error in body
+      res.write(JSON.stringify({ ...body, _statusCode: status }));
+      res.end();
+    },
+  };
+}
+
 function sanitizeInput(input: string): string {
   return xss(input, {
     whiteList: {
@@ -1357,18 +1385,16 @@ export async function registerRoutes(server: Server, app: Express) {
 
     const messages = buildPageScanPrompt(url, cleaned);
 
+    // Start keep-alive stream — sends whitespace every 8s to prevent Cloudflare's
+    // 30s "no data received" timeout while the AI processes.
+    const ka = keepAliveJson(res);
+
     let rawResponse: string;
     try {
-      // Wrap with 22s timeout — scan must complete well within Railway's 30s limit
-      rawResponse = await Promise.race([
-        callLLM(llmConfigResolved.config, messages, { maxTokens: 800 }),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("Scan timed out. The AI took too long. Try again or use Quick Create instead.")), 22000)
-        ),
-      ]);
+      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 800 });
     } catch (err: any) {
       console.error("Page scan LLM call failed:", err);
-      return res.status(502).json({ error: err.message || "AI provider error. Check your API key and credits in Settings." });
+      return ka.fail(502, { error: err.message || "AI provider error. Check your API key and credits in Settings." });
     }
 
     // Parse the JSON response
@@ -1384,7 +1410,7 @@ export async function registerRoutes(server: Server, app: Express) {
       }
     } catch (err: any) {
       console.error("Failed to parse page scan response:", rawResponse);
-      return res.status(502).json({ error: "AI returned invalid response. Please try again." });
+      return ka.fail(502, { error: "AI returned invalid response. Please try again." });
     }
 
     // Sanitize sections
@@ -1432,7 +1458,7 @@ export async function registerRoutes(server: Server, app: Express) {
       }
     }
 
-    res.json(scanResult);
+    ka.send(scanResult);
   });
 
   // ============== TEST SECTIONS ==============
@@ -2224,14 +2250,17 @@ export async function registerRoutes(server: Server, app: Express) {
     const messages = buildCROReportPrompt(pageContent, campaignMeta);
     const llmConfig = llmConfigResolved.config;
 
+    // Keep-alive to prevent Cloudflare 30s timeout during long AI report generation
+    const kaReport = keepAliveJson(res);
+
     let report: string;
     try {
       report = await callLLM(llmConfig, messages, { maxTokens: 3000 });
     } catch (err: any) {
-      return res.status(502).json({ error: err.message || "AI provider error." });
+      return kaReport.fail(502, { error: err.message || "AI provider error." });
     }
 
-    res.json({ report, url: reportUrl });
+    kaReport.send({ report, url: reportUrl });
   });
 
   // ============== TRAFFIC SOURCE HELPERS ==============
