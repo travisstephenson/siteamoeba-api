@@ -1322,6 +1322,23 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   // ============== PAGE SCANNER ==============
+  // Async job store — in-memory, TTL 10 minutes
+  const scanJobs = new Map<string, { status: "pending" | "done" | "error"; result?: any; error?: string; createdAt: number }>();
+  setInterval(() => {
+    const now = Date.now();
+    for (const [id, job] of scanJobs.entries()) {
+      if (now - job.createdAt > 600000) scanJobs.delete(id); // expire after 10 min
+    }
+  }, 60000);
+
+  // GET /api/scan-status/:jobId — poll for async scan result
+  app.get("/api/scan-status/:jobId", requireAuth, async (req: Request, res: Response) => {
+    const job = scanJobs.get(req.params.jobId);
+    if (!job) return res.status(404).json({ error: "Job not found or expired" });
+    if (job.status === "pending") return res.json({ status: "pending" });
+    if (job.status === "error") return res.json({ status: "error", error: job.error });
+    return res.json({ status: "done", result: job.result });
+  });
 
   app.post("/api/scan-page", aiLimiter, requireAuth, async (req: Request, res: Response) => {
     const user = await storage.getUserById(req.userId!);
@@ -1357,6 +1374,15 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(400).json({ error: "Invalid URL" });
     }
 
+    // Create async job and return immediately — scan runs in background
+    const jobId = "scan_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+    scanJobs.set(jobId, { status: "pending", createdAt: Date.now() });
+    res.json({ jobId });
+
+    // Run the actual scan in the background (not awaited — response already sent)
+    (async () => {
+      try {
+
     // Fetch the page HTML — stream first 80KB only to avoid downloading multi-MB pages
     let rawHtml = "";
     try {
@@ -1376,14 +1402,13 @@ export async function registerRoutes(server: Server, app: Express) {
       } catch (fetchErr: any) {
         clearTimeout(fetchTimeout);
         const isTimeout = fetchErr.name === "AbortError";
-        return res.status(422).json({ error: isTimeout
-          ? "Page fetch timed out (15s). The URL may be slow or unreachable."
-          : `Could not fetch page: ${fetchErr.message || "Network error"}` });
+        const fetchErrMsg = isTimeout ? "Page fetch timed out (15s). The URL may be slow or unreachable." : `Could not fetch page: ${fetchErr.message || "Network error"}`;
+        scanJobs.set(jobId, { status: "error", error: fetchErrMsg, createdAt: Date.now() }); return;
       }
 
       clearTimeout(fetchTimeout);
       if (!fetchResponse.ok) {
-        return res.status(422).json({ error: `Could not fetch page: HTTP ${fetchResponse.status}` });
+        scanJobs.set(jobId, { status: "error", error: `Could not fetch page: HTTP ${fetchResponse.status}`, createdAt: Date.now() }); return;
       }
 
       // Read up to 80KB of the body then forcibly close the connection
@@ -1405,7 +1430,7 @@ export async function registerRoutes(server: Server, app: Express) {
       }
       rawHtml = Buffer.concat(chunks.map(c => Buffer.from(c))).toString("utf-8");
     } catch (err: any) {
-      return res.status(422).json({ error: `Could not fetch page: ${err.message || "Network error"}` });
+      scanJobs.set(jobId, { status: "error", error: `Could not fetch page: ${err.message || "Network error"}`, createdAt: Date.now() }); return;
     }
 
     // Fast tag stripping using character-class regex (no dot-all, no backtracking issues)
@@ -1424,16 +1449,12 @@ export async function registerRoutes(server: Server, app: Express) {
 
     const messages = buildPageScanPrompt(url, cleaned);
 
-    // Start keep-alive stream — sends whitespace every 8s to prevent Cloudflare's
-    // 30s "no data received" timeout while the AI processes.
-    const ka = keepAliveJson(res);
-
     let rawResponse: string;
     try {
       rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 800 });
     } catch (err: any) {
       console.error("Page scan LLM call failed:", err);
-      return ka.fail(502, { error: err.message || "AI provider error. Check your API key and credits in Settings." });
+      scanJobs.set(jobId, { status: "error", error: err.message || "AI provider error. Check your API key and credits in Settings.", createdAt: Date.now() }); return;
     }
 
     // Parse the JSON response
@@ -1449,7 +1470,7 @@ export async function registerRoutes(server: Server, app: Express) {
       }
     } catch (err: any) {
       console.error("Failed to parse page scan response:", rawResponse);
-      return ka.fail(502, { error: "AI returned invalid response. Please try again." });
+      scanJobs.set(jobId, { status: "error", error: "AI returned invalid response. Please try again.", createdAt: Date.now() }); return;
     }
 
     // Sanitize sections
@@ -1497,7 +1518,13 @@ export async function registerRoutes(server: Server, app: Express) {
       }
     }
 
-    ka.send(scanResult);
+        scanJobs.set(jobId, { status: "done", result: scanResult, createdAt: Date.now() });
+
+      } catch (bgErr: any) {
+        console.error("Background scan failed:", bgErr.message);
+        scanJobs.set(jobId, { status: "error", error: bgErr.message || "Scan failed", createdAt: Date.now() });
+      }
+    })();
   });
 
   // ============== TEST SECTIONS ==============

@@ -730,40 +730,46 @@ function CampaignWizard({
     setUrlError("");
     setScanError("");
 
-    // Basic URL validation
-    if (!url.trim()) {
-      setUrlError("Please enter a URL");
-      return;
-    }
+    if (!url.trim()) { setUrlError("Please enter a URL"); return; }
     let normalizedUrl = url.trim();
     if (!normalizedUrl.startsWith("http://") && !normalizedUrl.startsWith("https://")) {
       normalizedUrl = "https://" + normalizedUrl;
       setUrl(normalizedUrl);
     }
-    try {
-      new URL(normalizedUrl);
-    } catch {
-      setUrlError("Please enter a valid URL");
-      return;
-    }
+    try { new URL(normalizedUrl); } catch { setUrlError("Please enter a valid URL"); return; }
 
     setScanning(true);
     try {
-      const res = await apiRequest("POST", "/api/scan-page", { url: normalizedUrl });
-      const data = await res.json();
-      setScanResult(data);
-      // Default: select headline sections (category === 'headline' or first section)
-      const defaultSelected = new Set<string>(
-        data.sections
-          .filter((s: ScannedSection) => s.category === "headline" || s.testPriority === 1)
-          .map((s: ScannedSection) => s.id)
-      );
-      if (defaultSelected.size === 0 && data.sections.length > 0) {
-        defaultSelected.add(data.sections[0].id);
+      // Start async scan job — returns immediately with a jobId
+      const startRes = await apiRequest("POST", "/api/scan-page", { url: normalizedUrl });
+      const { jobId, error: startError } = await startRes.json();
+      if (startError) throw new Error(startError);
+      if (!jobId) throw new Error("Failed to start scan");
+
+      // Poll for result every 2 seconds (up to 90s)
+      const maxAttempts = 45;
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(r => setTimeout(r, 2000));
+        const pollRes = await apiRequest("GET", `/api/scan-status/${jobId}`);
+        const poll = await pollRes.json();
+        if (poll.status === "error") throw new Error(poll.error || "Scan failed");
+        if (poll.status === "done" && poll.result) {
+          const data = poll.result;
+          setScanResult(data);
+          const defaultSelected = new Set<string>(
+            data.sections
+              .filter((s: ScannedSection) => s.category === "headline" || s.testPriority === 1)
+              .map((s: ScannedSection) => s.id)
+          );
+          if (defaultSelected.size === 0 && data.sections.length > 0) defaultSelected.add(data.sections[0].id);
+          setSelectedSections(defaultSelected);
+          setCampaignName(data.pageName || "New Campaign");
+          setStep(2);
+          return;
+        }
+        // still pending — keep polling
       }
-      setSelectedSections(defaultSelected);
-      setCampaignName(data.pageName || "New Campaign");
-      setStep(2);
+      throw new Error("Scan timed out after 90 seconds. Try Quick Create instead.");
     } catch (err: any) {
       const msg = err.message?.replace(/^\d+:\s*/, "") || "Failed to scan page";
       setScanError(msg);
