@@ -1357,11 +1357,11 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(400).json({ error: "Invalid URL" });
     }
 
-    // Fetch the page HTML
+    // Fetch the page HTML — stream only the first 80KB to avoid downloading megabytes for large pages
     let rawHtml: string;
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15s timeout
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
       const response = await fetch(url, {
         signal: controller.signal,
         headers: {
@@ -1374,7 +1374,23 @@ export async function registerRoutes(server: Server, app: Express) {
       if (!response.ok) {
         return res.status(422).json({ error: `Could not fetch page: HTTP ${response.status}` });
       }
-      rawHtml = await response.text();
+
+      // Stream only first 80KB — cancels after that to avoid downloading full 1.6MB pages
+      const MAX_BYTES = 80000;
+      const reader = response.body!.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      try {
+        while (totalBytes < MAX_BYTES) {
+          const { done, value } = await reader.read();
+          if (done || !value) break;
+          chunks.push(value);
+          totalBytes += value.byteLength;
+        }
+      } finally {
+        reader.cancel().catch(() => {});
+      }
+      rawHtml = Buffer.concat(chunks.map(c => Buffer.from(c))).toString("utf-8");
     } catch (err: any) {
       if (err.name === "AbortError") {
         return res.status(422).json({ error: "Page fetch timed out (15s). The URL may be slow or unreachable." });
@@ -1382,10 +1398,8 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(422).json({ error: `Could not fetch page: ${err.message || "Network error"}` });
     }
 
-    // Fast extraction: take the first 12KB of raw HTML — this captures above-the-fold
-    // content without any regex processing (regex on large HTML causes catastrophic backtracking).
-    // The AI handles noisy HTML just fine.
-    const cleaned = rawHtml.slice(0, 12000);
+    // Take first 30KB for the AI — GHL pages have content after the initial script setup
+    const cleaned = rawHtml.slice(0, 30000);
 
     const messages = buildPageScanPrompt(url, cleaned);
 
