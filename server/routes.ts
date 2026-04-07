@@ -1500,7 +1500,10 @@ export async function registerRoutes(server: Server, app: Express) {
       }
     } catch (err: any) {
       console.error("[scan] Failed to parse AI response (first 800 chars):", rawResponse?.slice(0, 800));
-      scanJobs.set(jobId, { status: "error", error: "AI returned invalid response. Please try again.", rawDebug: rawResponse?.slice(0, 1000), createdAt: Date.now() }); return;
+      // Store first 2000 + last 1000 chars to diagnose truncation vs content issues
+      const debugFirst = rawResponse?.slice(0, 2000) || "";
+      const debugLast = rawResponse ? rawResponse.slice(-1000) : "";
+      scanJobs.set(jobId, { status: "error", error: "AI returned invalid response. Please try again.", rawDebug: debugFirst + "\n\n...[MID]...\n\n" + debugLast, createdAt: Date.now() }); return;
     }
 
     // Sanitize sections
