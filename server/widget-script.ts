@@ -445,6 +445,44 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       }
   }
 
+  // === CONVERSION / OTO MODE DETECTION ===
+  // If the script is loaded with ?mode=convert (e.g. on a thank-you or OTO page),
+  // skip variant assignment entirely and just fire the conversion event.
+  // The sa_vid is already in storage from when the visitor hit the main offer page.
+  var scriptMode = (function() {
+    var scripts = document.getElementsByTagName("script");
+    for (var i = 0; i < scripts.length; i++) {
+      var src = scripts[i].src || "";
+      if (src.indexOf("/api/widget/script/" + CID) !== -1) {
+        var m = src.match(/[?&]mode=([^&]+)/);
+        return m ? m[1] : "normal";
+      }
+    }
+    return "normal";
+  })();
+
+  if (scriptMode === "convert") {
+    // OTO / thank-you page: fire conversion with the visitor’s original sa_vid.
+    // The vid was stored in localStorage/sessionStorage/cookie on the main offer page
+    // and is still available here (same domain).
+    // Revenue is attributed back to the visitor’s ORIGINAL campaign (first-touch).
+    var convertUrl = API + "/api/widget/convert?vid=" + encodeURIComponent(vid)
+      + "&cid=" + CID
+      + "&mode=convert";
+    // Optional: pass revenue amount and product name if set on the page before the script
+    if (typeof window._saRevenue !== "undefined") {
+      convertUrl += "&revenue=" + encodeURIComponent(String(window._saRevenue));
+    }
+    if (typeof window._saProduct !== "undefined") {
+      convertUrl += "&product=" + encodeURIComponent(String(window._saProduct));
+    }
+    // Fire as GET (image beacon) for maximum compatibility
+    var convImg = new Image();
+    convImg.src = convertUrl;
+    // Return — no variant assignment needed on OTO/TY pages
+    return;
+  }
+
   // === VARIANT ASSIGNMENT (preview vs live) ===
   if (isPreviewMode) {
     // PREVIEW MODE: fetch the specific variant from the preview-data endpoint

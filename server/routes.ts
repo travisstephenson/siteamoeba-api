@@ -1082,26 +1082,56 @@ export async function registerRoutes(server: Server, app: Express) {
       );
       if (existing.rows.length > 0) continue;
 
-      // Look for a visitor that already has a revenue_event with this email
+      // First-touch attribution: find the visitor’s ORIGINAL campaign entry by email.
+      // Look across ALL campaigns for this user, ordered by first_seen (earliest visit wins).
+      // This correctly attributes multi-product funnel revenue ($27+$97+$199) back to the
+      // campaign that originally drove the traffic.
       let matchedCampaignId: number | null = null;
       let matchedVisitorId: string | null = null;
 
       const visitorMatch = await pool.query(
-        `SELECT re.visitor_id, re.campaign_id
-         FROM revenue_events re
-         JOIN campaigns c ON c.id = re.campaign_id
-         WHERE re.customer_email = $1 AND c.user_id = $2 AND re.visitor_id IS NOT NULL
+        `SELECT v.id AS visitor_id, v.campaign_id
+         FROM visitors v
+         JOIN campaigns c ON c.id = v.campaign_id
+         WHERE v.converted = true
+           AND c.user_id = $1
+           AND (
+             EXISTS (
+               SELECT 1 FROM revenue_events re2
+               WHERE re2.visitor_id = v.id AND re2.customer_email = $2
+             )
+             OR v.id IN (
+               SELECT re3.visitor_id FROM revenue_events re3
+               WHERE re3.customer_email = $2 AND re3.visitor_id IS NOT NULL
+             )
+           )
+         ORDER BY v.first_seen ASC
          LIMIT 1`,
-        [customerEmail, userId]
+        [userId, customerEmail]
       );
 
       if (visitorMatch.rows.length > 0) {
         matchedVisitorId = visitorMatch.rows[0].visitor_id;
         matchedCampaignId = visitorMatch.rows[0].campaign_id;
-      } else if (userCampaigns.length > 0) {
-        // Assign to first active campaign as fallback
-        const activeCampaign = userCampaigns.find((c: any) => c.isActive && c.status === "active") || userCampaigns[0];
-        matchedCampaignId = activeCampaign.id;
+      } else {
+        // No exact visitor match — try matching by email across revenue_events
+        const emailMatch = await pool.query(
+          `SELECT re.visitor_id, re.campaign_id
+           FROM revenue_events re
+           JOIN campaigns c ON c.id = re.campaign_id
+           WHERE re.customer_email = $1 AND c.user_id = $2 AND re.visitor_id IS NOT NULL
+           ORDER BY re.created_at ASC
+           LIMIT 1`,
+          [customerEmail, userId]
+        );
+        if (emailMatch.rows.length > 0) {
+          matchedVisitorId = emailMatch.rows[0].visitor_id;
+          matchedCampaignId = emailMatch.rows[0].campaign_id;
+        } else if (userCampaigns.length > 0) {
+          // Last resort: assign to the user’s most active campaign
+          const activeCampaign = userCampaigns.find((c: any) => c.isActive && c.status === "active") || userCampaigns[0];
+          matchedCampaignId = activeCampaign.id;
+        }
       }
 
       if (!matchedCampaignId) continue;
@@ -1111,7 +1141,7 @@ export async function registerRoutes(server: Server, app: Express) {
         campaignId: matchedCampaignId,
         source: "stripe_account",
         eventType: charge.refunded ? "refund" : "purchase",
-        amount: charge.amount / 100, // Stripe amounts are in cents
+        amount: charge.amount / 100,
         currency: charge.currency?.toUpperCase() || "USD",
         externalId: charge.id,
         customerEmail: customerEmail,
@@ -2879,47 +2909,111 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // ============== CONVERSION PIXEL (public, CORS) ==============
 
+  // ============================================================
+  // CORE REVENUE ATTRIBUTION HELPER
+  // ============================================================
+  // Records a purchase event and applies first-touch attribution:
+  //   1. Looks up the visitor by sa_vid across ALL campaigns (not just the current one)
+  //   2. Uses the visitor’s ORIGINAL campaign (the entry-point) as the attribution target
+  //   3. Records a revenue_event on every call — no “already_converted” gate
+  //   4. Marks the visitor’s first conversion only once; subsequent purchases just add events
+  //
+  // This correctly handles:
+  //   - OTO pages with a different campaign_id pixel (cross-campaign attribution)
+  //   - $27 main offer + $97 OTO + $199 second OTO all credited to the same funnel entry
+  //   - Multi-product funnels on different pages
+  async function recordPurchaseEvent(opts: {
+    vid: string;
+    pixelCampaignId: number; // campaign ID from the pixel on THIS page
+    amount: number;
+    currency?: string;
+    externalId?: string;
+    customerEmail?: string;
+    product?: string;
+    source?: string;
+  }): Promise<{ ok: boolean; campaignId: number; visitorId: string }> {
+    const visitor = await storage.getVisitor(opts.vid);
+
+    // First-touch: use the visitor’s ORIGINAL campaign, not the pixel’s campaign
+    // (handles OTO pages that have a different campaign ID)
+    const attributionCampaignId = visitor?.campaignId ?? opts.pixelCampaignId;
+    const resolvedVisitorId = visitor?.id ?? opts.vid;
+
+    // Mark first conversion on the visitor record (idempotent)
+    if (visitor && !visitor.converted) {
+      await storage.markConverted(resolvedVisitorId, "pixel_" + Date.now(), opts.amount);
+    } else if (visitor && visitor.converted && opts.amount > 0) {
+      // Subsequent purchase — accumulate revenue on the visitor record
+      await pool.query(
+        `UPDATE visitors SET revenue = COALESCE(revenue, 0) + $1 WHERE id = $2`,
+        [opts.amount, resolvedVisitorId]
+      );
+    }
+
+    // ALWAYS record a detailed revenue_event (full purchase history)
+    await storage.addRevenueEvent({
+      visitorId: resolvedVisitorId,
+      campaignId: attributionCampaignId,
+      source: opts.source || "pixel",
+      eventType: "purchase",
+      amount: opts.amount,
+      currency: opts.currency || "USD",
+      externalId: opts.externalId,
+      customerEmail: opts.customerEmail,
+      metadata: opts.product ? JSON.stringify({ product: opts.product, pixelCampaignId: opts.pixelCampaignId }) : undefined,
+    });
+
+    return { ok: true, campaignId: attributionCampaignId, visitorId: resolvedVisitorId };
+  }
+
+  // POST /api/widget/convert — JS-based conversion tracking
   app.post("/api/widget/convert", widgetLimiter, async (req: Request, res: Response) => {
-    const { vid, cid, revenue } = req.body;
+    const { vid, cid, revenue, product, email } = req.body;
     if (!vid || !cid) {
       return res.status(400).json({ error: "Missing vid or cid" });
     }
-
-    const campaignId = parseInt(cid);
-    const visitor = await storage.getVisitor(vid);
-    if (!visitor || visitor.campaignId !== campaignId) {
-      return res.status(404).json({ error: "Visitor not found for this campaign" });
+    try {
+      const result = await recordPurchaseEvent({
+        vid,
+        pixelCampaignId: parseInt(cid),
+        amount: typeof revenue === "number" ? revenue : 0,
+        customerEmail: email || undefined,
+        product: product || undefined,
+      });
+      return res.json({ received: true, attributed: true, ...result });
+    } catch (err: any) {
+      return res.json({ received: false, error: err.message });
     }
-
-    if (visitor.converted) {
-      return res.json({ received: true, already_converted: true });
-    }
-
-    const rev = typeof revenue === "number" ? revenue : 0;
-    await storage.markConverted(vid, "pixel_" + Date.now(), rev);
-    return res.json({ received: true, attributed: true });
   });
 
-  // Also support GET for simple image pixel fallback
+  // GET /api/widget/convert — image pixel fallback (fires from <img> or script src)
+  // Supports sa_vid in query string for cross-page/funnel passthrough
   app.get("/api/widget/convert", widgetLimiter, async (req: Request, res: Response) => {
-    // Accept vid from query param OR from sa_vid URL param (passed through funnel redirects)
-    const vid = (req.query.vid || req.query.sa_vid) as string;
-    const cid = req.query.cid as string;
-    const revenue = parseFloat(req.query.revenue as string) || 0;
-
-    if (vid && cid) {
-      const campaignId = parseInt(cid);
-      const visitor = await storage.getVisitor(vid);
-      if (visitor && visitor.campaignId === campaignId && !visitor.converted) {
-        await storage.markConverted(vid, "pixel_" + Date.now(), revenue);
-      }
-    }
-
-    // Return a 1x1 transparent GIF
+    // Return pixel immediately — don’t hold up the browser
     const pixel = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
     res.set("Content-Type", "image/gif");
     res.set("Cache-Control", "no-store");
     res.send(pixel);
+
+    // Attribution runs async after response is sent
+    const vid = (req.query.vid || req.query.sa_vid) as string;
+    const cid = req.query.cid as string;
+    const amount = parseFloat(req.query.revenue as string) || 0;
+    const product = req.query.product as string | undefined;
+    const email = req.query.email as string | undefined;
+    const mode = req.query.mode as string | undefined;
+
+    if (!vid || !cid) return;
+    try {
+      await recordPurchaseEvent({
+        vid,
+        pixelCampaignId: parseInt(cid),
+        amount,
+        customerEmail: email,
+        product,
+        source: mode === "convert" ? "oto_pixel" : "pixel",
+      });
+    } catch { /* silent — pixel must never break */ }
   });
 
   // ============== BEHAVIORAL EVENTS (public, CORS via widget middleware) ==============
