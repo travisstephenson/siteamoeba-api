@@ -2662,6 +2662,10 @@ export async function registerRoutes(server: Server, app: Express) {
       });
     }
 
+    // Load all test sections FIRST — used for traffic % checks on headline/subheadline AND section assignment below
+    const allTestSections = _testSectionsCache[campaignId] || await storage.getTestSectionsByCampaign(campaignId);
+    _testSectionsCache[campaignId] = allTestSections;
+
     const headlineVariants = await storage.getActiveVariantsByCampaign(campaignId, "headline");
     const subheadlineVariants = await storage.getActiveVariantsByCampaign(campaignId, "subheadline");
 
@@ -2688,8 +2692,7 @@ export async function registerRoutes(server: Server, app: Express) {
       : null;
 
     // === SECTION-LEVEL TESTS: assign variants for all active non-headline/subheadline sections ===
-    const allTestSections = _testSectionsCache[campaignId] || await storage.getTestSectionsByCampaign(campaignId);
-    _testSectionsCache[campaignId] = allTestSections;
+    // allTestSections already loaded above
     const sectionAssignments: Record<string, number> = {}; // sectionId -> variantId
     const sectionPayloads: any[] = [];
     for (const section of allTestSections) {
