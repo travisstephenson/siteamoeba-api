@@ -636,6 +636,20 @@ class StorageImpl implements IStorage {
       ALTER TABLE visitors ADD COLUMN IF NOT EXISTS customer_email TEXT;
       CREATE INDEX IF NOT EXISTS idx_visitors_email ON visitors (customer_email);
     `);
+    // Client error logs — captures React crashes and widget errors for admin visibility
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS client_errors (
+        id SERIAL PRIMARY KEY,
+        message TEXT,
+        stack TEXT,
+        component_stack TEXT,
+        error_type TEXT,
+        url TEXT,
+        user_id INTEGER,
+        user_email TEXT,
+        created_at TEXT NOT NULL DEFAULT NOW()::text
+      );
+    `);
   }
 
   // ===== Users =====

@@ -202,10 +202,36 @@ export async function registerRoutes(server: Server, app: Express) {
   // Client-side error logging — no auth required, just store for admin review
   app.post("/api/client-errors", async (req: Request, res: Response) => {
     try {
-      const { message, stack, type, url, ts } = req.body;
+      const { message, stack, componentStack, type, url, ts } = req.body;
+      // Log to console for immediate visibility
       console.error(`[CLIENT ERROR] ${type || "boundary"} at ${url}\n${message}\n${stack?.slice(0, 500) || ""}`);
+      // Persist to DB for admin review
+      const userId = (req as any).userId ?? null;
+      let userEmail: string | null = null;
+      if (userId) {
+        try {
+          const user = await storage.getUserById(userId);
+          userEmail = user?.email ?? null;
+        } catch {}
+      }
+      await pool.query(
+        `INSERT INTO client_errors (message, stack, component_stack, error_type, url, user_id, user_email)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          (message || "").slice(0, 2000),
+          (stack || "").slice(0, 5000),
+          (componentStack || "").slice(0, 5000),
+          type || "boundary",
+          (url || "").slice(0, 500),
+          userId,
+          userEmail,
+        ]
+      );
       res.json({ ok: true });
-    } catch { res.json({ ok: true }); }
+    } catch (err) {
+      console.error('[CLIENT ERROR store failed]', err);
+      res.json({ ok: true });
+    }
   });
 
   app.get("/api/health", (_req, res) => {
@@ -411,6 +437,16 @@ export async function registerRoutes(server: Server, app: Express) {
       variantCount,
     }));
     res.json(flat);
+  });
+
+  // GET /api/campaigns/anomaly-counts — MUST be before :id route so Express doesn't swallow it
+  app.get("/api/campaigns/anomaly-counts", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const counts = await storage.getUnreadAnomalyCountsByUser(req.userId!);
+      return res.json(counts);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
   });
 
   app.get("/api/campaigns/:id", requireAuth, async (req: Request, res: Response) => {
@@ -2853,29 +2889,49 @@ export async function registerRoutes(server: Server, app: Express) {
     const trafficSource  = parseTrafficSource(referrer || "", utmSource || "", utmMedium || "");
     const deviceCategory = parseDeviceCategory(ua || "");
 
-    const visitor = await storage.createVisitor({
-      id: visitorId,
-      campaignId,
-      headlineVariantId: hVariant?.id || 0,
-      subheadlineVariantId: sVariant?.id || 0,
-      converted: false,
-      convertedAt: null,
-      stripePaymentId: null,
-      revenue: null,
-      userAgent: ua,
-      referrer,
-      utmSource,
-      utmMedium,
-      utmCampaign,
-      utmContent,
-      utmTerm,
-      trafficSource,
-      deviceCategory,
-      sectionVariantAssignments: Object.keys(sectionAssignments).length > 0
-        ? JSON.stringify(sectionAssignments)
-        : null,
-      fingerprint: fingerprint || null,
-    } as any);
+    // Attempt visitor insert; handle duplicate key gracefully (race condition on rapid reloads)
+    let visitor: any;
+    try {
+      visitor = await storage.createVisitor({
+        id: visitorId,
+        campaignId,
+        headlineVariantId: hVariant?.id || 0,
+        subheadlineVariantId: sVariant?.id || 0,
+        converted: false,
+        convertedAt: null,
+        stripePaymentId: null,
+        revenue: null,
+        userAgent: ua,
+        referrer,
+        utmSource,
+        utmMedium,
+        utmCampaign,
+        utmContent,
+        utmTerm,
+        trafficSource,
+        deviceCategory,
+        sectionVariantAssignments: Object.keys(sectionAssignments).length > 0
+          ? JSON.stringify(sectionAssignments)
+          : null,
+        fingerprint: fingerprint || null,
+      } as any);
+    } catch (createErr: any) {
+      if (createErr?.code === '23505') {
+        // Race condition: visitor already exists — fetch the existing record and serve its assignment
+        const existingVisitor = await storage.getVisitor(visitorId);
+        if (existingVisitor) {
+          const h = await storage.getVariant(existingVisitor.headlineVariantId);
+          const s = await storage.getVariant(existingVisitor.subheadlineVariantId);
+          return res.json({
+            visitorId: existingVisitor.id,
+            headline: await resolveVariantPayload(h),
+            subheadline: await resolveVariantPayload(s),
+            campaignType: campaign.campaignType || "purchase",
+          });
+        }
+      }
+      throw createErr;
+    }
 
     await storage.createImpression({
       visitorId: visitor.id,
@@ -4022,6 +4078,18 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json(items);
   });
 
+  // GET /api/admin/client-errors — view recent React crashes for debugging
+  app.get("/api/admin/client-errors", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const result = await pool.query(
+        `SELECT * FROM client_errors ORDER BY created_at DESC LIMIT 50`
+      );
+      res.json(result.rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.patch("/api/admin/feedback/:id", requireAdmin, async (req: Request, res: Response) => {
     const id = paramId(req.params.id);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
@@ -4425,16 +4493,6 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // ============== ANOMALY ENDPOINTS ==============
 
-  // GET /api/campaigns/anomaly-counts — unread counts for all user campaigns (for sidebar)
-  app.get("/api/campaigns/anomaly-counts", requireAuth, async (req: Request, res: Response) => {
-    try {
-      const counts = await storage.getUnreadAnomalyCountsByUser(req.userId!);
-      return res.json(counts);
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message });
-    }
-  });
-
   // GET /api/campaigns/:id/anomalies
   app.get("/api/campaigns/:id/anomalies", requireAuth, async (req: Request, res: Response) => {
     const campaignId = paramId(req.params.id);
@@ -4703,14 +4761,14 @@ async function detectTrafficAnomalies(campaignId: number): Promise<void> {
     // Query last 7 days of visitor data grouped by date + traffic_source
     const result = await pool.query(
       `SELECT
-        DATE(created_at::timestamp) AS day,
+        DATE(first_seen::timestamp) AS day,
         COALESCE(traffic_source, 'direct') AS source,
         COUNT(*) AS visitors,
         SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) AS conversions
        FROM visitors
        WHERE campaign_id = $1
-         AND created_at >= NOW() - INTERVAL '7 days'
-       GROUP BY DATE(created_at::timestamp), COALESCE(traffic_source, 'direct')
+         AND first_seen >= NOW() - INTERVAL '7 days'
+       GROUP BY DATE(first_seen::timestamp), COALESCE(traffic_source, 'direct')
        ORDER BY day DESC`,
       [campaignId]
     );

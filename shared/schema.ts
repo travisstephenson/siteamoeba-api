@@ -349,6 +349,19 @@ export const insertReferralSchema = createInsertSchema(referrals).omit({
 export type Referral = typeof referrals.$inferSelect;
 export type InsertReferral = z.infer<typeof insertReferralSchema>;
 
+// ============== CLIENT ERROR LOGS ==============
+export const clientErrors = pgTable("client_errors", {
+  id: serial("id").primaryKey(),
+  message: text("message"),
+  stack: text("stack"),
+  componentStack: text("component_stack"),
+  errorType: text("error_type"), // 'boundary' | 'unhandledrejection' | 'window.onerror'
+  url: text("url"),
+  userId: integer("user_id"),
+  userEmail: text("user_email"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
+});
+
 // ============== AUTH SCHEMAS (not DB tables) ==============
 export const loginSchema = z.object({
   email: z.string().email(),

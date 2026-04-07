@@ -491,8 +491,11 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     if (utmParams.utm_content)  assignUrl += "&utm_content="  + encodeURIComponent(utmParams.utm_content);
     if (utmParams.utm_term)     assignUrl += "&utm_term="     + encodeURIComponent(utmParams.utm_term);
     fetch(assignUrl)
-      .then(function(r) { return r.json(); })
-      .then(function(data) { handleAssignData(data); })
+      .then(function(r) {
+        if (!r.ok) { console.log("SiteAmoeba: assign error", r.status); return null; }
+        return r.json();
+      })
+      .then(function(data) { if (data) handleAssignData(data); })
       .catch(function(e) { console.log("SiteAmoeba: using defaults", e); });
   }
 

@@ -25,7 +25,7 @@ import {
   Users, CreditCard, FlaskConical, Activity, TrendingUp,
   LogIn, UserPlus, Trash2, Search, ChevronRight, Building2,
   Shield, PlusCircle, ExternalLink, CheckCircle, XCircle,
-  AlertCircle, Share2, Eye, EyeOff, Clock, Zap, ArrowUpDown,
+  AlertCircle, Share2, Eye, EyeOff, Clock, Zap, ArrowUpDown, Bug,
 } from "lucide-react";
 
 // ─── Admin token (in-memory, separate from user auth) ─────────────────────────
@@ -671,6 +671,7 @@ export default function AdminPage() {
             <TabsTrigger value="users" className="gap-1.5"><Users className="w-3.5 h-3.5" />Users</TabsTrigger>
             <TabsTrigger value="referrals" className="gap-1.5"><Share2 className="w-3.5 h-3.5" />Referrals</TabsTrigger>
             <TabsTrigger value="enterprise" className="gap-1.5"><Building2 className="w-3.5 h-3.5" />Enterprise</TabsTrigger>
+            <TabsTrigger value="errors" className="gap-1.5"><Bug className="w-3.5 h-3.5" />Errors</TabsTrigger>
           </TabsList>
 
           {/* Users */}
@@ -823,11 +824,78 @@ export default function AdminPage() {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {/* Client Errors */}
+          <TabsContent value="errors" className="mt-4">
+            <ClientErrorsPanel />
+          </TabsContent>
         </Tabs>
       </div>
 
       <UserDetailSheet userId={selectedUserId} onClose={() => setSelectedUserId(null)} />
       <CreateUserDialog open={showCreateUser} onClose={() => setShowCreateUser(false)} />
+    </div>
+  );
+}
+
+function ClientErrorsPanel() {
+  const { data: errors = [], isLoading, refetch } = useQuery<any[]>({
+    queryKey: ["/api/admin/client-errors"],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/api/admin/client-errors`, {
+        headers: { Authorization: `Bearer ${getAdminToken()}` },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    refetchOnWindowFocus: false,
+    staleTime: 30000,
+  });
+
+  if (isLoading) return <div className="py-8 text-center text-sm text-muted-foreground">Loading error logs...</div>;
+
+  if (errors.length === 0) return (
+    <Card>
+      <CardContent className="py-12 text-center">
+        <Bug className="w-8 h-8 text-muted-foreground mx-auto mb-3 opacity-50" />
+        <p className="text-sm text-muted-foreground">No client errors logged yet. React crashes and widget errors will appear here.</p>
+      </CardContent>
+    </Card>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium">{errors.length} recent error{errors.length !== 1 ? "s" : ""}</p>
+        <Button size="sm" variant="outline" onClick={() => refetch()} className="gap-1.5"><Bug className="w-3.5 h-3.5" />Refresh</Button>
+      </div>
+      {errors.map((err: any) => (
+        <Card key={err.id} className="border-destructive/30">
+          <CardContent className="pt-4 pb-3">
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2">
+                <Badge variant="destructive" className="text-xs">{err.error_type || "boundary"}</Badge>
+                {err.user_email && <span className="text-xs text-muted-foreground">{err.user_email}</span>}
+              </div>
+              <span className="text-[10px] text-muted-foreground shrink-0">{err.created_at?.slice(0, 19)}</span>
+            </div>
+            <p className="text-xs font-medium text-destructive mb-1">{err.message?.slice(0, 200)}</p>
+            {err.url && <p className="text-[11px] text-muted-foreground mb-2 truncate">{err.url}</p>}
+            {err.component_stack && (
+              <details className="mt-1">
+                <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">Component stack</summary>
+                <pre className="text-[10px] mt-1 p-2 bg-muted rounded overflow-auto max-h-32 whitespace-pre-wrap">{err.component_stack?.slice(0, 1000)}</pre>
+              </details>
+            )}
+            {err.stack && (
+              <details className="mt-1">
+                <summary className="text-[11px] text-muted-foreground cursor-pointer hover:text-foreground">Stack trace</summary>
+                <pre className="text-[10px] mt-1 p-2 bg-muted rounded overflow-auto max-h-32 whitespace-pre-wrap">{err.stack?.slice(0, 1000)}</pre>
+              </details>
+            )}
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }
