@@ -1176,10 +1176,15 @@ export async function registerRoutes(server: Server, app: Express) {
         if (emailMatch.rows.length > 0) {
           matchedVisitorId = emailMatch.rows[0].visitor_id;
           matchedCampaignId = emailMatch.rows[0].campaign_id;
-        } else if (userCampaigns.length > 0) {
-          // Last resort: assign to the user’s most active campaign
-          const activeCampaign = userCampaigns.find((c: any) => c.isActive && c.status === "active") || userCampaigns[0];
-          matchedCampaignId = activeCampaign.id;
+        } else {
+          // No email match. Only attribute if the Stripe charge date is within the campaign's active window.
+          // This prevents historical purchases from bleeding into a new campaign.
+          const chargeDate = new Date(charge.created * 1000).toISOString();
+          const campaignForCharge = userCampaigns.find((c: any) =>
+            c.status === "active" && c.isActive &&
+            new Date(chargeDate) >= new Date(c.createdAt)
+          ) ?? null;
+          matchedCampaignId = campaignForCharge?.id ?? null;
         }
       }
 
