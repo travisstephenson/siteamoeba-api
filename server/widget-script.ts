@@ -110,15 +110,28 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     return bestLeaf;
   }
 
-  // === HELPER: Apply text to an element, targeting inner text nodes correctly ===
-  function applyTextToElement(el, text, testMethod) {
+  // === HELPER: Apply text to an element ===
+  // category is required to choose the right strategy:
+  //   - Buttons/CTAs: drill into the inner text-bearing child (GHL buttons are deeply nested)
+  //   - Everything else (headlines, paragraphs, etc.): set textContent directly on the element.
+  //     Setting textContent on the element replaces ALL child nodes cleanly.
+  //     Do NOT drill into child spans — that would put the new text inside a colored span
+  //     (e.g. the orange "Offer-Ad Loop" span) instead of replacing the whole headline.
+  function applyTextToElement(el, text, testMethod, category) {
     if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
       el.innerHTML = text;
       return;
     }
-    // Find the actual text target inside the element
-    var target = findTextTarget(el);
-    target.textContent = text;
+    if (category === "cta") {
+      // Buttons have deeply nested text in GHL — find the actual text child
+      var target = findTextTarget(el);
+      target.textContent = text;
+      return;
+    }
+    // Headlines, subheadlines, body copy, social proof, etc.:
+    // Replace the entire element's content directly. Loses inner span styling (e.g. colored words)
+    // but the text is CORRECT. This is the right tradeoff for A/B testing.
+    el.textContent = text;
   }
 
   // === HELPER: Apply variant text to a section ===
@@ -148,6 +161,24 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
             if (elements.indexOf(matches[j]) === -1) elements.push(matches[j]);
           }
         } catch(e) {}
+      }
+    }
+    // CRITICAL: If the selector matched multiple elements (e.g. "h1:first-of-type" on a GHL page
+    // matches EVERY h1 that is first-in-its-parent), filter down to only the element that actually
+    // contains the expected control text. Without this, text gets distributed across 20+ H1s.
+    if (elements.length > 1) {
+      var fp = (currentText || controlText || "").trim().toLowerCase();
+      var fpTokens = fp.split(/\s+/).filter(function(w) { return w.length > 2; }).slice(0, 6);
+      if (fpTokens.length >= 2) {
+        var filtered = [];
+        for (var fi = 0; fi < elements.length; fi++) {
+          var elTxt = (elements[fi].textContent || "").trim().toLowerCase();
+          var hits = 0;
+          for (var ft = 0; ft < fpTokens.length; ft++) { if (elTxt.indexOf(fpTokens[ft]) !== -1) hits++; }
+          // Require 50%+ of tokens to match — enough to be confident it's the right element
+          if (hits >= Math.ceil(fpTokens.length * 0.5)) filtered.push(elements[fi]);
+        }
+        if (filtered.length > 0) elements = filtered;
       }
     }
     if (elements.length > 0) return elements;
@@ -231,7 +262,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
 
     // === SINGLE ELEMENT: simple replacement ===
     if (allElements.length === 1) {
-      applyTextToElement(allElements[0], text, testMethod);
+      applyTextToElement(allElements[0], text, testMethod, category);
       return;
     }
 
@@ -273,7 +304,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         allElements[n].style.display = "none";
         allElements[n].setAttribute("data-sa-hidden", "true");
       } else {
-        applyTextToElement(allElements[n], lineText, testMethod);
+        applyTextToElement(allElements[n], lineText, testMethod, category);
       }
     }
   }
