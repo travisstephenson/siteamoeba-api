@@ -152,6 +152,29 @@ function paramId(id: string | string[]): number {
   return parseInt(Array.isArray(id) ? id[0] : id, 10);
 }
 
+/**
+ * consumeCredits — check credit balance and deduct for a paid AI operation.
+ * Returns { ok: true } if the operation is allowed and credits deducted.
+ * Returns { ok: false, errorMsg } if the user has no credits and overage is disabled.
+ * Free-plan operations (creditCost === 0) pass through immediately.
+ */
+async function consumeCredits(
+  userId: number,
+  creditCost: number
+): Promise<{ ok: boolean; errorMsg?: string }> {
+  if (creditCost <= 0) return { ok: true }; // Free op
+  const user = await storage.getUserById(userId);
+  if (!user || user.plan === "free") return { ok: true }; // Free plan
+  if ((user.creditsUsed + creditCost) > user.creditsLimit && !user.allowOverage) {
+    return {
+      ok: false,
+      errorMsg: `Credit limit reached (${user.creditsUsed}/${user.creditsLimit}). Upgrade your plan or enable overage in Settings.`,
+    };
+  }
+  await storage.incrementCreditsBy(userId, creditCost);
+  return { ok: true };
+}
+
 // Admin auth is COMPLETELY separate from the user system.
 // Admin credentials live in env vars (ADMIN_EMAIL, ADMIN_PASSWORD) — never in the DB.
 // Admin JWTs carry { isAdminSession: true } and are checked here, not against any user record.
@@ -1677,6 +1700,10 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(400).json({ error: "Please configure your AI provider in Settings or upgrade to a paid plan." });
     }
 
+    // Deduct credits for variant generation
+    const variantCreditCheck = await consumeCredits(req.userId!, llmConfigResolved.creditCost);
+    if (!variantCreditCheck.ok) return res.status(402).json({ error: variantCreditCheck.errorMsg });
+
     const { campaignId, type, sectionId } = req.body;
     if (!campaignId || !type) {
       return res.status(400).json({ error: "campaignId and type are required" });
@@ -2126,6 +2153,10 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(400).json({ error: "Brain Chat requires a paid plan or your own API key configured in Settings." });
     }
 
+    // Deduct credits for this Brain Chat message
+    const brainCreditCheck = await consumeCredits(req.userId!, llmConfigResolved.creditCost);
+    if (!brainCreditCheck.ok) return res.status(402).json({ error: brainCreditCheck.errorMsg });
+
     const { campaignId, history, useCounsel } = req.body;
     const message = typeof req.body.message === "string" ? sanitizeInput(req.body.message) : req.body.message;
     if (!campaignId || !message) {
@@ -2357,22 +2388,27 @@ export async function registerRoutes(server: Server, app: Express) {
       }
     }
 
-    // Fetch page content
+    // Deduct credits (3 per CRO report — it's a heavy analysis)
+    const creditCheck = await consumeCredits(req.userId!, 3);
+    if (!creditCheck.ok) return res.status(402).json({ error: creditCheck.errorMsg });
+
+    // Fetch full page content using the same extractPageText pipeline as the scanner
     let pageContent = "";
     try {
       const pageResponse = await fetch(reportUrl, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; SiteAmoeba/1.0)" },
-        signal: AbortSignal.timeout(12000),
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        },
+        signal: AbortSignal.timeout(30000),
       });
       if (pageResponse.ok) {
-        let html = await pageResponse.text();
-        html = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-                   .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-                   .replace(/<svg[^>]*>[\s\S]*?<\/svg>/gi, "")
-                   .replace(/<[^>]+>/g, " ")
-                   .replace(/\s+/g, " ")
-                   .trim();
-        pageContent = html.substring(0, 6000); // More content for a full report
+        const rawHtml = await pageResponse.text();
+        const titleMatch = rawHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
+        const titleText = titleMatch ? `Page title: ${titleMatch[1].trim()}\n\n` : "";
+        const headEnd = rawHtml.toLowerCase().indexOf("</head>");
+        const bodyHtml = headEnd > 0 ? rawHtml.slice(headEnd + 7) : rawHtml;
+        // Use same extractPageText as the scanner — 40KB covers the full page
+        pageContent = (titleText + extractPageText(bodyHtml)).slice(0, 40000);
       }
     } catch (err) {
       console.log("CRO report: could not fetch page:", (err as any)?.message);
@@ -2386,7 +2422,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
     let report: string;
     try {
-      report = await callLLM(llmConfig, messages, { maxTokens: 3000 });
+      report = await callLLM(llmConfig, messages, { maxTokens: 4000 });
     } catch (err: any) {
       return kaReport.fail(502, { error: err.message || "AI provider error." });
     }

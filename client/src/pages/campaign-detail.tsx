@@ -4141,7 +4141,9 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
   const generateCROReport = async () => {
     if (!llmConfigured || isTyping || isGeneratingReport) return;
     setIsGeneratingReport(true);
+    setIsTyping(true); // Show typing indicator while report generates
     setMessages(prev => [...prev, { role: "user", content: "Generate a full CRO report for this page." }]);
+    setTimeout(scrollToBottom, 50);
     try {
       const res = await apiRequest("POST", "/api/ai/cro-report", { campaignId });
       const data = await res.json();
@@ -4152,6 +4154,7 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
       setMessages(prev => prev.slice(0, -1));
     } finally {
       setIsGeneratingReport(false);
+      setIsTyping(false);
       setTimeout(scrollToBottom, 100);
     }
   };

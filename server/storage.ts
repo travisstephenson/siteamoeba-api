@@ -142,6 +142,7 @@ export interface IStorage {
 
   // Credits
   incrementCredits(userId: number): Promise<void>;
+  incrementCreditsBy(userId: number, amount: number): Promise<void>;
   resetMonthlyCredits(userId: number): Promise<void>;
 
   // Feedback
@@ -1107,6 +1108,11 @@ class StorageImpl implements IStorage {
   // ===== Credits =====
   async incrementCredits(userId: number): Promise<void> {
     await pool.query("UPDATE users SET credits_used = credits_used + 1 WHERE id = $1", [userId]);
+  }
+
+  async incrementCreditsBy(userId: number, amount: number): Promise<void> {
+    if (amount <= 0) return;
+    await pool.query("UPDATE users SET credits_used = credits_used + $1 WHERE id = $2", [amount, userId]);
   }
 
   async resetMonthlyCredits(userId: number): Promise<void> {
