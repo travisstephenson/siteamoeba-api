@@ -9,9 +9,13 @@ let ENCRYPTION_KEY: string;
 
 if (process.env.ENCRYPTION_KEY) {
   if (process.env.ENCRYPTION_KEY.length !== 64) {
-    throw new Error("ENCRYPTION_KEY must be a 64-character hex string (32 bytes)");
+    console.warn(
+      `[security] ENCRYPTION_KEY is ${process.env.ENCRYPTION_KEY.length} chars (expected 64). Using fallback random key.`
+    );
+    ENCRYPTION_KEY = crypto.randomBytes(32).toString("hex");
+  } else {
+    ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
   }
-  ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
 } else {
   // Generate a random key for this process — keys stored with this key won't
   // survive restarts, but existing plaintext keys will still be read correctly
