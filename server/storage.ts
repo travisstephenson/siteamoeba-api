@@ -629,6 +629,13 @@ class StorageImpl implements IStorage {
       ALTER TABLE variants ADD COLUMN IF NOT EXISTS display_issue_reason TEXT;
       ALTER TABLE variants ADD COLUMN IF NOT EXISTS display_issue_at TEXT;
     `);
+    // Customer email on visitors — stored at first purchase for downstream Stripe attribution
+    // Lets us attribute $97 OTO + $199 OTO2 purchases back to the original campaign
+    // by matching all future Stripe charges from the same email to the original visitor
+    await pool.query(`
+      ALTER TABLE visitors ADD COLUMN IF NOT EXISTS customer_email TEXT;
+      CREATE INDEX IF NOT EXISTS idx_visitors_email ON visitors (customer_email);
+    `);
   }
 
   // ===== Users =====
@@ -859,13 +866,16 @@ class StorageImpl implements IStorage {
     return rows[0];
   }
 
-  async markConverted(visitorId: string, stripePaymentId: string, revenue: number): Promise<void> {
-    await db.update(visitors).set({
+  async markConverted(visitorId: string, stripePaymentId: string, revenue: number, customerEmail?: string): Promise<void> {
+    const updates: any = {
       converted: true,
       convertedAt: new Date().toISOString(),
       stripePaymentId,
       revenue,
-    }).where(eq(visitors.id, visitorId));
+    };
+    // Store customer email for downstream Stripe attribution (OTO/upsell tracking)
+    if (customerEmail) updates.customerEmail = customerEmail;
+    await db.update(visitors).set(updates).where(eq(visitors.id, visitorId));
   }
 
   async getVisitorCountByCampaign(campaignId: number): Promise<number> {

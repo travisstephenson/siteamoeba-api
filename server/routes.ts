@@ -1089,20 +1089,19 @@ export async function registerRoutes(server: Server, app: Express) {
       let matchedCampaignId: number | null = null;
       let matchedVisitorId: string | null = null;
 
+      // First look by customer_email stored directly on the visitor record
+      // (set at first purchase), then fall back to revenue_events email matching.
+      // ORDER BY first_seen ASC = first-touch attribution
       const visitorMatch = await pool.query(
         `SELECT v.id AS visitor_id, v.campaign_id
          FROM visitors v
          JOIN campaigns c ON c.id = v.campaign_id
-         WHERE v.converted = true
-           AND c.user_id = $1
+         WHERE c.user_id = $1
            AND (
-             EXISTS (
-               SELECT 1 FROM revenue_events re2
-               WHERE re2.visitor_id = v.id AND re2.customer_email = $2
-             )
+             v.customer_email = $2
              OR v.id IN (
-               SELECT re3.visitor_id FROM revenue_events re3
-               WHERE re3.customer_email = $2 AND re3.visitor_id IS NOT NULL
+               SELECT re.visitor_id FROM revenue_events re
+               WHERE re.customer_email = $2 AND re.visitor_id IS NOT NULL
              )
            )
          ORDER BY v.first_seen ASC
@@ -2939,9 +2938,11 @@ export async function registerRoutes(server: Server, app: Express) {
     const attributionCampaignId = visitor?.campaignId ?? opts.pixelCampaignId;
     const resolvedVisitorId = visitor?.id ?? opts.vid;
 
-    // Mark first conversion on the visitor record (idempotent)
+    // Mark first conversion on the visitor record — also store email for Stripe attribution
+    // Storing the email lets us match ALL future Stripe charges (OTOs, upsells)
+    // from the same customer back to this original campaign, without any additional pixels.
     if (visitor && !visitor.converted) {
-      await storage.markConverted(resolvedVisitorId, "pixel_" + Date.now(), opts.amount);
+      await storage.markConverted(resolvedVisitorId, "pixel_" + Date.now(), opts.amount, opts.customerEmail);
     } else if (visitor && visitor.converted && opts.amount > 0) {
       // Subsequent purchase — accumulate revenue on the visitor record
       await pool.query(
@@ -3779,17 +3780,28 @@ export async function registerRoutes(server: Server, app: Express) {
     if (!apiKey || typeof apiKey !== "string") {
       return res.status(400).json({ error: "apiKey is required" });
     }
-    // Verify the key works by calling Whop API
+    // Verify the key using Whop v2 /me endpoint — returns 401 for invalid keys, 200 for valid
     try {
-      const verifyRes = await fetch("https://api.whop.com/api/v1/payments?limit=1", {
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      const verifyRes = await fetch("https://api.whop.com/api/v2/me", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(8000),
       });
-      if (!verifyRes.ok) {
-        const errText = await verifyRes.text();
-        return res.status(400).json({ error: "Whop API key verification failed: " + errText.slice(0, 200) });
+      if (verifyRes.status === 401 || verifyRes.status === 403) {
+        let message = "Invalid API key";
+        try {
+          const body = await verifyRes.json();
+          message = body?.error?.message || body?.message || message;
+        } catch {}
+        return res.status(400).json({ error: `Whop API key rejected: ${message}. Get your key at whop.com/dashboard → Settings → API.` });
       }
+      // Any other response (200, 404, 5xx) = key format is accepted, save it
     } catch (err: any) {
-      return res.status(400).json({ error: "Failed to verify Whop API key: " + (err.message || "network error") });
+      if (err.name === "AbortError" || err.name === "TimeoutError") {
+        // Timeout — save the key anyway, Whop may be temporarily slow
+        console.log("Whop verify timeout, saving key anyway");
+      } else {
+        return res.status(400).json({ error: "Could not reach Whop to verify key. Check your internet connection and try again." });
+      }
     }
     const user = await storage.getUserById(req.userId!);
     if (!user) return res.status(401).json({ error: "User not found" });

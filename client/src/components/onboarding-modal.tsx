@@ -1,14 +1,14 @@
 /**
  * Onboarding walkthrough modal.
  * Visual guide — does NOT require action, fully skippable at any step.
- * Steps: Welcome → Scan Page → Install Pixel → Conversion Pixel → Enable Test
+ * Steps: Welcome → Scan Page → Install Pixel → Enable Test
  */
 import React, { useState, useEffect } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import {
   Globe, Code2, CheckCircle2, Rocket, Zap,
-  ChevronRight, ChevronLeft, Copy, Check, MousePointer2,
+  ChevronRight, ChevronLeft, Copy, Check,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
@@ -85,7 +85,6 @@ function PlatformGrid({ items }: { items: { platform: string; instruction: strin
 }
 
 const CAMPAIGN_PIXEL = `<script src="https://api.siteamoeba.com/api/widget/script/YOUR_CAMPAIGN_ID" defer></script>`;
-const CONVERSION_PIXEL = `<script src="https://api.siteamoeba.com/api/widget/script/YOUR_CAMPAIGN_ID?mode=convert" defer></script>`;
 
 const STEPS = [
   {
@@ -179,7 +178,7 @@ const STEPS = [
     id: "pixel",
     icon: <Code2 className="w-8 h-8 text-purple-500" />,
     title: "Step 2 — Install the tracking pixel",
-    subtitle: "One script tag on your offer page. Tracks visitors and serves variants automatically.",
+    subtitle: "One script tag on your offer page. Tracks visitors, serves variants, and connects to your revenue automatically.",
     content: (
       <div className="space-y-4">
         <div>
@@ -198,40 +197,9 @@ const STEPS = [
             { platform: "Any HTML page", instruction: "Paste inside <head> or just before </body>" },
           ]} />
         </div>
-        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
-          <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
-            <strong>Install on your offer/sales page only</strong> — not the thank-you page. The conversion pixel (next step) goes on the thank-you page.
-          </p>
-        </div>
-      </div>
-    ),
-  },
-  {
-    id: "conversion",
-    icon: <MousePointer2 className="w-8 h-8 text-green-500" />,
-    title: "Step 3 — Install the conversion pixel",
-    subtitle: "Goes on your thank-you or order confirmation page. This is how SiteAmoeba knows which variant won.",
-    content: (
-      <div className="space-y-4">
-        <div>
-          <p className="text-xs font-semibold mb-0.5">Your conversion pixel</p>
-          <p className="text-xs text-muted-foreground">
-            Same campaign ID — this version fires a conversion event when the page loads.
-          </p>
-          <CopyBlock code={CONVERSION_PIXEL} />
-        </div>
-        <div>
-          <p className="text-xs font-semibold mb-2">Where to install it</p>
-          <PlatformGrid items={[
-            { platform: "Thank-you page", instruction: "The page visitors land on after purchase or opt-in" },
-            { platform: "Order confirmation", instruction: "Any page that only shows after a successful conversion" },
-            { platform: "GoHighLevel", instruction: "Open the thank-you page step → Custom Scripts → Header" },
-            { platform: "ClickFunnels", instruction: "Open the order confirmation step → Page Settings → Tracking" },
-          ]} />
-        </div>
-        <div className="rounded-lg border border-green-500/20 bg-green-500/5 p-3">
-          <p className="text-xs text-green-700 dark:text-green-400 leading-relaxed">
-            <strong>Lead gen pages?</strong> SiteAmoeba auto-detects form submissions on most platforms, so the conversion pixel is optional — but installing it gives more reliable data.
+        <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3">
+          <p className="text-xs text-blue-700 dark:text-blue-400 leading-relaxed">
+            <strong>This one pixel does everything.</strong> No separate conversion pixel needed. SiteAmoeba connects to Stripe to automatically capture every purchase — the main offer, OTOs, and upsells — and attributes them all back to the original variant. Connect Stripe in Settings to enable full revenue tracking.
           </p>
         </div>
       </div>
