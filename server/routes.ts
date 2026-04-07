@@ -3977,9 +3977,16 @@ export async function registerRoutes(server: Server, app: Express) {
           matchedVisitorId = visitorMatch.rows[0].visitor_id;
           matchedCampaignId = visitorMatch.rows[0].campaign_id;
         } else {
-          // No visitor match — assign to most active campaign
-          const active = userCampaigns.find((c: any) => c.isActive) || userCampaigns[0];
-          matchedCampaignId = active.id;
+          // No visitor match. Use Whop membership start date to gate attribution to campaign window.
+          // mem.created_at is Unix seconds (when the membership was created on Whop)
+          const membershipDate = mem.created_at
+            ? new Date(mem.created_at * 1000).toISOString()
+            : new Date().toISOString(); // fallback: today
+          const campaignForMem = userCampaigns.find((c: any) =>
+            c.status === "active" && c.isActive &&
+            new Date(membershipDate) >= new Date(c.createdAt)
+          ) ?? null;
+          matchedCampaignId = campaignForMem?.id ?? null;
         }
         if (!matchedCampaignId) continue;
 
