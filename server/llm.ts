@@ -212,13 +212,14 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
 
 export async function callLLM(
   config: LLMConfig,
-  messages: LLMMessage[]
+  messages: LLMMessage[],
+  opts?: { maxTokens?: number }
 ): Promise<string> {
   const model = config.model || DEFAULT_MODELS[config.provider];
   const providerName = PROVIDER_DISPLAY_NAMES[config.provider] || config.provider;
 
   try {
-    return await _callLLMInternal(config, messages, model);
+    return await _callLLMInternal(config, messages, model, opts?.maxTokens);
   } catch (err: any) {
     throw new Error(classifyLLMError(err, providerName));
   }
@@ -227,7 +228,8 @@ export async function callLLM(
 async function _callLLMInternal(
   config: LLMConfig,
   messages: LLMMessage[],
-  model: string
+  model: string,
+  maxTokens?: number
 ): Promise<string> {
 
   if (config.provider === "anthropic") {
@@ -244,7 +246,7 @@ async function _callLLMInternal(
 
     const response = await client.messages.create({
       model,
-      max_tokens: 2048,
+      max_tokens: maxTokens || 2048,
       system: systemMsg?.content,
       messages: conversationMsgs,
     });

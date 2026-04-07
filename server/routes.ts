@@ -1373,7 +1373,13 @@ export async function registerRoutes(server: Server, app: Express) {
 
     let rawResponse: string;
     try {
-      rawResponse = await callLLM(llmConfigResolved.config, messages);
+      // Wrap with 22s timeout — scan must complete well within Railway's 30s limit
+      rawResponse = await Promise.race([
+        callLLM(llmConfigResolved.config, messages, { maxTokens: 800 }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Scan timed out. The AI took too long. Try again or use Quick Create instead.")), 22000)
+        ),
+      ]);
     } catch (err: any) {
       console.error("Page scan LLM call failed:", err);
       return res.status(502).json({ error: err.message || "AI provider error. Check your API key and credits in Settings." });
