@@ -1350,24 +1350,10 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(422).json({ error: `Could not fetch page: ${err.message || "Network error"}` });
     }
 
-    // Pre-truncate BEFORE regex to avoid catastrophic backtracking on large pages (e.g. 1.6MB GHL pages)
-    const MAX_RAW = 50000; // 50KB is more than enough — above-the-fold content is always in the first 50KB
-    const htmlToProcess = rawHtml.length > MAX_RAW ? rawHtml.slice(0, MAX_RAW) : rawHtml;
-
-    // Strip scripts, styles, SVGs, and comments to reduce noise
-    // Using non-capturing approach on pre-truncated HTML to keep regexes fast
-    let cleaned = htmlToProcess
-      .replace(/<script[^>]*>.*?<\/script>/gis, "")
-      .replace(/<style[^>]*>.*?<\/style>/gis, "")
-      .replace(/<svg[^>]*>.*?<\/svg>/gis, "")
-      .replace(/<!--.*?-->/gs, "")
-      .replace(/\s{2,}/g, " ")
-      .trim();
-
-    // Truncate to ~8000 chars to fit in context
-    if (cleaned.length > 8000) {
-      cleaned = cleaned.slice(0, 8000) + "\n<!-- [truncated] -->";
-    }
+    // Fast extraction: take the first 12KB of raw HTML — this captures above-the-fold
+    // content without any regex processing (regex on large HTML causes catastrophic backtracking).
+    // The AI handles noisy HTML just fine.
+    const cleaned = rawHtml.slice(0, 12000);
 
     const messages = buildPageScanPrompt(url, cleaned);
 
