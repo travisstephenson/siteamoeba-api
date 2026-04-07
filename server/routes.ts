@@ -1398,8 +1398,19 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(422).json({ error: `Could not fetch page: ${err.message || "Network error"}` });
     }
 
-    // Take first 30KB for the AI — GHL pages have content after the initial script setup
-    const cleaned = rawHtml.slice(0, 30000);
+    // Fast tag stripping using character-class regex (no dot-all, no backtracking issues)
+    // Strip script/style blocks by removing from '<s' or '<S' to '>', then strip remaining tags
+    let cleaned = rawHtml
+      .replace(/<script[^>]*>[\s\S]{0,50000}<\/script>/gi, " ")  // cap inner content to prevent backtracking
+      .replace(/<style[^>]*>[\s\S]{0,20000}<\/style>/gi, " ")
+      .replace(/<[^>]{0,500}>/g, " ")  // strip remaining tags (capped attribute length)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 8000);
+    if (!cleaned || cleaned.length < 100) {
+      // Fallback: if stripping removed everything (all-JS page), just use raw slice
+      cleaned = rawHtml.slice(5000, 35000); // Skip the first 5KB of headers/scripts
+    }
 
     const messages = buildPageScanPrompt(url, cleaned);
 
