@@ -117,6 +117,10 @@ export const variants = pgTable("variants", {
   persuasionTags: text("persuasion_tags"),
   // Link to a test_section (nullable for backward compat)
   testSectionId: integer("test_section_id"),
+  // Display validation — set when the widget detects this variant is rendering incorrectly
+  displayIssue: boolean("display_issue").default(false),
+  displayIssueReason: text("display_issue_reason"),
+  displayIssueAt: text("display_issue_at"),
 });
 
 export const insertVariantSchema = createInsertSchema(variants).omit({

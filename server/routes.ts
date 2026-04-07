@@ -1640,6 +1640,89 @@ export async function registerRoutes(server: Server, app: Express) {
     res.status(201).json(section);
   });
 
+  // POST /api/sections/:id/preflight
+  // Before activating a test, fetches the live page and checks:
+  //   1. Does the target element exist? (via currentText fingerprint)
+  //   2. How many elements would the selector match?
+  //   3. Are the variants long enough to be meaningful?
+  // Returns { status: 'ok'|'warning'|'error', checks: [...] }
+  app.post("/api/sections/:id/preflight", requireAuth, async (req: Request, res: Response) => {
+    const sectionId = paramId(req.params.id);
+    const section = await storage.getTestSectionById(sectionId);
+    if (!section) return res.status(404).json({ error: "Section not found" });
+    const campaign = await storage.getCampaign(section.campaignId);
+    if (!campaign || campaign.userId !== req.userId) return res.status(404).json({ error: "Not found" });
+
+    const checks: { name: string; status: "ok" | "warning" | "error"; detail: string }[] = [];
+
+    // Fetch the live page
+    let pageText = "";
+    let fetchOk = false;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 20000);
+      const resp = await fetch(campaign.url, {
+        signal: ctrl.signal,
+        headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/122.0.0.0 Safari/537.36" },
+      });
+      clearTimeout(t);
+      if (resp.ok) {
+        const rawHtml = await resp.text();
+        const headEnd = rawHtml.toLowerCase().indexOf("</head>");
+        const bodyHtml = headEnd > 0 ? rawHtml.slice(headEnd + 7) : rawHtml;
+        pageText = extractPageText(bodyHtml);
+        fetchOk = true;
+      }
+    } catch { fetchOk = false; }
+
+    if (!fetchOk) {
+      checks.push({ name: "Page fetch", status: "warning", detail: "Could not reach the live page to run a preflight check. The test may still work correctly." });
+    } else {
+      // Check 1: Does the control text fingerprint appear in the page?
+      const fingerprint = (section.currentText || "").trim();
+      if (fingerprint.length > 10) {
+        const fpWords = fingerprint.toLowerCase().split(/\s+/).filter(w => w.length > 3).slice(0, 6);
+        const pageLower = pageText.toLowerCase();
+        const hits = fpWords.filter(w => pageLower.includes(w)).length;
+        const matchRate = fpWords.length > 0 ? hits / fpWords.length : 0;
+        if (matchRate >= 0.6) {
+          checks.push({ name: "Element found", status: "ok", detail: `Target text fingerprint matched (${Math.round(matchRate * 100)}% word overlap). The widget should locate this element reliably.` });
+        } else if (matchRate >= 0.3) {
+          checks.push({ name: "Element found", status: "warning", detail: `Partial text match only (${Math.round(matchRate * 100)}% word overlap). The page content may have changed since the last scan. Re-scan the page if you see issues.` });
+        } else {
+          checks.push({ name: "Element found", status: "error", detail: `Target text not found on the live page. The section content may have changed since scanning. Re-scan the page before activating.` });
+        }
+      } else {
+        checks.push({ name: "Element found", status: "warning", detail: "No text fingerprint stored for this section. Re-scan the page to capture current content." });
+      }
+
+      // Check 2: Pixel is installed
+      if (pageText.toLowerCase().includes("siteamoeba") || pageText.toLowerCase().includes("api.siteamoeba.com")) {
+        checks.push({ name: "Pixel installed", status: "ok", detail: "SiteAmoeba tracking pixel detected on the page." });
+      } else {
+        checks.push({ name: "Pixel installed", status: "warning", detail: "SiteAmoeba pixel not detected. Make sure the pixel script is installed for tracking to work." });
+      }
+    }
+
+    // Check 3: Do the active variants look meaningful?
+    const variants = await storage.getVariantsByCampaign(campaign.id);
+    const sectionVariants = variants.filter(v => v.testSectionId === sectionId && !v.isControl && v.isActive);
+    const flaggedVariants = sectionVariants.filter(v => (v as any).displayIssue === true);
+    if (flaggedVariants.length > 0) {
+      checks.push({ name: "Variant display", status: "error", detail: `${flaggedVariants.length} variant(s) were flagged by the widget as rendering incorrectly in previous sessions. Preview each variant before activating.` });
+    } else if (sectionVariants.length === 0) {
+      checks.push({ name: "Variant display", status: "warning", detail: "No active challenger variants found for this section. Generate variants before activating." });
+    } else {
+      checks.push({ name: "Variant display", status: "ok", detail: `${sectionVariants.length} active variant(s) ready. No display issues reported.` });
+    }
+
+    // Overall status: worst of all check statuses
+    const overallStatus = checks.some(c => c.status === "error") ? "error"
+      : checks.some(c => c.status === "warning") ? "warning" : "ok";
+
+    res.json({ status: overallStatus, checks, sectionId, category: section.category });
+  });
+
   app.patch("/api/sections/:id", requireAuth, async (req: Request, res: Response) => {
     // Verify ownership
     const result = await storage.getTestSectionById(paramId(req.params.id));
@@ -2964,6 +3047,31 @@ export async function registerRoutes(server: Server, app: Express) {
     } catch (err) {
       // Never fail — widget doesn't care about the response
       return res.json({ received: false });
+    }
+  });
+
+  // GET /api/widget/flag-variant — widget reports a display issue (image beacon, fire-and-forget)
+  // Called when post-apply validation fails: reverts to control and fires this to mark the variant.
+  app.get("/api/widget/flag-variant", widgetLimiter, async (req: Request, res: Response) => {
+    // Respond immediately — the widget doesn't wait for this
+    res.status(200).send("");
+    try {
+      const variantId = parseInt(String(req.query.variantId));
+      const reason = String(req.query.reason || "display_check_failed").slice(0, 100);
+      if (isNaN(variantId) || variantId <= 0) return;
+      // Migrate column if needed, then flag the variant
+      await pool.query(`
+        ALTER TABLE variants ADD COLUMN IF NOT EXISTS display_issue BOOLEAN NOT NULL DEFAULT false;
+        ALTER TABLE variants ADD COLUMN IF NOT EXISTS display_issue_reason TEXT;
+        ALTER TABLE variants ADD COLUMN IF NOT EXISTS display_issue_at TEXT;
+      `).catch(() => {}); // ignore if already exists
+      await pool.query(
+        `UPDATE variants SET display_issue = true, display_issue_reason = $1, display_issue_at = $2 WHERE id = $3`,
+        [reason, new Date().toISOString(), variantId]
+      );
+      console.log(`[widget] Variant ${variantId} flagged: ${reason}`);
+    } catch (err) {
+      // Silent — never break the page over a logging failure
     }
   });
 

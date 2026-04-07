@@ -250,7 +250,33 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     return elements;
   }
 
-  function applySectionVariant(selector, text, testMethod, controlText, category, currentText) {
+  // === POST-APPLY VALIDATION ===
+  // Checks that the variant text actually appeared in the element after the swap.
+  // Returns true if the render looks correct, false if it appears broken.
+  // Broken = fewer than 40% of the first 6 content words of the variant are found in the element.
+  function validateRender(el, variantText) {
+    if (!el || !variantText) return true;
+    var actual = (el.textContent || "").trim().toLowerCase();
+    var words = variantText.trim().toLowerCase().split(/\s+/).filter(function(w) { return w.length > 2; }).slice(0, 6);
+    if (words.length < 2) return true; // too short to validate
+    var found = 0;
+    for (var i = 0; i < words.length; i++) { if (actual.indexOf(words[i]) !== -1) found++; }
+    return found >= Math.ceil(words.length * 0.4);
+  }
+
+  // Reports a display issue to the server — fire and forget via image beacon.
+  // Never throws; failures are swallowed so a logging error can't affect the page.
+  function reportDisplayIssue(variantId, reason) {
+    try {
+      var img = new Image();
+      img.src = API + "/api/widget/flag-variant?vid=" + encodeURIComponent(vid || "")
+              + "&variantId=" + encodeURIComponent(variantId || "")
+              + "&cid=" + encodeURIComponent(String(CID))
+              + "&reason=" + encodeURIComponent(reason || "display_check_failed");
+    } catch(e) {}
+  }
+
+  function applySectionVariant(selector, text, testMethod, controlText, category, currentText, variantId) {
     if (!text) return;
 
     var allElements = findElements(selector, currentText, controlText, category);
@@ -260,9 +286,21 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       return;
     }
 
+    // Save originals for safe revert if validation fails
+    var originals = [];
+    for (var oi = 0; oi < allElements.length; oi++) {
+      originals.push(allElements[oi].textContent || "");
+    }
+
     // === SINGLE ELEMENT: simple replacement ===
     if (allElements.length === 1) {
       applyTextToElement(allElements[0], text, testMethod, category);
+      // === SAFETY CHECK ===
+      if (!validateRender(allElements[0], text)) {
+        allElements[0].textContent = originals[0]; // revert to control — safe state
+        reportDisplayIssue(variantId, "single_element_mismatch");
+        console.warn("SiteAmoeba: variant display check failed, reverted to control", selector);
+      }
       return;
     }
 
@@ -277,7 +315,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     }
 
     // Split variant text into words
-    var words = text.split(/\\s+/).filter(Boolean);
+    var words = text.split(/\s+/).filter(Boolean);
     if (words.length === 0) return;
 
     // Distribute words across elements proportionally
@@ -285,9 +323,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     var wordIndex = 0;
     for (var el = 0; el < allElements.length; el++) {
       var ratio = originalLengths[el] / totalOrigLen;
-      // Target word count for this line (proportional to original char ratio)
       var targetWords = Math.max(1, Math.round(ratio * words.length));
-      // Last element gets all remaining words
       if (el === allElements.length - 1) {
         lines.push(words.slice(wordIndex).join(" "));
       } else {
@@ -297,7 +333,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       }
     }
 
-    // Apply each line to its corresponding element — NO style changes, just text
+    // Apply each line to its corresponding element
     for (var n = 0; n < allElements.length; n++) {
       var lineText = lines[n] || "";
       if (!lineText) {
@@ -306,6 +342,19 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       } else {
         applyTextToElement(allElements[n], lineText, testMethod, category);
       }
+    }
+
+    // === SAFETY CHECK for multi-element ===
+    // Validate that the primary element shows a reasonable portion of the variant text.
+    // If distribution looks wrong, revert all elements to originals.
+    if (!validateRender(allElements[0], text)) {
+      for (var rv = 0; rv < allElements.length; rv++) {
+        allElements[rv].textContent = originals[rv];
+        allElements[rv].style.display = "";
+        allElements[rv].removeAttribute("data-sa-hidden");
+      }
+      reportDisplayIssue(variantId, "multi_element_mismatch");
+      console.warn("SiteAmoeba: multi-element variant check failed, reverted to control", selector);
     }
   }
 
@@ -361,7 +410,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           data.headline.selector, data.headline.text,
           data.headline.testMethod || "text_swap",
           data.headline.controlText, data.headline.category || "headline",
-          data.headline.currentText
+          data.headline.currentText, data.headline.id
         );
       }
       // Apply subheadline variant — SKIP if control
@@ -370,7 +419,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           data.subheadline.selector, data.subheadline.text,
           data.subheadline.testMethod || "text_swap",
           data.subheadline.controlText, data.subheadline.category || "subheadline",
-          data.subheadline.currentText
+          data.subheadline.currentText, data.subheadline.id
         );
       }
       // Apply section variants (body_copy, CTAs, etc.) — SKIP controls
@@ -379,7 +428,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           if (!sv || !sv.text || sv.isControl) return;
           applySectionVariant(
             sv.selector, sv.text, sv.testMethod || "text_swap",
-            sv.controlText, sv.category, sv.currentText
+            sv.controlText, sv.category, sv.currentText, sv.id
           );
         });
       }

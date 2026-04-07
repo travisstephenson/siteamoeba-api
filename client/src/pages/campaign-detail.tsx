@@ -3423,6 +3423,14 @@ function TestSectionCard({
     },
   });
 
+  // Preflight check state
+  const [preflightOpen, setPreflightOpen] = useState(false);
+  const [preflightResult, setPreflightResult] = useState<{
+    status: "ok" | "warning" | "error";
+    checks: { name: string; status: "ok" | "warning" | "error"; detail: string }[];
+  } | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+
   const toggleMutation = useMutation({
     mutationFn: async (active: boolean) => {
       const res = await apiRequest("PATCH", `/api/sections/${section.id}`, { isActive: active });
@@ -3455,6 +3463,32 @@ function TestSectionCard({
       });
     },
   });
+
+  // When toggling ON: run preflight first, show results, let user confirm or cancel
+  const handleToggle = async (checked: boolean) => {
+    if (!checked) {
+      // Deactivating — no preflight needed
+      toggleMutation.mutate(false);
+      return;
+    }
+    // Activating — run preflight
+    setPreflightLoading(true);
+    setPreflightResult(null);
+    setPreflightOpen(true);
+    try {
+      const res = await apiRequest("POST", `/api/sections/${section.id}/preflight`, {});
+      const data = await res.json();
+      setPreflightResult(data);
+    } catch {
+      // If preflight itself fails, show a generic warning but let user proceed
+      setPreflightResult({
+        status: "warning",
+        checks: [{ name: "Preflight check", status: "warning", detail: "Could not run the preflight check. You can still activate, but please preview the variant on your page first." }]
+      });
+    } finally {
+      setPreflightLoading(false);
+    }
+  };
 
   return (
     <Card
@@ -3517,8 +3551,8 @@ function TestSectionCard({
               </span>
               <Switch
                 checked={section.isActive}
-                onCheckedChange={(checked) => toggleMutation.mutate(checked)}
-                disabled={toggleMutation.isPending}
+                onCheckedChange={handleToggle}
+                disabled={toggleMutation.isPending || preflightLoading}
                 data-testid={`toggle-section-${section.id}`}
                 aria-label={section.isActive ? "Deactivate section" : "Activate section"}
               />
@@ -3688,6 +3722,88 @@ function TestSectionCard({
               </div>
             )}
           </CardContent>
+        </div>
+      )}
+
+      {/* Preflight check dialog — shown before activating */}
+      {preflightOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => { if (!preflightLoading && !toggleMutation.isPending) setPreflightOpen(false); }}
+        >
+          <div
+            className="bg-background border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 p-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 mb-4">
+              {preflightLoading ? (
+                <div className="w-5 h-5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+              ) : preflightResult?.status === "ok" ? (
+                <div className="w-5 h-5 rounded-full bg-green-500/20 flex items-center justify-center">
+                  <svg className="w-3 h-3 text-green-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                </div>
+              ) : preflightResult?.status === "error" ? (
+                <div className="w-5 h-5 rounded-full bg-destructive/20 flex items-center justify-center">
+                  <svg className="w-3 h-3 text-destructive" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </div>
+              ) : (
+                <div className="w-5 h-5 rounded-full bg-amber-500/20 flex items-center justify-center">
+                  <svg className="w-3 h-3 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v4m0 4h.01" /></svg>
+                </div>
+              )}
+              <h3 className="text-sm font-semibold">
+                {preflightLoading ? "Running pre-activation checks..." : "Pre-activation check"}
+              </h3>
+            </div>
+
+            {preflightLoading && (
+              <p className="text-xs text-muted-foreground mb-4">Fetching your live page and verifying the test can run correctly...</p>
+            )}
+
+            {preflightResult && (
+              <div className="space-y-2 mb-4">
+                {preflightResult.checks.map((check, i) => (
+                  <div key={i} className={`rounded-lg p-3 border ${
+                    check.status === "ok" ? "bg-green-500/5 border-green-500/20" :
+                    check.status === "error" ? "bg-destructive/5 border-destructive/20" :
+                    "bg-amber-500/5 border-amber-500/20"
+                  }`}>
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <span className={`text-xs font-semibold ${
+                        check.status === "ok" ? "text-green-600 dark:text-green-400" :
+                        check.status === "error" ? "text-destructive" : "text-amber-600 dark:text-amber-400"
+                      }`}>
+                        {check.status === "ok" ? "✓" : check.status === "error" ? "✗" : "⚠"} {check.name}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground leading-relaxed">{check.detail}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {preflightResult && (
+              <div className="flex gap-2">
+                <button
+                  className="flex-1 text-xs rounded-lg border border-border px-3 py-2 hover:bg-muted transition-colors"
+                  onClick={() => setPreflightOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className={`flex-1 text-xs rounded-lg px-3 py-2 font-medium transition-colors ${
+                    preflightResult.status === "error"
+                      ? "bg-amber-500 hover:bg-amber-600 text-white"
+                      : "bg-primary hover:bg-primary/90 text-primary-foreground"
+                  }`}
+                  onClick={() => { setPreflightOpen(false); toggleMutation.mutate(true); }}
+                  disabled={toggleMutation.isPending}
+                >
+                  {preflightResult.status === "error" ? "Activate anyway" : "Activate"}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </Card>
