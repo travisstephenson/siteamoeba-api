@@ -1368,7 +1368,7 @@ export async function registerRoutes(server: Server, app: Express) {
   }
 
   // Async job store — in-memory, TTL 10 minutes
-  const scanJobs = new Map<string, { status: "pending" | "done" | "error"; result?: any; error?: string; createdAt: number }>();
+  const scanJobs = new Map<string, { status: "pending" | "done" | "error"; result?: any; error?: string; rawDebug?: string; createdAt: number }>();
   setInterval(() => {
     const now = Date.now();
     for (const [id, job] of scanJobs.entries()) {
@@ -1381,7 +1381,7 @@ export async function registerRoutes(server: Server, app: Express) {
     const job = scanJobs.get(req.params.jobId);
     if (!job) return res.status(404).json({ error: "Job not found or expired" });
     if (job.status === "pending") return res.json({ status: "pending" });
-    if (job.status === "error") return res.json({ status: "error", error: job.error });
+    if (job.status === "error") return res.json({ status: "error", error: job.error, rawDebug: job.rawDebug });
     return res.json({ status: "done", result: job.result });
   });
 
@@ -1499,8 +1499,8 @@ export async function registerRoutes(server: Server, app: Express) {
         throw new Error("Expected sections array");
       }
     } catch (err: any) {
-      console.error("[scan] Failed to parse AI response (first 500 chars):", rawResponse?.slice(0, 500));
-      scanJobs.set(jobId, { status: "error", error: "AI returned invalid response. Please try again.", createdAt: Date.now() }); return;
+      console.error("[scan] Failed to parse AI response (first 800 chars):", rawResponse?.slice(0, 800));
+      scanJobs.set(jobId, { status: "error", error: "AI returned invalid response. Please try again.", rawDebug: rawResponse?.slice(0, 1000), createdAt: Date.now() }); return;
     }
 
     // Sanitize sections
