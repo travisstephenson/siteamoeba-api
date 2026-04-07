@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link, useLocation } from "wouter";
 import { useForm } from "react-hook-form";
@@ -474,17 +474,17 @@ function QuickCreateDialog({
 
 function StepIndicator({ current, total }: { current: number; total: number }) {
   const steps = [
-    { n: 1, label: "Enter URL" },
-    { n: 2, label: "Review Sections" },
-    { n: 3, label: "Name & Create" },
-    { n: 4, label: "Install Pixel" },
-    { n: 5, label: "Conversion Pixel" },
+    { n: 1, label: "URL" },
+    { n: 2, label: "Sections" },
+    { n: 3, label: "Create" },
+    { n: 4, label: "Pixel" },
+    { n: 5, label: "Go Live" },
   ];
   return (
-    <div className="flex items-center gap-0 mb-8">
+    <div className="flex items-start mb-8 w-full">
       {steps.map((s, i) => (
-        <div key={s.n} className="flex items-center">
-          <div className="flex items-center gap-2">
+        <React.Fragment key={s.n}>
+          <div className="flex flex-col items-center gap-1 shrink-0">
             <div
               className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
                 s.n < current
@@ -497,7 +497,7 @@ function StepIndicator({ current, total }: { current: number; total: number }) {
               {s.n < current ? <Check className="w-3.5 h-3.5" /> : s.n}
             </div>
             <span
-              className={`text-xs font-medium hidden sm:block ${
+              className={`text-[10px] font-medium leading-none whitespace-nowrap hidden sm:block ${
                 s.n === current ? "text-foreground" : "text-muted-foreground"
               }`}
             >
@@ -505,9 +505,9 @@ function StepIndicator({ current, total }: { current: number; total: number }) {
             </span>
           </div>
           {i < steps.length - 1 && (
-            <div className={`h-px w-8 sm:w-16 mx-2 transition-colors ${s.n < current ? "bg-primary" : "bg-border"}`} />
+            <div className={`h-px flex-1 mt-3.5 mx-1.5 transition-colors ${s.n < current ? "bg-primary" : "bg-border"}`} />
           )}
-        </div>
+        </React.Fragment>
       ))}
     </div>
   );
