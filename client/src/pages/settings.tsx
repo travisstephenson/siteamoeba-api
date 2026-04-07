@@ -547,6 +547,19 @@ function StripeIntegration({ userId }: { userId?: number }) {
     },
   });
 
+  const syncStripeMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/settings/stripe-sync", {});
+      if (!res.ok) { const e = await res.json(); throw new Error(e.error || "Sync failed"); }
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      toast({ title: data.matched > 0 ? `Synced ${data.matched} new transaction${data.matched !== 1 ? 's' : ''}` : "Already up to date" });
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/stripe-status"] });
+    },
+    onError: (err: Error) => toast({ title: "Sync failed", description: err.message, variant: "destructive" }),
+  });
+
   const disconnectMutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/settings/disconnect-stripe", {});
@@ -612,16 +625,27 @@ function StripeIntegration({ userId }: { userId?: number }) {
                   <p>Connected {new Date(stripeStatus.connectedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
                 )}
               </div>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => disconnectMutation.mutate()}
-                disabled={disconnectMutation.isPending}
-                data-testid="button-disconnect-stripe"
-                className="text-destructive hover:text-destructive"
-              >
-                {disconnectMutation.isPending ? "Disconnecting..." : "Disconnect Stripe"}
-              </Button>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => syncStripeMutation.mutate()}
+                  disabled={syncStripeMutation.isPending}
+                  data-testid="button-sync-stripe"
+                >
+                  {syncStripeMutation.isPending ? "Syncing..." : syncStripeMutation.isSuccess ? `Synced ${(syncStripeMutation.data as any)?.matched ?? 0} new` : "Sync Now"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => disconnectMutation.mutate()}
+                  disabled={disconnectMutation.isPending}
+                  data-testid="button-disconnect-stripe"
+                  className="text-destructive hover:text-destructive"
+                >
+                  {disconnectMutation.isPending ? "Disconnecting..." : "Disconnect Stripe"}
+                </Button>
+              </div>
             </div>
           ) : showFallback ? (
             <div className="space-y-3">

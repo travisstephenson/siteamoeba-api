@@ -1324,6 +1324,8 @@ export async function registerRoutes(server: Server, app: Express) {
       const decryptedKey = decryptApiKey(accessToken);
       const stripeClient = new Stripe(decryptedKey);
       const charges = await stripeClient.charges.list({ limit: 20 });
+      // Background sync every time status is checked (like Whop)
+      matchStripeTransactionsToVisitors(req.userId!).catch(e => console.error("Stripe bg sync error:", e));
       res.json({
         connected: true,
         accountId: (user as any).stripeAccountId,
@@ -1332,13 +1334,27 @@ export async function registerRoutes(server: Server, app: Express) {
         connectAvailable: true,
       });
     } catch (err) {
-      // Token is invalid — clear it
+      // Token is invalid — clear it so the UI shows "reconnect"
       await storage.updateUser(user.id, {
         stripeAccountId: null,
         stripeAccessToken: null,
         stripeConnectedAt: null,
       } as any);
       res.json({ connected: false, connectAvailable: !!STRIPE_CONNECT_CLIENT_ID });
+    }
+  });
+
+  // POST /api/settings/stripe-sync — on-demand sync button in Settings
+  app.post("/api/settings/stripe-sync", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user || !(user as any).stripeAccessToken) {
+      return res.status(400).json({ error: "Stripe not connected" });
+    }
+    try {
+      const matched = await matchStripeTransactionsToVisitors(req.userId!);
+      res.json({ ok: true, matched });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -3828,10 +3844,28 @@ export async function registerRoutes(server: Server, app: Express) {
   // ============================================================
 
   // Sync Whop memberships to revenue events (email-based attribution)
+  // Mutex: prevent concurrent Whop syncs for the same user (avoids duplicate inserts)
+  const whopSyncInProgress = new Set<number>();
+
   async function syncWhopTransactions(userId: number): Promise<number> {
+    if (whopSyncInProgress.has(userId)) return 0; // already running
+    whopSyncInProgress.add(userId);
+    try {
+      return await _doWhopSync(userId);
+    } finally {
+      whopSyncInProgress.delete(userId);
+    }
+  }
+
+  async function _doWhopSync(userId: number): Promise<number> {
     const user = await storage.getUserById(userId);
     if (!user || !(user as any).whopApiKey) return 0;
     const apiKey = decryptApiKey((user as any).whopApiKey);
+    // If decryption failed (key returned as-is looks encrypted), bail out
+    if (!apiKey.startsWith('apik_') && apiKey.includes(':')) {
+      console.warn('[whop] API key appears encrypted with lost key — user must reconnect Whop in Settings');
+      return 0;
+    }
     const userCampaigns = await storage.getCampaignsByUser(userId);
     if (userCampaigns.length === 0) return 0;
 
@@ -3845,8 +3879,13 @@ export async function registerRoutes(server: Server, app: Express) {
       if (plansRes.ok) {
         const plansData = await plansRes.json();
         for (const plan of (plansData.data || [])) {
-          planPrices[plan.id] = (plan.initial_price || 0) / 100; // cents to dollars
+          // Whop returns prices in cents — try renewal_price first, then initial_price
+          // Some plans return prices in dollars (no cents), check magnitude
+          const rawPrice = plan.renewal_price ?? plan.initial_price ?? plan.base_currency_price ?? 0;
+          const amount = rawPrice > 1000 ? rawPrice / 100 : rawPrice; // if > 1000 assume cents
+          planPrices[plan.id] = amount;
         }
+        console.log('[whop] loaded', Object.keys(planPrices).length, 'plan prices:', JSON.stringify(planPrices));
       }
     } catch { /* ignore plan fetch errors */ }
 
@@ -3925,7 +3964,7 @@ export async function registerRoutes(server: Server, app: Express) {
       page++;
     }
     return synced;
-  }
+  } // end _doWhopSync
 
   // GET /api/settings/whop-status — also triggers a background sync
   app.get("/api/settings/whop-status", requireAuth, async (req: Request, res: Response) => {

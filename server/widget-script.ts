@@ -743,26 +743,74 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       }
     }, 3000);
 
-    // 3. Pass sa_vid through redirect URLs (appends to form action and CTA links)
-    // This ensures thank-you page pixels can read the vid from URL even without localStorage
-    setTimeout(function() {
-      // Append sa_vid to all form action URLs
+    // 3. Pass sa_vid through redirect URLs (appends to form action, hidden inputs, and checkout links)
+    // This ensures thank-you page pixels can read the vid from URL even when localStorage is unavailable
+    // (e.g. cross-domain Stripe/PayPal/ThriveCart checkout then redirected back to same domain)
+    function injectSaVid() {
+      // 3a. Append to all form action URLs + hidden input
       var forms = document.querySelectorAll("form");
       for (var f = 0; f < forms.length; f++) {
         var action = forms[f].getAttribute("action");
         if (action && action.indexOf("sa_vid") === -1) {
           forms[f].setAttribute("action", action + (action.indexOf("?") !== -1 ? "&" : "?") + "sa_vid=" + vid);
         }
-        // Add hidden input as fallback
         try {
-          var hidden = document.createElement("input");
-          hidden.type = "hidden";
-          hidden.name = "sa_vid";
-          hidden.value = vid;
-          forms[f].appendChild(hidden);
+          var existing = forms[f].querySelector('input[name="sa_vid"]');
+          if (!existing) {
+            var hidden = document.createElement("input");
+            hidden.type = "hidden"; hidden.name = "sa_vid"; hidden.value = vid;
+            forms[f].appendChild(hidden);
+          }
         } catch(e) {}
       }
-    }, 1000);
+
+      // 3b. Append sa_vid to all checkout/payment links so it survives cross-domain redirect
+      // Covers Stripe, ThriveCart, PayPal, Whop, Kajabi, ClickFunnels, GHL, etc.
+      var CHECKOUT_PATTERNS = [
+        'checkout.stripe.com', 'buy.stripe.com',
+        'thrivecart.com', 'whop.com', 'paypal.com', 'pay.paypal.com',
+        'checkout.kajabi.com', 'checkout.clickfunnels.com',
+        'squareup.com', 'shop.app', '/checkout', '/buy', '/order'
+      ];
+      var links = document.querySelectorAll("a[href]");
+      for (var l = 0; l < links.length; l++) {
+        try {
+          var href = links[l].getAttribute("href") || "";
+          var isCheckout = false;
+          for (var p = 0; p < CHECKOUT_PATTERNS.length; p++) {
+            if (href.indexOf(CHECKOUT_PATTERNS[p]) !== -1) { isCheckout = true; break; }
+          }
+          if (isCheckout && href.indexOf("sa_vid") === -1) {
+            links[l].setAttribute("href", href + (href.indexOf("?") !== -1 ? "&" : "?") + "sa_vid=" + vid);
+          }
+        } catch(e) {}
+      }
+
+      // 3c. Click-time injection: intercept clicks on ANY link and add sa_vid if it goes to a checkout
+      // Handles dynamically-generated links and buttons that aren't in the DOM at load time
+      if (!window._saClickInjected) {
+        window._saClickInjected = true;
+        document.addEventListener('click', function(e) {
+          try {
+            var el = e.target;
+            // Walk up to find an anchor
+            for (var i = 0; i < 5 && el && el.tagName !== 'A'; i++) el = el.parentElement;
+            if (!el || el.tagName !== 'A') return;
+            var href = el.getAttribute('href') || '';
+            var isCheckout = false;
+            for (var p = 0; p < CHECKOUT_PATTERNS.length; p++) {
+              if (href.indexOf(CHECKOUT_PATTERNS[p]) !== -1) { isCheckout = true; break; }
+            }
+            if (isCheckout && href.indexOf('sa_vid') === -1) {
+              el.setAttribute('href', href + (href.indexOf('?') !== -1 ? '&' : '?') + 'sa_vid=' + vid);
+            }
+          } catch(e) {}
+        }, true);
+      }
+    }
+    setTimeout(injectSaVid, 800);
+    // Re-inject after 3s to catch dynamically rendered checkout buttons (e.g. GHL, ClickFunnels)
+    setTimeout(injectSaVid, 3000);
   }
 
   // initLeadTracking is called after assign response confirms lead_gen campaign
