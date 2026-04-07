@@ -623,6 +623,12 @@ class StorageImpl implements IStorage {
       ALTER TABLE visitors ADD COLUMN IF NOT EXISTS fingerprint TEXT;
       CREATE INDEX IF NOT EXISTS visitors_fingerprint_campaign ON visitors (fingerprint, campaign_id);
     `);
+    // Variant display validation — tracks widget-detected rendering failures
+    await pool.query(`
+      ALTER TABLE variants ADD COLUMN IF NOT EXISTS display_issue BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE variants ADD COLUMN IF NOT EXISTS display_issue_reason TEXT;
+      ALTER TABLE variants ADD COLUMN IF NOT EXISTS display_issue_at TEXT;
+    `);
   }
 
   // ===== Users =====
