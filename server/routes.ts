@@ -61,7 +61,11 @@ const widgetLimiter = rateLimit({
 function keepAliveJson(res: Response, intervalMs = 8000): { send: (data: object) => void; fail: (status: number, body: object) => void } {
   res.setHeader("Content-Type", "application/json");
   res.setHeader("Transfer-Encoding", "chunked");
+  res.setHeader("X-Accel-Buffering", "no"); // Disable Nginx/Cloudflare response buffering
+  res.setHeader("Cache-Control", "no-cache, no-store");
   res.status(200);
+  // flushHeaders sends status + headers immediately before any body
+  res.flushHeaders();
   // Write an initial space so the connection starts streaming immediately
   res.write(" ");
   const timer = setInterval(() => { try { res.write(" "); } catch(e) {} }, intervalMs);
