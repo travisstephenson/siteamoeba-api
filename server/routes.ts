@@ -1357,27 +1357,38 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(400).json({ error: "Invalid URL" });
     }
 
-    // Fetch the page HTML — stream only the first 80KB to avoid downloading megabytes for large pages
-    let rawHtml: string;
+    // Fetch the page HTML — stream first 80KB only to avoid downloading multi-MB pages
+    let rawHtml = "";
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
-      const response = await fetch(url, {
-        signal: controller.signal,
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-          "Accept-Language": "en-US,en;q=0.5",
-        },
-      });
-      clearTimeout(timeoutId);
-      if (!response.ok) {
-        return res.status(422).json({ error: `Could not fetch page: HTTP ${response.status}` });
+      const fetchController = new AbortController();
+      const fetchTimeout = setTimeout(() => fetchController.abort(), 15000);
+
+      let fetchResponse: Response;
+      try {
+        fetchResponse = await fetch(url, {
+          signal: fetchController.signal,
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.5",
+          },
+        });
+      } catch (fetchErr: any) {
+        clearTimeout(fetchTimeout);
+        const isTimeout = fetchErr.name === "AbortError";
+        return res.status(422).json({ error: isTimeout
+          ? "Page fetch timed out (15s). The URL may be slow or unreachable."
+          : `Could not fetch page: ${fetchErr.message || "Network error"}` });
       }
 
-      // Stream only first 80KB — cancels after that to avoid downloading full 1.6MB pages
+      clearTimeout(fetchTimeout);
+      if (!fetchResponse.ok) {
+        return res.status(422).json({ error: `Could not fetch page: HTTP ${fetchResponse.status}` });
+      }
+
+      // Read up to 80KB of the body then forcibly close the connection
       const MAX_BYTES = 80000;
-      const reader = response.body!.getReader();
+      const reader = fetchResponse.body!.getReader();
       const chunks: Uint8Array[] = [];
       let totalBytes = 0;
       try {
@@ -1388,13 +1399,12 @@ export async function registerRoutes(server: Server, app: Express) {
           totalBytes += value.byteLength;
         }
       } finally {
-        reader.cancel().catch(() => {});
+        // Destroy the stream so Node doesn't wait to drain the remaining 1.5MB
+        try { await reader.cancel("size_limit"); } catch (_) {}
+        fetchController.abort();
       }
       rawHtml = Buffer.concat(chunks.map(c => Buffer.from(c))).toString("utf-8");
     } catch (err: any) {
-      if (err.name === "AbortError") {
-        return res.status(422).json({ error: "Page fetch timed out (15s). The URL may be slow or unreachable." });
-      }
       return res.status(422).json({ error: `Could not fetch page: ${err.message || "Network error"}` });
     }
 
