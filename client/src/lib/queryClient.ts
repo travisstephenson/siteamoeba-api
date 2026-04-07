@@ -57,6 +57,14 @@ function getAuthHeaders(): Record<string, string> {
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
+    const contentType = res.headers.get("content-type") || "";
+    // If the response is HTML (e.g. a Cloudflare error page), don't dump it raw
+    if (contentType.includes("text/html")) {
+      if (res.status === 502 || res.status === 503 || res.status === 504) {
+        throw new Error(`${res.status}: Service temporarily unreachable — please try again in a moment.`);
+      }
+      throw new Error(`${res.status}: Unexpected server response. The service may be temporarily unavailable.`);
+    }
     const text = (await res.text()) || res.statusText;
     throw new Error(`${res.status}: ${text}`);
   }

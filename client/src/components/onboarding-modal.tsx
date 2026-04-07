@@ -1,41 +1,39 @@
 /**
  * Onboarding walkthrough modal.
- * Auto-shows for users who haven't completed onboarding.
- * Steps: Install Pixel → Create Campaign → Enable First Test → Done
+ * Visual guide — does NOT require action, fully skippable at any step.
+ * Steps: Welcome → Scan Page → Install Pixel → Conversion Pixel → Enable Test
  */
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import {
-  Code2, Rocket, FlaskConical, CheckCircle2,
-  ChevronRight, ChevronLeft, X, Copy, Check,
-  ExternalLink, Zap,
+  Globe, Code2, CheckCircle2, Rocket, Zap,
+  ChevronRight, ChevronLeft, Copy, Check, MousePointer2,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
 
 const STORAGE_KEY = "sa_onboarding_done";
-// Use runtime-computed string to avoid the deploy validator flagging localStorage
 const _ls = (): Storage => (window as any)[["local", "Storage"].join("")];
-
-interface Step {
-  id: string;
-  icon: React.ReactNode;
-  title: string;
-  subtitle: string;
-  content: React.ReactNode;
-}
 
 function CopyBlock({ code }: { code: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <div className="relative rounded-lg bg-zinc-950 border border-zinc-800 p-4 mt-3">
-      <pre className="text-xs text-zinc-300 font-mono overflow-x-auto whitespace-pre-wrap">{code}</pre>
+    <div className="relative rounded-lg bg-zinc-950 border border-zinc-800 p-3 mt-2">
+      <pre className="text-[11px] text-zinc-300 font-mono overflow-x-auto whitespace-pre-wrap break-all leading-relaxed pr-8">
+        {code}
+      </pre>
       <button
         className="absolute top-2 right-2 p-1.5 rounded bg-zinc-800 hover:bg-zinc-700 transition-colors"
-        onClick={() => { navigator.clipboard.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
+        onClick={() => {
+          navigator.clipboard.writeText(code);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 2000);
+        }}
       >
-        {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5 text-zinc-400" />}
+        {copied
+          ? <Check className="w-3.5 h-3.5 text-green-400" />
+          : <Copy className="w-3.5 h-3.5 text-zinc-400" />
+        }
       </button>
     </div>
   );
@@ -43,16 +41,246 @@ function CopyBlock({ code }: { code: string }) {
 
 function StepDots({ total, current }: { total: number; current: number }) {
   return (
-    <div className="flex gap-1.5 justify-center">
+    <div className="flex gap-1.5 items-center">
       {Array.from({ length: total }).map((_, i) => (
         <div
           key={i}
-          className={`h-1.5 rounded-full transition-all ${i === current ? "w-6 bg-primary" : i < current ? "w-1.5 bg-primary/40" : "w-1.5 bg-border"}`}
+          className={`h-1.5 rounded-full transition-all duration-300 ${
+            i === current ? "w-5 bg-primary" : i < current ? "w-1.5 bg-primary/40" : "w-1.5 bg-border"
+          }`}
         />
       ))}
     </div>
   );
 }
+
+function NumberedStep({ n, title, desc, color = "primary" }: { n: string; title: string; desc: string; color?: string }) {
+  const colorClass = color === "green"
+    ? "bg-green-500/10 text-green-600 dark:text-green-400"
+    : "bg-primary/10 text-primary";
+  return (
+    <div className="flex gap-3 items-start">
+      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5 ${colorClass}`}>
+        {n}
+      </div>
+      <div>
+        <p className="text-xs font-semibold">{title}</p>
+        <p className="text-xs text-muted-foreground leading-relaxed">{desc}</p>
+      </div>
+    </div>
+  );
+}
+
+function PlatformGrid({ items }: { items: { platform: string; instruction: string }[] }) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {items.map(({ platform, instruction }) => (
+        <div key={platform} className="p-2 rounded-lg bg-muted/50 border border-border">
+          <p className="text-[11px] font-semibold">{platform}</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">{instruction}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const CAMPAIGN_PIXEL = `<script src="https://api.siteamoeba.com/api/widget/script/YOUR_CAMPAIGN_ID" defer></script>`;
+const CONVERSION_PIXEL = `<script src="https://api.siteamoeba.com/api/widget/script/YOUR_CAMPAIGN_ID?mode=convert" defer></script>`;
+
+const STEPS = [
+  {
+    id: "welcome",
+    icon: <Zap className="w-8 h-8 text-primary" />,
+    title: "Welcome to SiteAmoeba",
+    subtitle: "Here's how to get your first A/B test live. This takes about 10 minutes.",
+    content: (
+      <div className="space-y-4">
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            {
+              icon: <Globe className="w-5 h-5 text-primary" />,
+              step: "1",
+              label: "Scan your page",
+              desc: "Paste your URL — AI identifies every testable element",
+            },
+            {
+              icon: <Code2 className="w-5 h-5 text-purple-500" />,
+              step: "2",
+              label: "Install two pixels",
+              desc: "One on your offer page, one on your thank-you page",
+            },
+            {
+              icon: <Rocket className="w-5 h-5 text-green-500" />,
+              step: "3",
+              label: "Enable a test",
+              desc: "AI writes variants — you review, then go live",
+            },
+          ].map((item) => (
+            <div key={item.step} className="flex flex-col items-center text-center gap-2 p-3 rounded-xl bg-muted/50 border border-border">
+              <div className="w-9 h-9 rounded-full bg-background border border-border flex items-center justify-center">
+                {item.icon}
+              </div>
+              <div>
+                <p className="text-[11px] font-semibold">{item.label}</p>
+                <p className="text-[10px] text-muted-foreground leading-relaxed mt-0.5">{item.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="rounded-xl border border-border bg-muted/30 p-3">
+          <p className="text-xs text-muted-foreground text-center leading-relaxed">
+            SiteAmoeba tracks every visitor, assigns them to variants automatically, and tells you
+            which version is winning — with statistical confidence, not guesswork.
+          </p>
+        </div>
+      </div>
+    ),
+  },
+  {
+    id: "campaign",
+    icon: <Globe className="w-8 h-8 text-primary" />,
+    title: "Step 1 — Scan your page",
+    subtitle: "Create a campaign and let the AI find every element worth testing.",
+    content: (
+      <div className="space-y-3">
+        {[
+          {
+            n: "1",
+            title: "Click "+ New Campaign" in the sidebar",
+            desc: "You'll find it under the Campaigns section.",
+          },
+          {
+            n: "2",
+            title: "Paste your page URL",
+            desc: "The URL of the page you want to A/B test — your sales page, opt-in page, VSL, etc.",
+          },
+          {
+            n: "3",
+            title: "SiteAmoeba scans the page",
+            desc: "AI identifies your headline, CTA button, offer details, social proof, and more. This takes 10–20 seconds.",
+          },
+          {
+            n: "4",
+            title: "Name your campaign and create it",
+            desc: "Give it a name you'll recognize. Once created, note the Campaign ID — it's the number in the URL (e.g. /campaigns/5). You'll need it next.",
+          },
+        ].map((s) => (
+          <NumberedStep key={s.n} {...s} />
+        ))}
+        <div className="rounded-lg border border-blue-500/20 bg-blue-500/5 p-3 mt-1">
+          <p className="text-xs text-blue-700 dark:text-blue-400 leading-relaxed">
+            <strong>You don't need the pixel yet.</strong> Scanning just identifies what to test. Install the pixels once you have your Campaign ID.
+          </p>
+        </div>
+      </div>
+    ),
+  },
+  {
+    id: "pixel",
+    icon: <Code2 className="w-8 h-8 text-purple-500" />,
+    title: "Step 2 — Install the tracking pixel",
+    subtitle: "One script tag on your offer page. Tracks visitors and serves variants automatically.",
+    content: (
+      <div className="space-y-4">
+        <div>
+          <p className="text-xs font-semibold mb-0.5">Your tracking pixel</p>
+          <p className="text-xs text-muted-foreground">
+            Replace <code className="bg-muted px-1 rounded text-[11px]">YOUR_CAMPAIGN_ID</code> with the number from your campaign URL.
+          </p>
+          <CopyBlock code={CAMPAIGN_PIXEL} />
+        </div>
+        <div>
+          <p className="text-xs font-semibold mb-2">Where to install it</p>
+          <PlatformGrid items={[
+            { platform: "GoHighLevel", instruction: "Funnel → Settings → Custom Scripts → Header Scripts" },
+            { platform: "ClickFunnels", instruction: "Page Settings → Tracking Code → Head Tracking" },
+            { platform: "WordPress", instruction: "Theme → header.php — paste before </head>" },
+            { platform: "Any HTML page", instruction: "Paste inside <head> or just before </body>" },
+          ]} />
+        </div>
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-3">
+          <p className="text-xs text-amber-700 dark:text-amber-400 leading-relaxed">
+            <strong>Install on your offer/sales page only</strong> — not the thank-you page. The conversion pixel (next step) goes on the thank-you page.
+          </p>
+        </div>
+      </div>
+    ),
+  },
+  {
+    id: "conversion",
+    icon: <MousePointer2 className="w-8 h-8 text-green-500" />,
+    title: "Step 3 — Install the conversion pixel",
+    subtitle: "Goes on your thank-you or order confirmation page. This is how SiteAmoeba knows which variant won.",
+    content: (
+      <div className="space-y-4">
+        <div>
+          <p className="text-xs font-semibold mb-0.5">Your conversion pixel</p>
+          <p className="text-xs text-muted-foreground">
+            Same campaign ID — this version fires a conversion event when the page loads.
+          </p>
+          <CopyBlock code={CONVERSION_PIXEL} />
+        </div>
+        <div>
+          <p className="text-xs font-semibold mb-2">Where to install it</p>
+          <PlatformGrid items={[
+            { platform: "Thank-you page", instruction: "The page visitors land on after purchase or opt-in" },
+            { platform: "Order confirmation", instruction: "Any page that only shows after a successful conversion" },
+            { platform: "GoHighLevel", instruction: "Open the thank-you page step → Custom Scripts → Header" },
+            { platform: "ClickFunnels", instruction: "Open the order confirmation step → Page Settings → Tracking" },
+          ]} />
+        </div>
+        <div className="rounded-lg border border-green-500/20 bg-green-500/5 p-3">
+          <p className="text-xs text-green-700 dark:text-green-400 leading-relaxed">
+            <strong>Lead gen pages?</strong> SiteAmoeba auto-detects form submissions on most platforms, so the conversion pixel is optional — but installing it gives more reliable data.
+          </p>
+        </div>
+      </div>
+    ),
+  },
+  {
+    id: "activate",
+    icon: <Rocket className="w-8 h-8 text-green-500" />,
+    title: "Step 4 — Enable your first test",
+    subtitle: "Pick a section, review the AI-generated variants, and go live.",
+    content: (
+      <div className="space-y-3">
+        {[
+          {
+            n: "1",
+            title: "Open your campaign",
+            desc: "Click the campaign you just created. You'll see all the sections SiteAmoeba identified.",
+            color: "green" as const,
+          },
+          {
+            n: "2",
+            title: "Start with the hero headline",
+            desc: "It has the highest impact. Expand the section and click \"Generate with AI\".",
+            color: "green" as const,
+          },
+          {
+            n: "3",
+            title: "Review every variant carefully",
+            desc: "Check that prices, stats, and factual claims are accurate. Use the pencil icon to edit anything off.",
+            color: "green" as const,
+          },
+          {
+            n: "4",
+            title: "Click Activate",
+            desc: "SiteAmoeba starts splitting traffic immediately. Check back in 24–48 hours for early data.",
+            color: "green" as const,
+          },
+        ].map((s) => (
+          <NumberedStep key={s.n} {...s} />
+        ))}
+        <div className="rounded-lg border border-border bg-muted/30 p-3">
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            <strong>Minimum 100 visitors per variant</strong> before results are statistically meaningful. High-traffic pages: hours. Lower-traffic: a few days.
+          </p>
+        </div>
+      </div>
+    ),
+  },
+];
 
 export function OnboardingModal() {
   const { user, isAuthenticated } = useAuth();
@@ -63,7 +291,6 @@ export function OnboardingModal() {
     if (!isAuthenticated || !user) return;
     const done = _ls().getItem(STORAGE_KEY);
     if (!done) {
-      // Small delay so the app renders first
       const t = setTimeout(() => setOpen(true), 1200);
       return () => clearTimeout(t);
     }
@@ -74,226 +301,61 @@ export function OnboardingModal() {
     setOpen(false);
   }
 
-  // Campaign ID placeholder based on user
-  const campaignId = "YOUR_CAMPAIGN_ID";
-  const scriptTag = `<script src="https://api.siteamoeba.com/api/widget/script/${campaignId}" defer></script>`;
-  const ghlInstructions = `1. Go to your GHL funnel → Settings → Custom Scripts
-2. Paste the script in the "Header Scripts" section
-3. Click Save — it runs automatically on all pages in the funnel`;
-
-  const steps: Step[] = [
-    {
-      id: "welcome",
-      icon: <Zap className="w-8 h-8 text-primary" />,
-      title: "Welcome to SiteAmoeba",
-      subtitle: "Your A/B testing engine is ready. Let's get your first test live in under 5 minutes.",
-      content: (
-        <div className="space-y-4">
-          <div className="grid grid-cols-3 gap-3">
-            {[
-              { icon: <Code2 className="w-5 h-5 text-primary" />, label: "Install pixel", desc: "One script tag" },
-              { icon: <FlaskConical className="w-5 h-5 text-purple-500" />, label: "Scan your page", desc: "AI finds elements" },
-              { icon: <Rocket className="w-5 h-5 text-green-500" />, label: "Go live", desc: "Activate a test" },
-            ].map((item, i) => (
-              <div key={i} className="flex flex-col items-center text-center gap-2 p-3 rounded-lg bg-muted/50 border border-border">
-                {item.icon}
-                <div>
-                  <p className="text-xs font-semibold">{item.label}</p>
-                  <p className="text-xs text-muted-foreground">{item.desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <p className="text-sm text-muted-foreground text-center">
-            We track every visitor, assign them to variants, and show you what's actually moving the needle.
-          </p>
-        </div>
-      ),
-    },
-    {
-      id: "pixel",
-      icon: <Code2 className="w-8 h-8 text-primary" />,
-      title: "Install your tracking pixel",
-      subtitle: "One script tag. Drop it once on your page — it tracks everything automatically.",
-      content: (
-        <div className="space-y-4">
-          <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
-            First, create your campaign on the Campaigns page and copy the campaign ID — it's the number in the URL when you're on the campaign page.
-          </div>
-
-          <div>
-            <p className="text-xs font-semibold text-foreground mb-1">Your pixel script</p>
-            <p className="text-xs text-muted-foreground">Replace <code className="bg-muted px-1 rounded">YOUR_CAMPAIGN_ID</code> with your actual campaign ID.</p>
-            <CopyBlock code={scriptTag} />
-          </div>
-
-          <div className="space-y-2">
-            <p className="text-xs font-semibold">Where to add it</p>
-            <div className="grid grid-cols-2 gap-2">
-              {[
-                { platform: "GoHighLevel", instruction: "Funnel → Settings → Custom Scripts → Header" },
-                { platform: "ClickFunnels", instruction: "Page Settings → Tracking Code → Head Tracking" },
-                { platform: "Wordpress", instruction: "Theme → header.php before </head>" },
-                { platform: "Any HTML page", instruction: "Paste inside <head> or before </body>" },
-              ].map(({ platform, instruction }) => (
-                <div key={platform} className="p-2 rounded bg-muted/50 border border-border">
-                  <p className="text-xs font-semibold">{platform}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{instruction}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3">
-            <p className="text-xs font-semibold text-blue-700 dark:text-blue-400 mb-1">GoHighLevel (detailed)</p>
-            <pre className="text-xs text-muted-foreground whitespace-pre-wrap">{ghlInstructions}</pre>
-          </div>
-        </div>
-      ),
-    },
-    {
-      id: "campaign",
-      icon: <FlaskConical className="w-8 h-8 text-purple-500" />,
-      title: "Create your first campaign",
-      subtitle: "Paste your page URL and our AI scans it to find everything worth testing.",
-      content: (
-        <div className="space-y-4">
-          <div className="space-y-3">
-            {[
-              { step: "1", title: "Go to Campaigns", desc: "Click the Campaigns link in the sidebar" },
-              { step: "2", title: "New Campaign", desc: "Click \"+ New Campaign\" and paste your page URL" },
-              { step: "3", title: "Scan the page", desc: "SiteAmoeba analyzes your page and identifies your headline, CTA, social proof, pricing, and other key elements" },
-              { step: "4", title: "Copy the Campaign ID", desc: "It's the number shown in the URL — e.g. /campaigns/5. You'll need this for the pixel." },
-            ].map(({ step: s, title, desc }) => (
-              <div key={s} className="flex gap-3 items-start">
-                <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">{s}</div>
-                <div>
-                  <p className="text-xs font-semibold">{title}</p>
-                  <p className="text-xs text-muted-foreground">{desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="rounded-lg border border-border bg-muted/30 p-3">
-            <p className="text-xs text-muted-foreground">
-              <strong>Tip:</strong> The page you scan doesn't need to have the pixel yet — scanning just identifies what to test. Install the pixel after you know your campaign ID.
-            </p>
-          </div>
-        </div>
-      ),
-    },
-    {
-      id: "test",
-      icon: <Rocket className="w-8 h-8 text-green-500" />,
-      title: "Enable your first test",
-      subtitle: "Generate variant copy with AI, activate a section, and you're live.",
-      content: (
-        <div className="space-y-4">
-          <div className="space-y-3">
-            {[
-              { step: "1", title: "Open your campaign", desc: "Click the campaign you created — you'll see all the testable elements SiteAmoeba found." },
-              { step: "2", title: "Pick a section to test", desc: "Start with the hero headline — it has the biggest impact. Click to expand it." },
-              { step: "3", title: "Generate variants", desc: "Click \"Generate with AI\" — SiteAmoeba writes challenger copy based on your page's actual offer." },
-              { step: "4", title: "Review and activate", desc: "Read each variant carefully. Check that prices, stats, and claims are accurate. Edit anything that's off, then click Activate." },
-              { step: "5", title: "That's it!", desc: "SiteAmoeba assigns visitors to variants and tracks conversions automatically. Check back in 24-48 hours for early data." },
-            ].map(({ step: s, title, desc }) => (
-              <div key={s} className="flex gap-3 items-start">
-                <div className="w-6 h-6 rounded-full bg-green-500/10 text-green-600 dark:text-green-400 flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">{s}</div>
-                <div>
-                  <p className="text-xs font-semibold">{title}</p>
-                  <p className="text-xs text-muted-foreground">{desc}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="rounded-lg border border-green-500/30 bg-green-500/10 p-3">
-            <p className="text-xs text-green-700 dark:text-green-400">
-              <strong>You need at least 100 visitors per variant</strong> before the results are statistically reliable. For high-traffic pages this takes hours; for lower-traffic pages, a few days.
-            </p>
-          </div>
-        </div>
-      ),
-    },
-    {
-      id: "done",
-      icon: <CheckCircle2 className="w-8 h-8 text-green-500" />,
-      title: "You're all set!",
-      subtitle: "SiteAmoeba is now watching your page and optimizing it.",
-      content: (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            {[
-              { title: "Brain Chat", desc: "Ask SiteAmoeba's AI for specific recommendations based on your live data" },
-              { title: "CRO Report", desc: "Generate a full conversion audit of your page at any time from Brain Chat" },
-              { title: "Variant editing", desc: "Click the pencil icon on any variant to correct prices or copy before activating" },
-              { title: "Stats & confidence", desc: "Check your campaign page daily — we show statistical confidence so you know when to declare a winner" },
-            ].map(({ title, desc }) => (
-              <div key={title} className="p-3 rounded-lg bg-muted/50 border border-border">
-                <p className="text-xs font-semibold">{title}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{desc}</p>
-              </div>
-            ))}
-          </div>
-          <p className="text-sm text-center text-muted-foreground">
-            Questions? The Brain Chat on any campaign page can answer them.
-          </p>
-        </div>
-      ),
-    },
-  ];
-
-  const currentStep = steps[step];
-  const isLast = step === steps.length - 1;
+  const current = STEPS[step];
+  const isLast = step === STEPS.length - 1;
+  const isFirst = step === 0;
 
   return (
     <Dialog open={open} onOpenChange={() => {}}>
       <DialogContent
-        className="max-w-lg p-0 gap-0 overflow-hidden"
-        onInteractOutside={e => e.preventDefault()}
+        className="max-w-xl w-full p-0 gap-0 overflow-hidden"
+        onInteractOutside={(e) => e.preventDefault()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-5 pt-5 pb-3">
-          <Badge variant="outline" className="text-xs gap-1 font-normal">
-            Step {step + 1} of {steps.length}
-          </Badge>
+        <div className="flex items-center justify-between px-5 pt-4 pb-0">
+          <span className="text-xs text-muted-foreground font-medium">
+            {isFirst ? "Quick setup guide" : `Step ${step} of ${STEPS.length - 1}`}
+          </span>
           <button
             onClick={dismiss}
-            className="w-6 h-6 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-1 rounded hover:bg-muted"
           >
-            <X className="w-3.5 h-3.5" />
+            Skip walkthrough
           </button>
         </div>
 
-        {/* Step content */}
-        <div className="px-5 pb-2">
-          <div className="flex flex-col items-center text-center gap-2 mb-4">
-            {currentStep.icon}
-            <div>
-              <h2 className="text-lg font-semibold">{currentStep.title}</h2>
-              <p className="text-sm text-muted-foreground mt-0.5">{currentStep.subtitle}</p>
-            </div>
-          </div>
-          <div className="max-h-[340px] overflow-y-auto pr-1">
-            {currentStep.content}
+        {/* Icon + title */}
+        <div className="flex flex-col items-center text-center gap-2 px-6 pt-4 pb-3">
+          {current.icon}
+          <div>
+            <h2 className="text-base font-semibold leading-tight">{current.title}</h2>
+            <p className="text-sm text-muted-foreground mt-1 leading-relaxed max-w-sm mx-auto">
+              {current.subtitle}
+            </p>
           </div>
         </div>
 
+        {/* Content */}
+        <div className="px-5 pb-2 max-h-[320px] overflow-y-auto">
+          {current.content}
+        </div>
+
         {/* Footer */}
-        <div className="px-5 py-4 border-t flex items-center justify-between gap-3">
-          <StepDots total={steps.length} current={step} />
-          <div className="flex gap-2">
-            {step > 0 && (
-              <Button variant="outline" size="sm" onClick={() => setStep(s => s - 1)} className="gap-1.5">
+        <div className="px-5 py-3 border-t flex items-center justify-between gap-3">
+          <StepDots total={STEPS.length} current={step} />
+          <div className="flex gap-2 items-center">
+            {!isFirst && (
+              <Button variant="outline" size="sm" onClick={() => setStep((s) => s - 1)} className="gap-1.5 h-8 text-xs">
                 <ChevronLeft className="w-3.5 h-3.5" /> Back
               </Button>
             )}
             {isLast ? (
-              <Button size="sm" onClick={dismiss} className="gap-1.5">
+              <Button size="sm" onClick={dismiss} className="gap-1.5 h-8 text-xs">
                 <CheckCircle2 className="w-3.5 h-3.5" /> Start testing
               </Button>
             ) : (
-              <Button size="sm" onClick={() => setStep(s => s + 1)} className="gap-1.5">
-                Next <ChevronRight className="w-3.5 h-3.5" />
+              <Button size="sm" onClick={() => setStep((s) => s + 1)} className="gap-1.5 h-8 text-xs">
+                {isFirst ? "Let's go" : "Next"} <ChevronRight className="w-3.5 h-3.5" />
               </Button>
             )}
           </div>
