@@ -97,12 +97,18 @@ export function resolveLLMConfig(opts: {
   const creditCost = OPERATION_CREDIT_COSTS[operation] || 1;
 
   // Paid user with their own key — use it (saves us money), inject brain data
+  // For fast operations (scan/classify/observation), enforce fast model to prevent timeouts
+  const FAST_OPS: LLMOperation[] = ["scan", "classify", "observation"];
   if (isPaid && hasUserKey) {
+    const forceFastModel = FAST_OPS.includes(operation);
     return {
       config: {
         provider: userProvider as LLMConfig["provider"],
         apiKey: userApiKey!,
-        model: userModel || undefined,
+        // For scan/classify: use haiku regardless of user preference to prevent timeouts
+        model: forceFastModel
+          ? (userProvider === "anthropic" ? "claude-haiku-4-5-20251001" : userModel || undefined)
+          : (userModel || undefined),
       },
       useBrainData: true,
       creditCost,

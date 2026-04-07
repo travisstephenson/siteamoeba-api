@@ -2904,6 +2904,8 @@ function ConversionPixelSection({ campaignId, campaignType }: { campaignId: numb
     "  try { vid = " + storageRef + ".getItem(\"sa_vid\"); } catch(e) {}",
     "  if (!vid) try { vid = " + ssRef + ".getItem(\"sa_vid\"); } catch(e) {}",
     "  if (!vid) { var m = document.cookie.match(/sa_vid=([^;]+)/); if (m) vid = m[1]; }",
+    "  // Also read from URL param (passed through funnel redirects)",
+    "  if (!vid) { var u = new URLSearchParams(window.location.search); vid = u.get('sa_vid'); }",
   ];
 
   let lines: string[];

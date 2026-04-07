@@ -356,7 +356,13 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       var anyApplied = (data.headline && !data.headline.isControl) || (data.subheadline && !data.subheadline.isControl);
       if (anyApplied) postReplacementCheck();
 
-
+      // Activate auto lead conversion tracking for lead_gen campaigns
+      if (data.campaignType === "lead_gen" && !window._saLeadTrackingInited) {
+        window._saLeadTrackingInited = true;
+        if (typeof window._saInitLeadTracking === "function") {
+          window._saInitLeadTracking();
+        }
+      }
   }
 
   // === VARIANT ASSIGNMENT (preview vs live) ===
@@ -583,6 +589,104 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       sendBatch(batch, timeOnPage);
     }
   });
+
+  // ============================================================
+  // AUTO LEAD CONVERSION DETECTION (lead_gen campaigns only)
+  // Fires the conversion pixel when a form is successfully
+  // submitted on the page — handles GHL inline AJAX success,
+  // redirect-based funnels, and any other form framework.
+  // ============================================================
+  function autoConvert() {
+    if (!vid) return;
+    var img = new Image();
+    img.src = API + "/api/widget/convert?vid=" + encodeURIComponent(vid) + "&cid=" + CID;
+  }
+
+  function initLeadTracking() {
+    var convertFired = false;
+
+    // 1. Listen for standard form submit events
+    document.addEventListener("submit", function(e) {
+      if (convertFired) return;
+      // Only fire for forms that look like opt-in forms (have an email field)
+      var form = e.target;
+      if (!form) return;
+      var hasEmail = form.querySelector && (
+        form.querySelector('input[type="email"]') ||
+        form.querySelector('input[name*="email"]') ||
+        form.querySelector('input[placeholder*="email"]')
+      );
+      if (!hasEmail) return;
+      // Wait 2s for AJAX submission to complete, then fire
+      setTimeout(function() {
+        if (!convertFired) {
+          convertFired = true;
+          autoConvert();
+        }
+      }, 2000);
+    }, true);
+
+    // 2. GHL / funnel builder success state detection via MutationObserver
+    // Watches for thank-you text, success messages, or form disappearing
+    var successPatterns = [
+      "thank you", "thanks!", "you're in", "you are in",
+      "check your email", "almost there", "confirmation",
+      "successfully", "subscribed", "registered", "signed up"
+    ];
+    var observer = new MutationObserver(function() {
+      if (convertFired) { observer.disconnect(); return; }
+      // Check for success text appearing in DOM
+      var bodyText = (document.body && document.body.innerText || "").toLowerCase();
+      for (var i = 0; i < successPatterns.length; i++) {
+        if (bodyText.indexOf(successPatterns[i]) !== -1) {
+          // Verify page was NOT showing this text on initial load
+          // (checked 3s after widget loaded to establish baseline)
+          if (!window._saBaselineText || window._saBaselineText.indexOf(successPatterns[i]) === -1) {
+            convertFired = true;
+            observer.disconnect();
+            autoConvert();
+            return;
+          }
+        }
+      }
+    });
+
+    // Capture baseline text after 3s (page has fully rendered)
+    setTimeout(function() {
+      window._saBaselineText = (document.body && document.body.innerText || "").toLowerCase();
+      // Start observing after baseline is captured
+      if (document.body) {
+        observer.observe(document.body, { childList: true, subtree: true, characterData: false });
+      }
+    }, 3000);
+
+    // 3. Pass sa_vid through redirect URLs (appends to form action and CTA links)
+    // This ensures thank-you page pixels can read the vid from URL even without localStorage
+    setTimeout(function() {
+      // Append sa_vid to all form action URLs
+      var forms = document.querySelectorAll("form");
+      for (var f = 0; f < forms.length; f++) {
+        var action = forms[f].getAttribute("action");
+        if (action && action.indexOf("sa_vid") === -1) {
+          forms[f].setAttribute("action", action + (action.indexOf("?") !== -1 ? "&" : "?") + "sa_vid=" + vid);
+        }
+        // Add hidden input as fallback
+        try {
+          var hidden = document.createElement("input");
+          hidden.type = "hidden";
+          hidden.name = "sa_vid";
+          hidden.value = vid;
+          forms[f].appendChild(hidden);
+        } catch(e) {}
+      }
+    }, 1000);
+  }
+
+  // initLeadTracking is called after assign response confirms lead_gen campaign
+  // (stored globally so handleAssignData can call it)
+  window._saInitLeadTracking = initLeadTracking;
+  window._saLeadTrackingInited = false;
+
 })();`;
 }
 // deployed Sun Apr  5 19:56:57 UTC 2026

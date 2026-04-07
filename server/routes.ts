@@ -1350,12 +1350,17 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(422).json({ error: `Could not fetch page: ${err.message || "Network error"}` });
     }
 
+    // Pre-truncate BEFORE regex to avoid catastrophic backtracking on large pages (e.g. 1.6MB GHL pages)
+    const MAX_RAW = 150000; // 150KB is plenty for meaningful content
+    const htmlToProcess = rawHtml.length > MAX_RAW ? rawHtml.slice(0, MAX_RAW) : rawHtml;
+
     // Strip scripts, styles, SVGs, and comments to reduce noise
-    let cleaned = rawHtml
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "")
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "")
-      .replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/gi, "")
-      .replace(/<!--[\s\S]*?-->/g, "")
+    // Using non-capturing approach on pre-truncated HTML to keep regexes fast
+    let cleaned = htmlToProcess
+      .replace(/<script[^>]*>.*?<\/script>/gis, "")
+      .replace(/<style[^>]*>.*?<\/style>/gis, "")
+      .replace(/<svg[^>]*>.*?<\/svg>/gis, "")
+      .replace(/<!--.*?-->/gs, "")
       .replace(/\s{2,}/g, " ")
       .trim();
 
@@ -2591,6 +2596,7 @@ export async function registerRoutes(server: Server, app: Express) {
       headline: await resolveVariantPayload(hVariant),
       subheadline: await resolveVariantPayload(sVariant),
       sections: sectionPayloads.length > 0 ? sectionPayloads : undefined,
+      campaignType: campaign.campaignType || "purchase",
     });
 
     // Fire-and-forget anomaly detection (throttled to once per 5 min per campaign)
@@ -2622,7 +2628,8 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // Also support GET for simple image pixel fallback
   app.get("/api/widget/convert", widgetLimiter, async (req: Request, res: Response) => {
-    const vid = req.query.vid as string;
+    // Accept vid from query param OR from sa_vid URL param (passed through funnel redirects)
+    const vid = (req.query.vid || req.query.sa_vid) as string;
     const cid = req.query.cid as string;
     const revenue = parseFloat(req.query.revenue as string) || 0;
 
