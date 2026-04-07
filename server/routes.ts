@@ -1368,7 +1368,7 @@ export async function registerRoutes(server: Server, app: Express) {
   }
 
   // Async job store — in-memory, TTL 10 minutes
-  const scanJobs = new Map<string, { status: "pending" | "done" | "error"; result?: any; error?: string; rawDebug?: string; createdAt: number }>();
+  const scanJobs = new Map<string, { status: "pending" | "done" | "error"; result?: any; error?: string; createdAt: number }>();
   setInterval(() => {
     const now = Date.now();
     for (const [id, job] of scanJobs.entries()) {
@@ -1381,7 +1381,7 @@ export async function registerRoutes(server: Server, app: Express) {
     const job = scanJobs.get(req.params.jobId);
     if (!job) return res.status(404).json({ error: "Job not found or expired" });
     if (job.status === "pending") return res.json({ status: "pending" });
-    if (job.status === "error") return res.json({ status: "error", error: job.error, rawDebug: job.rawDebug });
+    if (job.status === "error") return res.json({ status: "error", error: job.error });
     return res.json({ status: "done", result: job.result });
   });
 
@@ -1478,32 +1478,64 @@ export async function registerRoutes(server: Server, app: Express) {
 
     let rawResponse: string;
     try {
-      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 6000 });
+      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 8000 });
     } catch (err: any) {
       console.error("Page scan LLM call failed:", err);
       scanJobs.set(jobId, { status: "error", error: err.message || "AI provider error. Check your API key and credits in Settings.", createdAt: Date.now() }); return;
     }
 
-    // Parse the JSON response — use outermost {…} extraction to handle any preamble/postamble
+    // Parse the JSON response — robust extraction + truncation recovery
     let scanResult: { pageName: string; pageType: string; pageGoal?: string; pricePoint?: string; niche?: string; sections: any[] };
     try {
       // Find the outermost JSON object (handles markdown code blocks, leading text, etc.)
       const firstBrace = rawResponse.indexOf("{");
+      if (firstBrace === -1) throw new Error("No JSON found in AI response");
+
+      let jsonStr = "";
+      let parsed: any = null;
+
+      // Attempt 1: full JSON from first { to last }
       const lastBrace = rawResponse.lastIndexOf("}");
-      if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
-        throw new Error("No JSON object found in AI response");
+      if (lastBrace > firstBrace) {
+        try {
+          jsonStr = rawResponse.slice(firstBrace, lastBrace + 1);
+          parsed = JSON.parse(jsonStr);
+        } catch { parsed = null; }
       }
-      const jsonStr = rawResponse.slice(firstBrace, lastBrace + 1);
-      scanResult = JSON.parse(jsonStr);
+
+      // Attempt 2: truncation recovery — response was cut off mid-section.
+      // Walk backwards from the end to find the last COMPLETE section object (closes with }
+      // before a , or ] ), then close the array and object.
+      if (!parsed) {
+        const headerMatch = jsonStr.match(/^(\{[\s\S]*?"sections"\s*:\s*\[)/);
+        if (headerMatch) {
+          // Find all complete section-closing patterns: either },\n or } followed by ]
+          const sectionsStart = firstBrace + headerMatch[1].length;
+          // Walk back from the truncation point to find the last complete section
+          let searchFrom = rawResponse.length - 1;
+          while (searchFrom > sectionsStart) {
+            const lastClose = rawResponse.lastIndexOf("}", searchFrom);
+            if (lastClose <= sectionsStart) break;
+            const candidate = rawResponse.slice(firstBrace, lastClose + 1) + "]}";
+            try {
+              parsed = JSON.parse(candidate);
+              console.log(`[scan] Truncation recovery: salvaged ${parsed.sections?.length ?? 0} sections`);
+              break;
+            } catch {
+              searchFrom = lastClose - 1;
+            }
+          }
+        }
+      }
+
+      if (!parsed) throw new Error("Could not parse AI response as JSON");
+      scanResult = parsed;
       if (!scanResult.sections || !Array.isArray(scanResult.sections)) {
         throw new Error("Expected sections array");
       }
     } catch (err: any) {
-      console.error("[scan] Failed to parse AI response (first 800 chars):", rawResponse?.slice(0, 800));
-      // Store first 2000 + last 1000 chars to diagnose truncation vs content issues
-      const debugFirst = rawResponse?.slice(0, 2000) || "";
-      const debugLast = rawResponse ? rawResponse.slice(-1000) : "";
-      scanJobs.set(jobId, { status: "error", error: "AI returned invalid response. Please try again.", rawDebug: debugFirst + "\n\n...[MID]...\n\n" + debugLast, createdAt: Date.now() }); return;
+      console.error("[scan] Failed to parse AI response:", rawResponse?.slice(0, 400));
+      scanJobs.set(jobId, { status: "error", error: "AI returned invalid response. Please try again.", createdAt: Date.now() }); return;
     }
 
     // Sanitize sections
