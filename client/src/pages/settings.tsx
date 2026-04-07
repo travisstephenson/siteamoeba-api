@@ -1001,13 +1001,11 @@ function WhopIntegration({ userId }: { userId?: number }) {
 
   const { data: whopStatus, isLoading: statusLoading, refetch: refetchStatus } = useQuery<{
     connected: boolean;
-    webhookUrl: string;
     connectedAt?: string;
   }>({
     queryKey: ["/api/settings/whop-status"],
   });
 
-  const webhookUrl = whopStatus?.webhookUrl || (userId ? `https://api.siteamoeba.com/api/webhooks/whop/${userId}` : "");
   const isConnected = whopStatus?.connected ?? false;
 
   const connectMutation = useMutation({
@@ -1085,12 +1083,9 @@ function WhopIntegration({ userId }: { userId?: number }) {
                   <p>Connected {new Date(whopStatus.connectedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</p>
                 )}
               </div>
-              {webhookUrl && (
-                <div>
-                  <p className="text-xs text-muted-foreground mb-1">Your webhook URL</p>
-                  <UrlRow url={webhookUrl} testId="whop-webhook-url" />
-                </div>
-              )}
+              <p className="text-xs text-muted-foreground">
+                Whop purchases are synced automatically and attributed to your campaigns.
+              </p>
               <Button
                 size="sm"
                 variant="outline"

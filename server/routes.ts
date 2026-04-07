@@ -3765,24 +3765,131 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
-  // Whop settings: GET /api/settings/whop-status
+  // ============================================================
+  // WHOP INTEGRATION — API KEY ONLY (no webhook needed)
+  // Uses pull-based sync: we fetch memberships from Whop and match
+  // by customer email to attribute revenue to campaigns.
+  // ============================================================
+
+  // Sync Whop memberships to revenue events (email-based attribution)
+  async function syncWhopTransactions(userId: number): Promise<number> {
+    const user = await storage.getUserById(userId);
+    if (!user || !(user as any).whopApiKey) return 0;
+    const apiKey = decryptApiKey((user as any).whopApiKey);
+    const userCampaigns = await storage.getCampaignsByUser(userId);
+    if (userCampaigns.length === 0) return 0;
+
+    // Build plan price cache so we can look up amounts
+    const planPrices: Record<string, number> = {};
+    try {
+      const plansRes = await fetch("https://api.whop.com/api/v2/plans?limit=50", {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (plansRes.ok) {
+        const plansData = await plansRes.json();
+        for (const plan of (plansData.data || [])) {
+          planPrices[plan.id] = (plan.initial_price || 0) / 100; // cents to dollars
+        }
+      }
+    } catch { /* ignore plan fetch errors */ }
+
+    let synced = 0;
+    let page = 1;
+    const maxPages = 10; // sync up to ~100 recent memberships
+
+    while (page <= maxPages) {
+      const memRes = await fetch(`https://api.whop.com/api/v2/memberships?limit=10&page=${page}&valid=true`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!memRes.ok) break;
+      const memData = await memRes.json();
+      const memberships = memData.data || [];
+      if (memberships.length === 0) break;
+
+      for (const mem of memberships) {
+        const email = mem.email;
+        if (!email) continue;
+        const externalId = `whop_${mem.id}`;
+
+        // Skip if already synced
+        const exists = await pool.query(
+          `SELECT id FROM revenue_events WHERE external_id = $1 LIMIT 1`,
+          [externalId]
+        );
+        if (exists.rows.length > 0) continue;
+
+        // Get amount from plan cache
+        const amount = planPrices[mem.plan] || 0;
+
+        // Find original visitor by email (first-touch attribution)
+        const visitorMatch = await pool.query(
+          `SELECT v.id AS visitor_id, v.campaign_id
+           FROM visitors v
+           JOIN campaigns c ON c.id = v.campaign_id
+           WHERE c.user_id = $1
+             AND (v.customer_email = $2
+               OR v.id IN (
+                 SELECT re.visitor_id FROM revenue_events re
+                 WHERE re.customer_email = $2 AND re.visitor_id IS NOT NULL
+               ))
+           ORDER BY v.first_seen ASC LIMIT 1`,
+          [userId, email]
+        );
+
+        let matchedCampaignId: number | null = null;
+        let matchedVisitorId: string | null = null;
+        if (visitorMatch.rows.length > 0) {
+          matchedVisitorId = visitorMatch.rows[0].visitor_id;
+          matchedCampaignId = visitorMatch.rows[0].campaign_id;
+        } else {
+          // No visitor match — assign to most active campaign
+          const active = userCampaigns.find((c: any) => c.isActive) || userCampaigns[0];
+          matchedCampaignId = active.id;
+        }
+        if (!matchedCampaignId) continue;
+
+        await storage.addRevenueEvent({
+          visitorId: matchedVisitorId || undefined,
+          campaignId: matchedCampaignId,
+          source: "whop",
+          eventType: "purchase",
+          amount,
+          currency: "USD",
+          externalId,
+          customerEmail: email,
+          metadata: JSON.stringify({ product: mem.product, plan: mem.plan, status: mem.status }),
+        });
+        synced++;
+      }
+
+      const totalPages = memData.pagination?.total_page || 1;
+      if (page >= totalPages) break;
+      page++;
+    }
+    return synced;
+  }
+
+  // GET /api/settings/whop-status — also triggers a background sync
   app.get("/api/settings/whop-status", requireAuth, async (req: Request, res: Response) => {
     const user = await storage.getUserById(req.userId!);
     if (!user) return res.status(401).json({ error: "User not found" });
     const connected = !!(user as any).whopApiKey;
-    const webhookUrl = `https://api.siteamoeba.com/api/webhooks/whop/${req.userId}`;
-    res.json({ connected, webhookUrl, connectedAt: (user as any).whopConnectedAt });
+    res.json({ connected, connectedAt: (user as any).whopConnectedAt });
+    // Background sync if connected
+    if (connected) syncWhopTransactions(req.userId!).catch(() => {});
   });
 
-  // Whop settings: POST /api/settings/connect-whop
+  // POST /api/settings/connect-whop
   app.post("/api/settings/connect-whop", requireAuth, async (req: Request, res: Response) => {
     const { apiKey } = req.body;
     if (!apiKey || typeof apiKey !== "string") {
       return res.status(400).json({ error: "apiKey is required" });
     }
-    // Verify the key using Whop v2 /me endpoint — returns 401 for invalid keys, 200 for valid
+    // Verify the key using Whop v5/company — the only endpoint that accepts apik_ format keys
     try {
-      const verifyRes = await fetch("https://api.whop.com/api/v2/me", {
+      const verifyRes = await fetch("https://api.whop.com/v5/company", {
         headers: { Authorization: `Bearer ${apiKey}` },
         signal: AbortSignal.timeout(8000),
       });
@@ -3790,17 +3897,15 @@ export async function registerRoutes(server: Server, app: Express) {
         let message = "Invalid API key";
         try {
           const body = await verifyRes.json();
-          message = body?.error?.message || body?.message || message;
+          message = body?.message || body?.error?.message || message;
         } catch {}
-        return res.status(400).json({ error: `Whop API key rejected: ${message}. Get your key at whop.com/dashboard → Settings → API.` });
+        return res.status(400).json({
+          error: `Whop API key not accepted: ${message}\n\nMake sure you're using an API key from whop.com/dashboard → Settings → Developer (format: apik_...)`,
+        });
       }
-      // Any other response (200, 404, 5xx) = key format is accepted, save it
     } catch (err: any) {
-      if (err.name === "AbortError" || err.name === "TimeoutError") {
-        // Timeout — save the key anyway, Whop may be temporarily slow
-        console.log("Whop verify timeout, saving key anyway");
-      } else {
-        return res.status(400).json({ error: "Could not reach Whop to verify key. Check your internet connection and try again." });
+      if (err.name !== "AbortError" && err.name !== "TimeoutError") {
+        return res.status(400).json({ error: "Could not reach Whop. Check your connection and try again." });
       }
     }
     const user = await storage.getUserById(req.userId!);
@@ -3809,6 +3914,8 @@ export async function registerRoutes(server: Server, app: Express) {
       whopApiKey: encryptApiKey(apiKey),
       whopConnectedAt: new Date().toISOString(),
     } as any);
+    // Run initial sync after connecting
+    syncWhopTransactions(req.userId!).catch(() => {});
     res.json({ connected: true });
   });
 
