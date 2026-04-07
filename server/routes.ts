@@ -1351,7 +1351,7 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     // Pre-truncate BEFORE regex to avoid catastrophic backtracking on large pages (e.g. 1.6MB GHL pages)
-    const MAX_RAW = 150000; // 150KB is plenty for meaningful content
+    const MAX_RAW = 50000; // 50KB is more than enough — above-the-fold content is always in the first 50KB
     const htmlToProcess = rawHtml.length > MAX_RAW ? rawHtml.slice(0, MAX_RAW) : rawHtml;
 
     // Strip scripts, styles, SVGs, and comments to reduce noise
