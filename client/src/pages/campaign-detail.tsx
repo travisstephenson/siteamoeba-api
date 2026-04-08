@@ -4096,6 +4096,40 @@ function renderMarkdown(text: string): string {
     .replace(/\n/g, "<br />");
 }
 
+// Extract headline suggestions from Brain response text.
+// Looks for: "quoted text", **bold text**, or numbered option lines that look like headlines.
+function extractSuggestedHeadlines(text: string): string[] {
+  const found = new Set<string>();
+
+  // Pattern 1: lines that start with a number/bullet and contain a quoted string
+  // e.g. "1. **\"I Spent $4M...\"**" or "- \"I Lost $4M...\""
+  const quotedInLine = /^[\s]*(?:\d+\.|[-*]).*?[\u201c\u201d"'](.{20,120}?)[\u201d\u201c"']/gm;
+  let m: RegExpExecArray | null;
+  while ((m = quotedInLine.exec(text)) !== null) {
+    const cleaned = m[1].replace(/[*_`]/g, "").trim();
+    if (cleaned.length >= 20) found.add(cleaned);
+  }
+
+  // Pattern 2: standalone quoted strings on their own line (curly or straight quotes)
+  const standaloneQuoted = /^[\s]*[\u201c"'](.{20,160}?)[\u201d"'][\s]*$/gm;
+  while ((m = standaloneQuoted.exec(text)) !== null) {
+    const cleaned = m[1].replace(/[*_`]/g, "").trim();
+    if (cleaned.length >= 20) found.add(cleaned);
+  }
+
+  // Pattern 3: bold-wrapped text that looks like a headline (>20 chars, not a label/header)
+  const boldWrapped = /\*\*[\u201c"']?(.{20,160}?)[\u201d"']?\*\*/g;
+  while ((m = boldWrapped.exec(text)) !== null) {
+    const cleaned = m[1].replace(/[*_`]/g, "").trim();
+    // Exclude things that look like section labels (e.g. "Why this works:")
+    if (cleaned.length >= 20 && !cleaned.endsWith(":") && !cleaned.endsWith(".") && !/^(Option|Version|Variant|Headline|Test|Why|What|How|The|A |An |Your )/.test(cleaned)) {
+      found.add(cleaned);
+    }
+  }
+
+  return Array.from(found).slice(0, 4); // Cap at 4 suggestions
+}
+
 // ---- Category badge config ----
 const CATEGORY_CONFIG: Record<string, { label: string; color: string; bg: string }> = {
   scroll_behavior:    { label: "Scroll Behavior",    color: "hsl(217 91% 60%)",  bg: "hsl(217 91% 60% / 0.12)" },
@@ -4415,9 +4449,32 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
   const [useCounsel, setUseCounsel] = useState(false);
   const [expandedCounsel, setExpandedCounsel] = useState<Record<number, boolean>>({});
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [addedSuggestions, setAddedSuggestions] = useState<Set<string>>(new Set());
+  const [isAddingSuggestion, setIsAddingSuggestion] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const { toast } = useToast();
+
+  const handleAddSuggestion = async (key: string, headline: string) => {
+    if (isAddingSuggestion || addedSuggestions.has(key)) return;
+    setIsAddingSuggestion(key);
+    try {
+      const res = await apiRequest("POST", `/api/campaigns/${campaignId}/variants`, {
+        text: headline,
+        type: "headline",
+        isControl: false,
+      });
+      if (!res.ok) throw new Error("Failed to add variant");
+      setAddedSuggestions(prev => new Set([...prev, key]));
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "variants"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] });
+      toast({ title: "Variant added", description: `"${headline.slice(0, 60)}${headline.length > 60 ? "..." : ""}" added to your test.` });
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    } finally {
+      setIsAddingSuggestion(null);
+    }
+  };
 
   const generateCROReport = async () => {
     if (!llmConfigured || isTyping || isGeneratingReport) return;
@@ -4608,6 +4665,43 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
                           className="max-w-none"
                           dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
                         />
+                        {/* Test-this-headline buttons — extracted from Brain suggestions */}
+                        {(() => {
+                          const suggestions = extractSuggestedHeadlines(msg.content);
+                          if (suggestions.length === 0) return null;
+                          return (
+                            <div className="mt-2.5 space-y-1.5">
+                              {suggestions.map((headline) => {
+                                const key = `${i}-${headline}`;
+                                const added = addedSuggestions.has(key);
+                                return (
+                                  <button
+                                    key={headline}
+                                    disabled={added || isAddingSuggestion === key}
+                                    onClick={() => handleAddSuggestion(key, headline)}
+                                    className="w-full text-left text-[11px] px-2.5 py-1.5 rounded-md border transition-colors flex items-center gap-1.5 group"
+                                    style={added
+                                      ? { borderColor: "hsl(160 84% 36% / 0.3)", background: "hsl(160 84% 36% / 0.07)", color: "hsl(160 84% 36%)" }
+                                      : { borderColor: "hsl(160 84% 36% / 0.4)", background: "hsl(160 84% 36% / 0.04)", color: "hsl(160 84% 36%)" }
+                                    }
+                                    data-testid={`button-test-headline-${i}`}
+                                  >
+                                    {isAddingSuggestion === key ? (
+                                      <LoaderCircle className="w-3 h-3 shrink-0 animate-spin" />
+                                    ) : added ? (
+                                      <Check className="w-3 h-3 shrink-0" />
+                                    ) : (
+                                      <FlaskConical className="w-3 h-3 shrink-0" />
+                                    )}
+                                    <span className="truncate">
+                                      {added ? "Added as variant" : `Test: "${headline.length > 60 ? headline.slice(0, 57) + "..." : headline}"`}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
                         {/* Specialist analyses accordion */}
                         {msg.isCounsel && msg.specialists && msg.specialists.length > 0 && (
                           <div className="mt-2">

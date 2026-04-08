@@ -795,7 +795,10 @@ class StorageImpl implements IStorage {
 
   // ===== Variants =====
   async getVariantsByCampaign(campaignId: number): Promise<Variant[]> {
-    return db.select().from(variants).where(eq(variants.campaignId, campaignId));
+    // Only return active variants — soft-deleted ones (isActive=false) should never appear in the UI
+    return db.select().from(variants).where(
+      and(eq(variants.campaignId, campaignId), eq(variants.isActive, true))
+    );
   }
 
   async getActiveVariantsByCampaign(campaignId: number, type: string): Promise<Variant[]> {

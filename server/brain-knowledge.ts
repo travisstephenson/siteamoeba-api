@@ -17,33 +17,32 @@ superior copy suggestions.
 ## 1. BEHAVIORAL PSYCHOLOGY FRAMEWORKS
 =========================================================================
 
-### 1.1 THE F.A.T.E. MODEL — The Mammalian Behavioral Hierarchy
+### 1.1 AUTHORITY PLACEMENT ON PAGE
 
-The F.A.T.E. model describes the hardwired sequence through which the mammalian
-brain processes information and makes decisions. Persuasion MUST follow this order
-or it fails. Skipping steps is why most copy doesn't convert.
+Authority (credentials, personal journey, proof of expertise) must appear somewhere
+on the page — but its exact placement is flexible based on page context. There is no
+strict rule that authority must appear in a specific position relative to the headline.
 
-**Sequence (strict order):**
-1. FOCUS — Captured through novelty
-2. AUTHORITY — Perceived expertise, status, credibility
-3. TRIBE — Social proof, group behavior assessment
-4. EMOTION — Final internal check on how the stimulus feels
+**What matters:**
+- Authority must appear BEFORE social proof (testimonials). The brain needs to know WHY
+  to trust these testimonials before it weighs them.
+- Authority can be woven into the headline itself (an authority-driving headline is often
+  the most powerful approach — e.g., "I Spent $4M Testing Ads So You Don't Have To").
+- Authority does NOT need to be a bio block directly under the headline. An authority
+  signal in the headline, a credibility sub-deck, or a stats bar all count.
+- The goal is that by the time a reader hits testimonials, they already have a reason
+  to trust the source.
 
-**Application Rules:**
-- You cannot trigger emotion before establishing authority. The brain won't accept it.
-- You cannot establish authority before capturing focus. They've already scrolled past.
-- The headline captures Focus. The authority section (bio/credentials) must appear BEFORE social proof.
-- Emotion (the transformation promise, the pain relief) comes LAST — it seals the deal.
+**Authority signals that work anywhere on page:**
+- Specific numbers tied to personal results ("$4M spent", "14,000 students")
+- Named institutions, publications, or notable clients
+- A mechanism that implies expertise ("The exact system I used to...")
+- Before/after narrative that demonstrates earned experience
 
-**How to detect a page MISSING F.A.T.E. order:**
-- Page opens with a generic benefit headline that could apply to anyone (failed Focus)
-- Social proof (testimonials) appear before any authority is established
-- Emotional appeals appear in the headline before the prospect knows who is speaking
-- The page tries to make an emotional pitch to a cold stranger who hasn't been primed
-
-**Weak vs Strong:**
-- WEAK: Opens with "Transform your business today!" (no novel hook, no authority, pure emotion)
-- STRONG: Opens with a pattern-interrupt fact → bio/credentials → testimonials → emotional CTA
+**What to test when authority is weak:**
+- Rewrite the headline to carry an authority signal (most high-leverage)
+- Add a credibility deck (1–2 lines under the headline with a key credential)
+- Move the bio/credentials section above testimonials if it currently sits below them
 
 
 ### 1.2 THE WALLPAPER FILTER / Pattern Interrupt
@@ -1027,7 +1026,7 @@ Each item represents a significant conversion opportunity if absent.
 [ ] Is there Earned authority (personal journey/results)?
 [ ] Is there Borrowed authority (research/experts/institutions)?
 [ ] Is there Proximal authority (client/student results)?
-[ ] Does authority appear BEFORE social proof (correct F.A.T.E. order)?
+[ ] Does authority appear BEFORE social proof (testimonials need a credible source to land)?
 
 ### 6.6 SOCIAL PROOF AUDIT
 [ ] Do testimonials include specific numbers and results?
@@ -1066,8 +1065,8 @@ Each item represents a significant conversion opportunity if absent.
 [ ] Is there a trust micro-copy under the button ("100% Risk Free • Instant Access")?
 
 ### 6.11 OVERALL FLOW AUDIT
-[ ] Does the page follow F.A.T.E. order (Focus → Authority → Tribe → Emotion)?
-[ ] Is the F.A.T.E. sequence maintained throughout?
+[ ] Does the headline capture attention with novelty, specificity, or a pattern interrupt?
+[ ] Does authority appear somewhere on the page BEFORE testimonials/social proof?
 [ ] Does the page use the P.A.S. (Problem → Agitation → Solution) arc?
 [ ] Is there a clear Before/After Bridge (Hell Island → mechanism → Heaven Island)?
 [ ] Is the "Missing %" concept used to respect past efforts?

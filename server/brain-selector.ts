@@ -73,8 +73,9 @@ const SECTION_KNOWLEDGE_MAP: Record<string, string[]> = {
     "8. COGNITIVE BIAS MASTER",
   ],
   testimonials: [
-    "1.1 THE F.A.T.E. MODEL", // Tribe
+    "1.1 AUTHORITY PLACEMENT ON PAGE", // Authority before social proof
     "6. AUDIT CHECKLIST",
+    "8. COGNITIVE BIAS MASTER", // Social proof bias
   ],
 };
 
@@ -135,16 +136,16 @@ export function getBrainKnowledgeForSection(sectionType: string): string {
 // Get the full audit checklist for page analysis
 export function getBrainAuditChecklist(): string {
   const auditSection = extractSection("6. AUDIT CHECKLIST");
-  const fateSection = extractSection("1.1 THE F.A.T.E. MODEL");
+  const authoritySection = extractSection("1.1 AUTHORITY PLACEMENT ON PAGE");
   const offerSection = extractSection("2. OFFER ARCHITECTURE");
   
-  return [fateSection, offerSection, auditSection].join("\n\n---\n\n").substring(0, 8000);
+  return [authoritySection, offerSection, auditSection].join("\n\n---\n\n").substring(0, 8000);
 }
 
 // Get knowledge for page audit (what's missing)
 export function getBrainPageAuditKnowledge(): string {
   const sections = [
-    extractSection("1.1 THE F.A.T.E. MODEL"),
+    extractSection("1.1 AUTHORITY PLACEMENT ON PAGE"),
     extractSection("1.4 THE LEGO METHOD"),
     extractSection("1.5 PRE-SUASION AND PRIMING"),
     extractSection("1.7 THE NEW BAD GUY"),
