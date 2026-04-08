@@ -461,9 +461,14 @@ export async function registerRoutes(server: Server, app: Express) {
     const user = await storage.getUserById(req.userId!);
     if (!user) return res.status(401).json({ error: "User not found" });
 
-    const count = await storage.getCampaignCountByUser(user.id);
-    if (count >= user.campaignsLimit) {
-      return res.status(403).json({ error: "Campaign limit reached. Upgrade your plan." });
+    // BYOK (free plan) users have no campaign limit — they use their own AI keys
+    // Paid plans also have generous limits (999) but we enforce them as a safeguard
+    const isByok = user.plan === "free";
+    if (!isByok) {
+      const count = await storage.getCampaignCountByUser(user.id);
+      if (count >= user.campaignsLimit) {
+        return res.status(403).json({ error: "Campaign limit reached. Upgrade your plan." });
+      }
     }
 
     const parsed = insertCampaignSchema.safeParse({
