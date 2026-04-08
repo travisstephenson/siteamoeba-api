@@ -778,10 +778,10 @@ export async function registerRoutes(server: Server, app: Express) {
     if (existing) return res.status(409).json({ error: "Email already in use" });
     const passwordHash = await bcrypt.hash(password, 10);
     const planLimits: Record<string, { creditsLimit: number; campaignsLimit: number }> = {
-      free: { creditsLimit: 10, campaignsLimit: 1 },
-      pro: { creditsLimit: 1000, campaignsLimit: 5 },
-      business: { creditsLimit: 2400, campaignsLimit: 20 },
-      autopilot: { creditsLimit: 6000, campaignsLimit: 100 },
+      free:      { creditsLimit: 10,   campaignsLimit: 999 }, // BYOK = unlimited campaigns
+      pro:       { creditsLimit: 1000, campaignsLimit: 999 },
+      business:  { creditsLimit: 2400, campaignsLimit: 999 },
+      autopilot: { creditsLimit: 6000, campaignsLimit: 999 },
     };
     const limits = planLimits[plan || 'free'] || planLimits.free;
     const referralCode = `admin-${Math.random().toString(36).slice(2, 6)}`;

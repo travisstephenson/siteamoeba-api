@@ -30,11 +30,21 @@ function getErrorGuidance(error: Error | null): {
 
   const msg = error.message?.toLowerCase() || "";
 
-  if (msg.includes("401") || msg.includes("unauthorized") || msg.includes("jwt") || msg.includes("session")) {
+  if (msg.includes("403") || msg.includes("campaign limit") || msg.includes("upgrade your plan") || msg.includes("credit limit")) {
     return {
-      title: "Your session expired",
-      message: "You've been logged out. Please sign in again to continue.",
-      action: "Log in",
+      title: "Plan limit reached",
+      message: "You\'ve hit a limit on your current plan. Upgrade to continue.",
+      action: "Go to settings",
+      actionFn: () => { window.location.hash = "/settings"; window.location.reload(); },
+      icon: <AlertCircle className="w-6 h-6 text-amber-500" />,
+    };
+  }
+
+  if (msg.includes("401") || msg.includes("unauthorized") || msg.includes("jwt expired") || msg.includes("invalid token")) {
+    return {
+      title: "Session expired",
+      message: "Your session has expired. Please sign in again.",
+      action: "Sign in",
       actionFn: () => { window.location.hash = "/auth"; window.location.reload(); },
       icon: <LogIn className="w-6 h-6 text-amber-500" />,
     };

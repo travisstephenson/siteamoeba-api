@@ -636,6 +636,11 @@ class StorageImpl implements IStorage {
       ALTER TABLE visitors ADD COLUMN IF NOT EXISTS customer_email TEXT;
       CREATE INDEX IF NOT EXISTS idx_visitors_email ON visitors (customer_email);
     `);
+    // Fix any users with campaigns_limit = 1 (free/BYOK should be unlimited)
+    await pool.query(`
+      UPDATE users SET campaigns_limit = 999
+      WHERE campaigns_limit <= 1 AND plan IN ('free', 'pro', 'business', 'autopilot')
+    `);
     // Client error logs — captures React crashes and widget errors for admin visibility
     await pool.query(`
       CREATE TABLE IF NOT EXISTS client_errors (
