@@ -234,9 +234,15 @@ async function _callLLMInternal(
   maxTokens?: number
 ): Promise<string> {
 
-  // Manus: autonomous agent API — creates a task, polls until complete, returns result text
+  // Manus: autonomous agent API — creates a task, polls until complete, fetches messages for result
   if (config.provider === "manus") {
-    // Collapse messages into a single task prompt for Manus
+    const MANUS_BASE = "https://api.manus.ai/v2";
+    const manusHeaders = {
+      "Content-Type": "application/json",
+      "x-manus-api-key": config.apiKey,
+    };
+
+    // Collapse messages into a single task prompt
     const systemMsg = messages.find((m) => m.role === "system");
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
     const taskContent = [
@@ -244,13 +250,10 @@ async function _callLLMInternal(
       lastUser ? lastUser.content : "",
     ].filter(Boolean).join("\n\n");
 
-    // Create task
-    const createRes = await fetch("https://api.manus.ai/v2/task.create", {
+    // 1. Create task
+    const createRes = await fetch(`${MANUS_BASE}/task.create`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-manus-api-key": config.apiKey,
-      },
+      headers: manusHeaders,
       body: JSON.stringify({ message: { content: taskContent } }),
     });
     if (!createRes.ok) {
@@ -259,34 +262,47 @@ async function _callLLMInternal(
     }
     const created = await createRes.json();
     if (!created.ok) throw new Error(created.error?.message || "Manus task creation failed");
-    const taskId = created.data?.id;
+    // task_id is at root, not nested under data
+    const taskId = created.task_id;
     if (!taskId) throw new Error("Manus did not return a task ID");
 
-    // Poll for completion (max 5 minutes, 6s interval)
+    // 2. Poll task.get until status is completed/failed (max 5 min, 6s interval)
     const deadline = Date.now() + 5 * 60 * 1000;
     while (Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 6000));
-      const pollRes = await fetch(`https://api.manus.ai/v2/task.get?task_id=${taskId}`, {
+      const pollRes = await fetch(`${MANUS_BASE}/task.get?task_id=${taskId}`, {
         headers: { "x-manus-api-key": config.apiKey },
       });
       if (!pollRes.ok) continue;
       const poll = await pollRes.json();
-      const status = poll.data?.status;
-      if (status === "completed" || status === "success") {
-        // Extract text from result
-        const result = poll.data?.result;
-        if (typeof result === "string") return result;
-        if (result?.content) return result.content;
-        if (result?.text) return result.text;
-        // Fallback: stringify whatever we got
-        return JSON.stringify(result);
-      }
+      // status lives at poll.task.status
+      const status = poll.task?.status;
+      if (status === "completed" || status === "success") break;
       if (status === "failed" || status === "error" || status === "cancelled") {
-        throw new Error(`Manus task ${status}: ${poll.data?.error || "unknown error"}`);
+        throw new Error(`Manus task ${status}: ${poll.task?.error || "unknown error"}`);
       }
       // Still running — keep polling
     }
-    throw new Error("Manus task timed out after 5 minutes.");
+    if (Date.now() >= deadline) throw new Error("Manus task timed out after 5 minutes.");
+
+    // 3. Fetch messages to get the assistant's final response
+    const msgsRes = await fetch(`${MANUS_BASE}/task.listMessages?task_id=${taskId}`, {
+      headers: { "x-manus-api-key": config.apiKey },
+    });
+    if (!msgsRes.ok) throw new Error(`Manus listMessages error ${msgsRes.status}`);
+    const msgsData = await msgsRes.json();
+    const msgs: any[] = msgsData.messages ?? [];
+    // Find last assistant_message with content
+    const assistantMsgs = msgs.filter((m: any) => m.type === "assistant_message" && m.assistant_message?.content);
+    if (assistantMsgs.length > 0) {
+      return assistantMsgs[assistantMsgs.length - 1].assistant_message.content;
+    }
+    // Fallback: last explanation content
+    const explanations = msgs.filter((m: any) => m.type === "explanation" && m.explanation?.content);
+    if (explanations.length > 0) {
+      return explanations[explanations.length - 1].explanation.content;
+    }
+    throw new Error("Manus task completed but returned no readable output.");
   }
 
   if (config.provider === "anthropic") {
