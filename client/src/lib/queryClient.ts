@@ -2,45 +2,64 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 export const API_BASE = "__PORT_5000__".startsWith("__") ? "https://api.siteamoeba.com" : "__PORT_5000__";
 
-// JWT token persistence via URL hash parameter
-// We can't use localStorage/sessionStorage/cookies in the sandboxed iframe,
-// so we store the token in a hash param that survives page refreshes.
+// JWT token persistence — stored in localStorage on the real domain (app.siteamoeba.com).
+// Falls back to URL hash param for the Perplexity iframe preview (where localStorage is blocked).
+const LS_KEY = "sa_auth_token";
 let authToken: string | null = null;
 
-function getTokenFromHash(): string | null {
-  // Check URL query string first (used by admin impersonation)
+function canUseLocalStorage(): boolean {
+  try {
+    localStorage.setItem("__sa_test__", "1");
+    localStorage.removeItem("__sa_test__");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getTokenFromStorage(): string | null {
+  // 1. URL query string (admin impersonation — one-time, immediately cleaned)
   const urlParams = new URLSearchParams(window.location.search);
   const urlToken = urlParams.get("token");
   if (urlToken) {
-    // Clean it from the URL immediately so it doesn't persist
     const cleanUrl = window.location.pathname + (window.location.hash || "#/");
     window.history.replaceState(null, "", cleanUrl);
     return decodeURIComponent(urlToken);
   }
-  // Fall back to hash-embedded token (normal login persistence)
+  // 2. localStorage (persists across refreshes on the real domain)
+  if (canUseLocalStorage()) {
+    const stored = localStorage.getItem(LS_KEY);
+    if (stored) return stored;
+  }
+  // 3. Hash-embedded token (fallback for sandboxed iframe)
   const hash = window.location.hash;
   const match = hash.match(/[?&]token=([^&]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
+  if (match) return decodeURIComponent(match[1]);
+  return null;
 }
 
-function setTokenInHash(token: string | null) {
-  const hash = window.location.hash;
-  // Remove existing token param
-  let cleanHash = hash.replace(/([?&])token=[^&]*/g, "").replace(/\?$/, "");
-  if (token) {
-    const separator = cleanHash.includes("?") ? "&" : "?";
-    cleanHash = cleanHash + separator + "token=" + encodeURIComponent(token);
+function persistToken(token: string | null) {
+  if (canUseLocalStorage()) {
+    if (token) {
+      localStorage.setItem(LS_KEY, token);
+    } else {
+      localStorage.removeItem(LS_KEY);
+    }
   }
-  // Use replaceState to avoid adding to browser history
-  window.history.replaceState(null, "", cleanHash || "#/");
+  // Also clean any token from the hash (was used by old login flow)
+  const hash = window.location.hash;
+  if (hash.includes("token=")) {
+    const cleanHash = hash.replace(/([?&])token=[^&]*/g, "").replace(/\?$/, "");
+    window.history.replaceState(null, "", cleanHash || "#/");
+  }
 }
 
-// Initialize from hash on load
-authToken = getTokenFromHash();
+// Initialize on load
+authToken = getTokenFromStorage();
 
 export function setAuthToken(token: string | null) {
   authToken = token;
-  setTokenInHash(token);
+  persistToken(token);
 }
 
 export function getAuthToken(): string | null {
