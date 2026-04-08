@@ -3455,6 +3455,7 @@ function TestSectionCard({
   const [expanded, setExpanded] = useState(section.isActive);
   const [showFullControlText, setShowFullControlText] = useState(false);
   const { toast } = useToast();
+  const { user } = useAuth(); // needed for BYOK check in AddVariantForm
   const catConfig = getCategoryConfig(section.category);
   const methodConfig = getTestMethodConfig(section.testMethod);
   const CatIcon = catConfig.icon;
