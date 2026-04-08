@@ -746,11 +746,19 @@ function CampaignWizard({
       if (startError) throw new Error(startError);
       if (!jobId) throw new Error("Failed to start scan");
 
-      // Poll for result every 2 seconds (up to 90s)
-      const maxAttempts = 45;
+      // Manus is an async agent that can take several minutes — give it up to 5 min.
+      // All other providers get the standard 90s window.
+      const isManus = user?.llmProvider === "manus";
+      const maxAttempts = isManus ? 150 : 45; // 150×2s = 5min, 45×2s = 90s
       for (let i = 0; i < maxAttempts; i++) {
         await new Promise(r => setTimeout(r, 2000));
         const pollRes = await apiRequest("GET", `/api/scan-status/${jobId}`);
+        if (pollRes.status === 404) {
+          // Job not found — likely server restart lost the in-memory job.
+          // For Manus we wait a bit longer before giving up.
+          if (isManus && i < maxAttempts - 1) continue;
+          throw new Error("Scan job was lost — the server may have restarted. Please try again.");
+        }
         const poll = await pollRes.json();
         if (poll.status === "error") throw new Error(poll.error || "Scan failed");
         if (poll.status === "done" && poll.result) {
@@ -769,7 +777,11 @@ function CampaignWizard({
         }
         // still pending — keep polling
       }
-      throw new Error("Scan timed out after 90 seconds. Try Quick Create instead.");
+      throw new Error(
+        isManus
+          ? "Manus scan timed out after 5 minutes. The task may still be running — try refreshing in a moment."
+          : "Scan timed out after 90 seconds. Try Quick Create instead."
+      );
     } catch (err: any) {
       const msg = err.message?.replace(/^\d+:\s*/, "") || "Failed to scan page";
       setScanError(msg);
