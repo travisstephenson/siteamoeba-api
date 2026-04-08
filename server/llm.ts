@@ -242,19 +242,21 @@ async function _callLLMInternal(
       "x-manus-api-key": config.apiKey,
     };
 
-    // Collapse messages into a single task prompt
-    const systemMsg = messages.find((m) => m.role === "system");
+    // Collapse messages — for Manus, send ONLY the user message (no system prompt).
+    // System prompts cause the agent to treat it as a complex multi-step research task.
     const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    const taskContent = [
-      systemMsg ? `Context:\n${systemMsg.content}` : "",
-      lastUser ? lastUser.content : "",
-    ].filter(Boolean).join("\n\n");
+    const taskContent = lastUser?.content ?? messages[messages.length - 1]?.content ?? "";
 
-    // 1. Create task
+    // 1. Create task — use lite profile for speed, disable interactive mode
     const createRes = await fetch(`${MANUS_BASE}/task.create`, {
       method: "POST",
       headers: manusHeaders,
-      body: JSON.stringify({ message: { content: taskContent } }),
+      body: JSON.stringify({
+        message: { content: taskContent },
+        agent_profile: "manus-1.6-lite",
+        interactive_mode: false,
+        hide_in_task_list: true,
+      }),
     });
     if (!createRes.ok) {
       const errBody = await createRes.json().catch(() => ({}));
@@ -266,10 +268,10 @@ async function _callLLMInternal(
     const taskId = created.task_id;
     if (!taskId) throw new Error("Manus did not return a task ID");
 
-    // 2. Poll task.get until status is completed/failed (max 5 min, 6s interval)
+    // 2. Poll task.get until status is completed/failed (max 5 min, 3s interval)
     const deadline = Date.now() + 5 * 60 * 1000;
     while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 6000));
+      await new Promise((r) => setTimeout(r, 3000));
       const pollRes = await fetch(`${MANUS_BASE}/task.get?task_id=${taskId}`, {
         headers: { "x-manus-api-key": config.apiKey },
       });
