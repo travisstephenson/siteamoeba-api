@@ -53,6 +53,7 @@ import {
   CheckCircle2,
   CircleDot,
   Loader2,
+  LoaderCircle,
   Lightbulb,
   Lock,
   History,

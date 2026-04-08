@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest, queryClient, API_BASE } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Feedback } from "@shared/schema";
 
@@ -627,10 +627,10 @@ function StripeIntegration({ userId }: { userId?: number }) {
               </p>
               <div className="flex items-center gap-2 mt-1">
                 <code className="text-[11px] bg-muted px-2 py-1 rounded flex-1 overflow-auto select-all whitespace-nowrap">
-                  {getApiBaseUrl()}/api/webhooks/stripe/account/{userId}
+                  {API_BASE}/api/webhooks/stripe/account/{userId}
                 </code>
                 <Button size="sm" variant="outline" className="shrink-0 h-7 text-xs" onClick={() =>
-                  navigator.clipboard.writeText(getApiBaseUrl() + "/api/webhooks/stripe/account/" + userId)
+                  navigator.clipboard.writeText(API_BASE + "/api/webhooks/stripe/account/" + userId)
                 }>Copy</Button>
               </div>
             </div>
