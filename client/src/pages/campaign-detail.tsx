@@ -143,6 +143,7 @@ function KPICard({
   sub,
   accentColor,
   iconBg,
+  onClick,
 }: {
   label: string;
   value: string;
@@ -150,9 +151,13 @@ function KPICard({
   sub?: string;
   accentColor: string;
   iconBg: string;
+  onClick?: () => void;
 }) {
   return (
-    <Card className="relative overflow-hidden">
+    <Card
+      className={`relative overflow-hidden${onClick ? " cursor-pointer hover:shadow-md transition-shadow" : ""}`}
+      onClick={onClick}
+    >
       {/* Colored accent bar on the left */}
       <div
         className="absolute left-0 top-0 bottom-0 w-1 rounded-l-lg"
@@ -2733,8 +2738,13 @@ interface VisitorFeedData {
   };
 }
 
-function VisitorFeedPanel({ campaignId, campaignType }: { campaignId: number; campaignType?: string }) {
+function VisitorFeedPanel({ campaignId, campaignType, forceExpand }: { campaignId: number; campaignType?: string; forceExpand?: number }) {
   const [expanded, setExpanded] = useState(true);
+
+  // forceExpand is incremented each time the KPI card is clicked — force open
+  useEffect(() => {
+    if (forceExpand) setExpanded(true);
+  }, [forceExpand]);
   const [expandedBuyer, setExpandedBuyer] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<VisitorFeedData>({
@@ -4961,6 +4971,15 @@ export default function CampaignDetailPage() {
   const [brainBannerDismissed, setBrainBannerDismissed] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
+  const visitorFeedRef = useRef<HTMLDivElement>(null);
+  const [scrollToFeed, setScrollToFeed] = useState(0);
+
+  const handleConversionsClick = () => {
+    setScrollToFeed(n => n + 1);
+    setTimeout(() => {
+      visitorFeedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  };
 
   const restartMutation = useMutation({
     mutationFn: async () => {
@@ -5391,6 +5410,7 @@ export default function CampaignDetailPage() {
                 icon={TrendingUp}
                 accentColor={isLeadGen ? "hsl(217, 91%, 60%)" : "hsl(217, 91%, 60%)"}
                 iconBg={isLeadGen ? "hsl(217, 91%, 60% / 0.12)" : "hsl(217, 91%, 60% / 0.12)"}
+                onClick={handleConversionsClick}
               />
               <KPICard
                 label={isLeadGen ? "Opt-in Rate" : "Conv. Rate"}
@@ -5427,7 +5447,9 @@ export default function CampaignDetailPage() {
         <TrafficSourcesPanel campaignId={campaignId} />
 
         {/* Live Visitor Feed — positioned high for visibility */}
-        <VisitorFeedPanel campaignId={campaignId} campaignType={stats?.campaignType} />
+        <div ref={visitorFeedRef}>
+          <VisitorFeedPanel campaignId={campaignId} campaignType={stats?.campaignType} forceExpand={scrollToFeed} />
+        </div>
 
         {/* Variant sections — dynamic (scanner campaigns) or legacy (old campaigns) */}
         {testSections.length > 0 ? (
