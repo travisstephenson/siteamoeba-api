@@ -125,8 +125,9 @@ function AIConfigCard({ currentProvider }: { currentProvider?: string | null }) 
         </div>
 
         {provider === "manus" && (
-          <div className="rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
-            Manus is an autonomous agent — it plans and executes tasks independently rather than responding instantly. Brain Chat responses may take 1–5 minutes. Best suited for deep research and CRO reports.
+          <div className="rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-800 dark:text-amber-200 space-y-1">
+            <p className="font-medium">Manus works with Brain Chat and variant generation only.</p>
+            <p>Page scanning always uses the platform AI — Manus is an autonomous agent and cannot perform real-time scans. Brain Chat is a paid-plan feature.</p>
           </div>
         )}
 

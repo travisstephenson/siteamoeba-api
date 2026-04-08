@@ -97,10 +97,16 @@ export function resolveLLMConfig(opts: {
   const tier = OPERATION_TIERS[operation] || "fast";
   const creditCost = OPERATION_CREDIT_COSTS[operation] || 1;
 
+  // Manus cannot handle page scans — it's an autonomous agent, not a text API.
+  // For scan/classify operations, always fall through to the platform key regardless of user key.
+  // Manus works fine for chat, variant generation, and other paid operations.
+  const MANUS_UNSUPPORTED_OPS: LLMOperation[] = ["scan", "classify", "observation"];
+  const isManusForUnsupportedOp = userProvider === "manus" && MANUS_UNSUPPORTED_OPS.includes(operation);
+
   // Paid user with their own key — use it (saves us money), inject brain data
   // For fast operations (scan/classify/observation), enforce fast model to prevent timeouts
   const FAST_OPS: LLMOperation[] = ["scan", "classify", "observation"];
-  if (isPaid && hasUserKey) {
+  if (isPaid && hasUserKey && !isManusForUnsupportedOp) {
     const forceFastModel = FAST_OPS.includes(operation);
     return {
       config: {
@@ -133,7 +139,8 @@ export function resolveLLMConfig(opts: {
   }
 
   // Free BYOK user — use their key, no brain data
-  if (hasUserKey) {
+  // Exception: Manus on unsupported ops falls through to platform key
+  if (hasUserKey && !isManusForUnsupportedOp) {
     return {
       config: {
         provider: userProvider as LLMConfig["provider"],
