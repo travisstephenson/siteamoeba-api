@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export interface LLMConfig {
-  provider: "anthropic" | "openai" | "gemini" | "mistral" | "xai" | "meta" | "manus";
+  provider: "anthropic" | "openai" | "gemini" | "mistral" | "xai" | "meta";
   apiKey: string;
   model?: string; // optional override
 }
@@ -65,7 +65,6 @@ const DEFAULT_MODELS: Record<LLMConfig["provider"], string> = {
   mistral: "mistral-large-latest",
   xai: "grok-2",
   meta: "llama-3.1-70b-versatile",
-  manus: "default", // Manus uses agent profiles, not chat models
 };
 
 const OPENAI_COMPATIBLE_BASE_URLS: Partial<Record<LLMConfig["provider"], string>> = {
@@ -97,16 +96,10 @@ export function resolveLLMConfig(opts: {
   const tier = OPERATION_TIERS[operation] || "fast";
   const creditCost = OPERATION_CREDIT_COSTS[operation] || 1;
 
-  // Manus cannot handle page scans — it's an autonomous agent, not a text API.
-  // For scan/classify operations, always fall through to the platform key regardless of user key.
-  // Manus works fine for chat, variant generation, and other paid operations.
-  const MANUS_UNSUPPORTED_OPS: LLMOperation[] = ["scan", "classify", "observation"];
-  const isManusForUnsupportedOp = userProvider === "manus" && MANUS_UNSUPPORTED_OPS.includes(operation);
-
   // Paid user with their own key — use it (saves us money), inject brain data
   // For fast operations (scan/classify/observation), enforce fast model to prevent timeouts
   const FAST_OPS: LLMOperation[] = ["scan", "classify", "observation"];
-  if (isPaid && hasUserKey && !isManusForUnsupportedOp) {
+  if (isPaid && hasUserKey) {
     const forceFastModel = FAST_OPS.includes(operation);
     return {
       config: {
@@ -139,8 +132,7 @@ export function resolveLLMConfig(opts: {
   }
 
   // Free BYOK user — use their key, no brain data
-  // Exception: Manus on unsupported ops falls through to platform key
-  if (hasUserKey && !isManusForUnsupportedOp) {
+  if (hasUserKey) {
     return {
       config: {
         provider: userProvider as LLMConfig["provider"],
@@ -216,7 +208,6 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   mistral: "Mistral",
   xai: "xAI (Grok)",
   meta: "Meta/Groq (Llama)",
-  manus: "Manus",
 };
 
 export async function callLLM(
@@ -240,79 +231,6 @@ async function _callLLMInternal(
   model: string,
   maxTokens?: number
 ): Promise<string> {
-
-  // Manus: autonomous agent API — creates a task, polls until complete, fetches messages for result
-  if (config.provider === "manus") {
-    const MANUS_BASE = "https://api.manus.ai/v2";
-    const manusHeaders = {
-      "Content-Type": "application/json",
-      "x-manus-api-key": config.apiKey,
-    };
-
-    // Collapse messages — for Manus, send ONLY the user message (no system prompt).
-    // System prompts cause the agent to treat it as a complex multi-step research task.
-    const lastUser = [...messages].reverse().find((m) => m.role === "user");
-    const taskContent = lastUser?.content ?? messages[messages.length - 1]?.content ?? "";
-
-    // 1. Create task — use lite profile for speed, disable interactive mode
-    const createRes = await fetch(`${MANUS_BASE}/task.create`, {
-      method: "POST",
-      headers: manusHeaders,
-      body: JSON.stringify({
-        message: { content: taskContent },
-        agent_profile: "manus-1.6-lite",
-        interactive_mode: false,
-        hide_in_task_list: true,
-      }),
-    });
-    if (!createRes.ok) {
-      const errBody = await createRes.json().catch(() => ({}));
-      throw new Error(errBody?.error?.message || `Manus API error ${createRes.status}`);
-    }
-    const created = await createRes.json();
-    if (!created.ok) throw new Error(created.error?.message || "Manus task creation failed");
-    // task_id is at root, not nested under data
-    const taskId = created.task_id;
-    if (!taskId) throw new Error("Manus did not return a task ID");
-
-    // 2. Poll task.get until status is completed/failed (max 5 min, 3s interval)
-    const deadline = Date.now() + 5 * 60 * 1000;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 3000));
-      const pollRes = await fetch(`${MANUS_BASE}/task.get?task_id=${taskId}`, {
-        headers: { "x-manus-api-key": config.apiKey },
-      });
-      if (!pollRes.ok) continue;
-      const poll = await pollRes.json();
-      // status lives at poll.task.status
-      const status = poll.task?.status;
-      if (status === "completed" || status === "success") break;
-      if (status === "failed" || status === "error" || status === "cancelled") {
-        throw new Error(`Manus task ${status}: ${poll.task?.error || "unknown error"}`);
-      }
-      // Still running — keep polling
-    }
-    if (Date.now() >= deadline) throw new Error("Manus task timed out after 5 minutes.");
-
-    // 3. Fetch messages to get the assistant's final response
-    const msgsRes = await fetch(`${MANUS_BASE}/task.listMessages?task_id=${taskId}`, {
-      headers: { "x-manus-api-key": config.apiKey },
-    });
-    if (!msgsRes.ok) throw new Error(`Manus listMessages error ${msgsRes.status}`);
-    const msgsData = await msgsRes.json();
-    const msgs: any[] = msgsData.messages ?? [];
-    // Find last assistant_message with content
-    const assistantMsgs = msgs.filter((m: any) => m.type === "assistant_message" && m.assistant_message?.content);
-    if (assistantMsgs.length > 0) {
-      return assistantMsgs[assistantMsgs.length - 1].assistant_message.content;
-    }
-    // Fallback: last explanation content
-    const explanations = msgs.filter((m: any) => m.type === "explanation" && m.explanation?.content);
-    if (explanations.length > 0) {
-      return explanations[explanations.length - 1].explanation.content;
-    }
-    throw new Error("Manus task completed but returned no readable output.");
-  }
 
   if (config.provider === "anthropic") {
     const client = new Anthropic({ apiKey: config.apiKey });
