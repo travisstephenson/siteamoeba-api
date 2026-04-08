@@ -1061,9 +1061,9 @@ class StorageImpl implements IStorage {
     const results: CampaignWithStats[] = [];
 
     for (const campaign of userCampaigns) {
-      // Only count visitors whose headline variant still exists in DB (excludes orphaned references)
+      // Count all visitors for this campaign — matches the campaign detail stats endpoint
       const visResult = await pool.query(
-        "SELECT COUNT(*) as count FROM visitors v INNER JOIN variants var ON var.id = v.headline_variant_id WHERE v.campaign_id = $1",
+        "SELECT COUNT(*) as count FROM visitors v WHERE v.campaign_id = $1",
         [campaign.id]
       );
       const convResult = await pool.query(
@@ -1289,6 +1289,8 @@ class StorageImpl implements IStorage {
         v.user_agent,
         v.referrer,
         v.first_seen,
+        v.customer_email,
+        COALESCE(v.traffic_source, 'direct') as traffic_source,
         hv.text as headline_variant,
         hv.is_control as headline_is_control,
         hv.id as headline_variant_id,
@@ -1352,6 +1354,8 @@ class StorageImpl implements IStorage {
         subheadlineVariant: r.subheadline_variant || null,
         subheadlineIsControl: r.subheadline_is_control || false,
         referrer: r.referrer || null,
+        trafficSource: r.traffic_source || 'direct',
+        customerEmail: r.customer_email || null,
       };
     };
 

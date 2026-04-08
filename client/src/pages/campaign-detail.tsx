@@ -2440,6 +2440,8 @@ const SOURCE_COLORS: Record<string, string> = {
 };
 
 function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
+  const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+
   const { data, isLoading } = useQuery<TrafficSourcesData>({
     queryKey: ["/api/campaigns", campaignId, "traffic-sources"],
     queryFn: async () => {
@@ -2448,6 +2450,21 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
     },
     refetchInterval: 60000,
   });
+
+  // Fetch all conversions for the source drill-down (reuses visitor-feed)
+  const { data: feedData } = useQuery<VisitorFeedData>({
+    queryKey: ["/api/campaigns", campaignId, "visitor-feed"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/campaigns/${campaignId}/visitor-feed`);
+      return res.json();
+    },
+    enabled: true,
+  });
+
+  const allConversions = feedData?.recentConversions ?? [];
+  const filteredConversions = sourceFilter
+    ? allConversions.filter((c) => c.trafficSource === sourceFilter)
+    : [];
 
   const sources = data?.sources ?? [];
   const devices = data?.devices ?? [];
@@ -2575,10 +2592,17 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
                                 <p className="text-sm font-semibold text-foreground">{row.visitors.toLocaleString()}</p>
                                 <p className="text-[9px] text-muted-foreground uppercase tracking-wide">Visitors</p>
                               </div>
-                              <div className="rounded-md bg-background/60 px-2 py-1.5 text-center">
-                                <p className="text-sm font-semibold text-foreground">{row.conversions.toLocaleString()}</p>
-                                <p className="text-[9px] text-muted-foreground uppercase tracking-wide">Conversions</p>
-                              </div>
+                              <button
+                                className="rounded-md bg-background/60 px-2 py-1.5 text-center transition-colors hover:bg-background cursor-pointer group"
+                                onClick={() => setSourceFilter(f => f === row.source ? null : row.source)}
+                                title={`View ${row.conversions} conversion${row.conversions !== 1 ? 's' : ''} from ${SOURCE_LABELS[row.source] ?? row.source}`}
+                              >
+                                <p className="text-sm font-semibold text-foreground group-hover:underline decoration-dotted">{row.conversions.toLocaleString()}</p>
+                                <p className="text-[9px] text-muted-foreground uppercase tracking-wide flex items-center justify-center gap-0.5">
+                                  Conversions
+                                  {row.conversions > 0 && <ChevronDown className="w-2.5 h-2.5 inline" style={{ transform: sourceFilter === row.source ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />}
+                                </p>
+                              </button>
                             </div>
 
                             {/* Revenue if available */}
@@ -2619,6 +2643,52 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
                 })}
               </div>
             )}
+
+            {/* Source conversion drill-down */}
+            {sourceFilter && (
+              <div className="mt-4 rounded-lg border border-border bg-muted/30 p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-foreground">
+                    Conversions from {SOURCE_LABELS[sourceFilter] ?? sourceFilter}
+                  </span>
+                  <button
+                    onClick={() => setSourceFilter(null)}
+                    className="text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                {filteredConversions.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    No recent conversions recorded for this source. Older conversions may exist but aren't shown in the recent feed.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {filteredConversions.map((c, i) => (
+                      <div key={i} className="flex items-start justify-between gap-2 text-xs border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                        <div className="space-y-0.5 min-w-0">
+                          {c.customerEmail && (
+                            <p className="font-medium text-foreground truncate">{c.customerEmail}</p>
+                          )}
+                          <p className="text-muted-foreground">
+                            {c.headlineVariant
+                              ? (c.headlineIsControl ? `Control: "${c.headlineVariant.slice(0, 45)}${c.headlineVariant.length > 45 ? '...' : ''}"` : `Variant: "${c.headlineVariant.slice(0, 45)}${c.headlineVariant.length > 45 ? '...' : ''}"`) 
+                              : 'Headline unknown'}
+                          </p>
+                          <p className="text-muted-foreground">{c.device} · {c.convertedAt ? new Date(c.convertedAt).toLocaleDateString() : 'unknown date'}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          {c.revenue > 0 && (
+                            <p className="font-semibold text-green-600">${c.revenue.toFixed(2)}</p>
+                          )}
+                          <p className="text-[10px] text-muted-foreground capitalize">{c.trafficSource}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </>
         )}
       </CardContent>
@@ -2643,6 +2713,8 @@ interface ConversionEntry {
   subheadlineVariant: string | null;
   subheadlineIsControl: boolean;
   referrer: string | null;
+  trafficSource: string;
+  customerEmail: string | null;
 }
 
 interface VisitorFeedData {
@@ -4449,6 +4521,7 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
   const [useCounsel, setUseCounsel] = useState(false);
   const [expandedCounsel, setExpandedCounsel] = useState<Record<number, boolean>>({});
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
   const [addedSuggestions, setAddedSuggestions] = useState<Set<string>>(new Set());
   const [isAddingSuggestion, setIsAddingSuggestion] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -4586,28 +4659,46 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
       {/* Slide-out panel */}
       {isOpen && (
         <div
-          className="fixed inset-y-0 right-0 z-50 flex flex-col bg-background border-l border-border shadow-2xl"
-          style={{ width: "min(420px, 100vw)" }}
+          className="fixed inset-y-0 right-0 z-50 flex flex-col bg-background border-l border-border shadow-2xl transition-all duration-200"
+          style={{ width: isMinimized ? "200px" : "min(420px, 100vw)", transform: isMinimized ? "translateY(calc(100% - 44px))" : "none" }}
           data-testid="panel-brain-chat"
         >
           {/* Panel header */}
           <div
-            className="flex items-center justify-between px-4 py-3 border-b border-border"
-            style={{ background: "hsl(160, 84%, 36%)" }}
+            className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0"
+            style={{ background: "hsl(160, 84%, 36%)", cursor: isMinimized ? "pointer" : "default" }}
+            onClick={isMinimized ? () => setIsMinimized(false) : undefined}
           >
             <div className="flex items-center gap-2">
               <Bot className="w-4 h-4 text-white" />
               <span className="text-sm font-semibold text-white">Brain</span>
-              <span className="text-xs text-white/70">CRO Expert</span>
+              {!isMinimized && <span className="text-xs text-white/70">CRO Expert</span>}
             </div>
-            <button
-              className="text-white/80 hover:text-white transition-colors"
-              onClick={() => setIsOpen(false)}
-              aria-label="Close Brain Chat"
-              data-testid="button-brain-chat-close"
-            >
-              <X className="w-4 h-4" />
-            </button>
+            <div className="flex items-center gap-1">
+              {/* Minimize / restore */}
+              <button
+                className="text-white/80 hover:text-white transition-colors p-0.5 rounded"
+                onClick={(e) => { e.stopPropagation(); setIsMinimized(v => !v); }}
+                aria-label={isMinimized ? "Restore Brain Chat" : "Minimize Brain Chat"}
+                data-testid="button-brain-chat-minimize"
+                title={isMinimized ? "Restore" : "Minimize"}
+              >
+                {isMinimized
+                  ? <pr className="w-4 h-4" style={{ display: "inline-block" }}><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m18 15-6-6-6 6"/></svg></pr>
+                  : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="m6 9 6 6 6-6"/></svg>
+                }
+              </button>
+              {/* Close */}
+              <button
+                className="text-white/80 hover:text-white transition-colors p-0.5 rounded"
+                onClick={() => { setIsOpen(false); setIsMinimized(false); }}
+                aria-label="Close Brain Chat"
+                data-testid="button-brain-chat-close"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
           </div>
 
           {/* No LLM configured warning */}
