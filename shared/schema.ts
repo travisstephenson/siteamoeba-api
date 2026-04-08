@@ -144,7 +144,7 @@ export const testSections = pgTable("test_sections", {
   testPriority: integer("test_priority").notNull().default(1),
   // Percentage of incoming traffic that enters this test (1-100). Default 100.
   // E.g. 20 = 20% see a random variant, 80% see control (original page untouched).
-  trafficPercentage: integer("traffic_percentage").default(100),
+  trafficPercentage: integer("traffic_percentage").default(50), // % of visitors who see a challenger (not control)
   isActive: boolean("is_active").notNull().default(false),
   // Test method: "text_swap" | "visibility_toggle" | "reorder" | "not_testable"
   testMethod: text("test_method").notNull().default("text_swap"),

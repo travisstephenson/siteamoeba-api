@@ -3644,16 +3644,16 @@ function TestSectionCard({
           <CardContent className="pt-4">
             {/* Traffic allocation slider */}
             {section.isActive && (() => {
-              // Compute actual per-variant traffic distribution:
-              // trafficPct = % of visitors who enter the random pool (all variants incl. control)
-              // Within the pool, traffic is split EQUALLY across all active variants.
-              // Remaining (100-trafficPct)% always see control.
-              const activeCount = Math.max(sectionVariants.filter(v => v.isActive !== false).length, 1);
-              const perVariantInPool = trafficPct / activeCount;
-              const controlBypass = 100 - trafficPct; // always sees control, outside pool
-              const controlTotal = Math.round(perVariantInPool + controlBypass);
-              const challengerPct = Math.round(perVariantInPool);
-              const isEqualSplit = trafficPct === 100;
+              // trafficPct = % of visitors who see a CHALLENGER variant.
+              // Control always gets the remaining (100 - trafficPct)%.
+              // Equal split: set to numChallengers / numVariants * 100
+              const challengers = sectionVariants.filter(v => !v.isControl && v.isActive !== false);
+              const numChallengers = Math.max(challengers.length, 1);
+              const perChallengerPct = Math.round(trafficPct / numChallengers);
+              const controlPct = 100 - trafficPct;
+              // Equal split point: e.g. 2 variants → 50%, 3 variants → 67%
+              const equalSplitPct = Math.round((numChallengers / (numChallengers + 1)) * 100);
+              const isEqualSplit = trafficPct === equalSplitPct;
 
               return (
                 <div className="mb-4 p-3 rounded-lg bg-muted/30 border border-border">
@@ -3662,51 +3662,56 @@ function TestSectionCard({
                       <Activity className="w-3 h-3 text-muted-foreground" />
                       <span className="text-xs font-medium">Traffic Split</span>
                     </div>
-                    <span className="text-xs font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
-                      {isEqualSplit
-                        ? `Equal — ~${Math.round(100 / activeCount)}% per variant`
-                        : `Control ${controlTotal}% · Test ${challengerPct}% each`
-                      }
+                    <span className={`text-xs font-semibold tabular-nums ${
+                      isEqualSplit ? "text-emerald-600 dark:text-emerald-400" : "text-foreground"
+                    }`}>
+                      {isEqualSplit ? "Equal split" : `${trafficPct}% test · ${controlPct}% control`}
                     </span>
                   </div>
-                  {/* Visual split bar */}
-                  <div className="flex h-2 rounded-full overflow-hidden gap-px mb-2">
-                    {sectionVariants.filter(v => v.isActive !== false).map((v, i) => (
+                  {/* Visual bar: control (grey) + challengers (colored) */}
+                  <div className="flex h-2 rounded-full overflow-hidden gap-px mb-1.5">
+                    <div
+                      style={{ width: `${controlPct}%` }}
+                      className="bg-slate-300 dark:bg-slate-600"
+                      title={`Control: ${controlPct}%`}
+                    />
+                    {challengers.map((v, i) => (
                       <div
                         key={v.id}
-                        style={{ width: `${100 / activeCount}%` }}
-                        className={v.isControl
-                          ? "bg-slate-400 dark:bg-slate-500"
-                          : `bg-primary opacity-${Math.max(100 - i * 15, 60)}`
-                        }
-                        title={`${v.isControl ? "Control" : `Variant ${i}`}: ~${Math.round(100 / activeCount)}%`}
+                        style={{ width: `${perChallengerPct}%` }}
+                        className="bg-primary"
+                        title={`Challenger ${i + 1}: ${perChallengerPct}%`}
                       />
                     ))}
                   </div>
                   <div className="flex justify-between text-[10px] text-muted-foreground mb-2">
-                    {sectionVariants.filter(v => v.isActive !== false).map((v, i) => (
-                      <span key={v.id}>{v.isControl ? "Control" : `V${i}`} ~{Math.round(100 / activeCount)}%</span>
-                    ))}
-                  </div>
-                  <div className="text-[10px] text-muted-foreground">
-                    Test exposure: {trafficPct}% of visitors participate
-                    {trafficPct < 100 && ` (${100 - trafficPct}% always see original)`}
+                    <span>Control {controlPct}%</span>
+                    {challengers.length > 1
+                      ? <span>{challengers.length} challengers × {perChallengerPct}%</span>
+                      : <span>Challenger {perChallengerPct}%</span>
+                    }
                   </div>
                   <input
                     type="range"
                     min="10"
-                    max="100"
-                    step="10"
+                    max="90"
+                    step="5"
                     value={trafficPct}
                     onChange={e => setTrafficPct(Number(e.target.value))}
                     onMouseUp={e => trafficMutation.mutate(Number((e.target as HTMLInputElement).value))}
                     onTouchEnd={e => trafficMutation.mutate(Number((e.target as HTMLInputElement).value))}
-                    className="w-full h-1.5 accent-primary cursor-pointer mt-2"
+                    className="w-full h-1.5 accent-primary cursor-pointer"
                     data-testid={`slider-traffic-${section.id}`}
                   />
-                  <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                    <span>10% exposed</span>
-                    <span className="font-medium text-emerald-600 dark:text-emerald-400">100% = equal split (default)</span>
+                  <div className="flex items-center justify-between text-[10px] text-muted-foreground mt-1">
+                    <span>10% test</span>
+                    <button
+                      onClick={() => { setTrafficPct(equalSplitPct); trafficMutation.mutate(equalSplitPct); }}
+                      className="text-primary underline hover:no-underline"
+                    >
+                      Equal split ({equalSplitPct}%)
+                    </button>
+                    <span>90% test</span>
                   </div>
                 </div>
               );

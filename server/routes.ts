@@ -2884,17 +2884,22 @@ export async function registerRoutes(server: Server, app: Express) {
     const inHeadlinePool = Math.random() * 100 < headlineTrafficPct;
     const inSubheadlinePool = Math.random() * 100 < subheadlineTrafficPct;
 
-    const headlineControl = headlineVariants.find((v: any) => v.isControl);
-    const subheadlineControl = subheadlineVariants.find((v: any) => v.isControl);
+    const headlineControl      = headlineVariants.find((v: any) => v.isControl);
+    const subheadlineControl   = subheadlineVariants.find((v: any) => v.isControl);
+    const headlineChallengers  = headlineVariants.filter((v: any) => !v.isControl);
+    const subheadlineChallengers = subheadlineVariants.filter((v: any) => !v.isControl);
 
+    // trafficPct = % of visitors who see a CHALLENGER (not control).
+    // If the visitor is NOT in the challenger pool, they see the control variant.
+    // This makes 10% mean "10% of visitors see a challenger" — intuitive.
     const hVariant = headlineVariants.length > 0
-      ? (inHeadlinePool
-          ? headlineVariants[Math.floor(Math.random() * headlineVariants.length)]
+      ? (headlineChallengers.length > 0 && inHeadlinePool
+          ? headlineChallengers[Math.floor(Math.random() * headlineChallengers.length)]
           : (headlineControl || headlineVariants[0]))
       : null;
     const sVariant = subheadlineVariants.length > 0
-      ? (inSubheadlinePool
-          ? subheadlineVariants[Math.floor(Math.random() * subheadlineVariants.length)]
+      ? (subheadlineChallengers.length > 0 && inSubheadlinePool
+          ? subheadlineChallengers[Math.floor(Math.random() * subheadlineChallengers.length)]
           : (subheadlineControl || subheadlineVariants[0]))
       : null;
 
@@ -2913,9 +2918,10 @@ export async function registerRoutes(server: Server, app: Express) {
       const sectionVars = await storage.getActiveVariantsByCampaign(campaignId, section.category);
       if (sectionVars.length === 0) continue;
       const sectionControl = sectionVars.find((v: any) => v.isControl);
-      // If not in test pool, always assign control (no DOM change, original page)
-      const chosen = inTestPool
-        ? sectionVars[Math.floor(Math.random() * sectionVars.length)]
+      const sectionChallengers = sectionVars.filter((v: any) => !v.isControl);
+      // trafficPct = % who see a challenger. If not in pool → always show control.
+      const chosen = (inTestPool && sectionChallengers.length > 0)
+        ? sectionChallengers[Math.floor(Math.random() * sectionChallengers.length)]
         : (sectionControl || sectionVars[0]);
       sectionAssignments[String(section.id)] = chosen.id;
       sectionPayloads.push({
