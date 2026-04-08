@@ -3642,36 +3642,74 @@ function TestSectionCard({
         <div className="border-t border-border">
           <CardContent className="pt-4">
             {/* Traffic allocation slider */}
-            {section.isActive && (
-              <div className="mb-4 p-3 rounded-lg bg-muted/30 border border-border">
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5">
-                    <Activity className="w-3 h-3 text-muted-foreground" />
-                    <span className="text-xs font-medium">Traffic Allocation</span>
+            {section.isActive && (() => {
+              // Compute actual per-variant traffic distribution:
+              // trafficPct = % of visitors who enter the random pool (all variants incl. control)
+              // Within the pool, traffic is split EQUALLY across all active variants.
+              // Remaining (100-trafficPct)% always see control.
+              const activeCount = Math.max(sectionVariants.filter(v => v.isActive !== false).length, 1);
+              const perVariantInPool = trafficPct / activeCount;
+              const controlBypass = 100 - trafficPct; // always sees control, outside pool
+              const controlTotal = Math.round(perVariantInPool + controlBypass);
+              const challengerPct = Math.round(perVariantInPool);
+              const isEqualSplit = trafficPct === 100;
+
+              return (
+                <div className="mb-4 p-3 rounded-lg bg-muted/30 border border-border">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5">
+                      <Activity className="w-3 h-3 text-muted-foreground" />
+                      <span className="text-xs font-medium">Traffic Split</span>
+                    </div>
+                    <span className="text-xs font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">
+                      {isEqualSplit
+                        ? `Equal — ~${Math.round(100 / activeCount)}% per variant`
+                        : `Control ${controlTotal}% · Test ${challengerPct}% each`
+                      }
+                    </span>
                   </div>
-                  <span className="text-xs font-semibold tabular-nums">
-                    {trafficPct}% in test · {100 - trafficPct}% see control
-                  </span>
+                  {/* Visual split bar */}
+                  <div className="flex h-2 rounded-full overflow-hidden gap-px mb-2">
+                    {sectionVariants.filter(v => v.isActive !== false).map((v, i) => (
+                      <div
+                        key={v.id}
+                        style={{ width: `${100 / activeCount}%` }}
+                        className={v.isControl
+                          ? "bg-slate-400 dark:bg-slate-500"
+                          : `bg-primary opacity-${Math.max(100 - i * 15, 60)}`
+                        }
+                        title={`${v.isControl ? "Control" : `Variant ${i}`}: ~${Math.round(100 / activeCount)}%`}
+                      />
+                    ))}
+                  </div>
+                  <div className="flex justify-between text-[10px] text-muted-foreground mb-2">
+                    {sectionVariants.filter(v => v.isActive !== false).map((v, i) => (
+                      <span key={v.id}>{v.isControl ? "Control" : `V${i}`} ~{Math.round(100 / activeCount)}%</span>
+                    ))}
+                  </div>
+                  <div className="text-[10px] text-muted-foreground">
+                    Test exposure: {trafficPct}% of visitors participate
+                    {trafficPct < 100 && ` (${100 - trafficPct}% always see original)`}
+                  </div>
+                  <input
+                    type="range"
+                    min="10"
+                    max="100"
+                    step="10"
+                    value={trafficPct}
+                    onChange={e => setTrafficPct(Number(e.target.value))}
+                    onMouseUp={e => trafficMutation.mutate(Number((e.target as HTMLInputElement).value))}
+                    onTouchEnd={e => trafficMutation.mutate(Number((e.target as HTMLInputElement).value))}
+                    className="w-full h-1.5 accent-primary cursor-pointer mt-2"
+                    data-testid={`slider-traffic-${section.id}`}
+                  />
+                  <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                    <span>10% exposed</span>
+                    <span className="font-medium text-emerald-600 dark:text-emerald-400">100% = equal split (default)</span>
+                  </div>
                 </div>
-                <input
-                  type="range"
-                  min="10"
-                  max="100"
-                  step="10"
-                  value={trafficPct}
-                  onChange={e => setTrafficPct(Number(e.target.value))}
-                  onMouseUp={e => trafficMutation.mutate(Number((e.target as HTMLInputElement).value))}
-                  onTouchEnd={e => trafficMutation.mutate(Number((e.target as HTMLInputElement).value))}
-                  className="w-full h-1.5 accent-primary cursor-pointer"
-                  data-testid={`slider-traffic-${section.id}`}
-                />
-                <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
-                  <span>10% test</span>
-                  <span>50/50 split</span>
-                  <span>100% test</span>
-                </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Control text from scan */}
             {section.currentText && (
