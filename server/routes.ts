@@ -4797,9 +4797,93 @@ export async function registerRoutes(server: Server, app: Express) {
         topInsight = `All traffic coming from ${label.charAt(0).toUpperCase() + label.slice(1)}`;
       }
 
-      // Combine source + device insights
-      const combinedInsight = [topInsight, deviceInsight].filter(Boolean).join(" · ");
-      return res.json({ sources, devices, topInsight: combinedInsight, deviceInsight });
+      // Average time on page — time_on_page lives in visitor_sessions, joined via visitor_id
+      const timeRows = await pgPool.query(
+        `SELECT
+          COALESCE(v.traffic_source, 'direct') AS source,
+          ROUND(AVG(vs.time_on_page)) AS avg_time_on_page,
+          ROUND(AVG(CASE WHEN v.converted = true THEN vs.time_on_page ELSE NULL END)) AS buyer_avg_time,
+          ROUND(AVG(CASE WHEN v.converted = false THEN vs.time_on_page ELSE NULL END)) AS visitor_avg_time
+        FROM visitor_sessions vs
+        JOIN visitors v ON v.id = vs.visitor_id
+        WHERE vs.campaign_id = $1 AND vs.time_on_page IS NOT NULL AND vs.time_on_page > 0
+        GROUP BY COALESCE(v.traffic_source, 'direct')`,
+        [campaignId]
+      );
+      const timeBySource: Record<string, { avgTime: number; buyerAvgTime: number; visitorAvgTime: number }> = {};
+      let overallAvgTime = 0;
+      let overallBuyerAvgTime = 0;
+      for (const row of timeRows.rows) {
+        timeBySource[row.source] = {
+          avgTime: parseInt(row.avg_time_on_page) || 0,
+          buyerAvgTime: parseInt(row.buyer_avg_time) || 0,
+          visitorAvgTime: parseInt(row.visitor_avg_time) || 0,
+        };
+      }
+      // Compute overall average from visitor_sessions
+      const overallTimeRow = await pgPool.query(
+        `SELECT
+          ROUND(AVG(vs.time_on_page)) AS avg_time,
+          ROUND(AVG(CASE WHEN v.converted = true THEN vs.time_on_page ELSE NULL END)) AS buyer_avg_time
+        FROM visitor_sessions vs
+        JOIN visitors v ON v.id = vs.visitor_id
+        WHERE vs.campaign_id = $1 AND vs.time_on_page IS NOT NULL AND vs.time_on_page > 0`,
+        [campaignId]
+      );
+      overallAvgTime = parseInt(overallTimeRow.rows[0]?.avg_time) || 0;
+      overallBuyerAvgTime = parseInt(overallTimeRow.rows[0]?.buyer_avg_time) || 0;
+
+      // Attach time data to sources
+      const sourcesWithTime = sources.map((s: any) => ({
+        ...s,
+        avgTimeOnPage: timeBySource[s.source]?.avgTime || 0,
+        buyerAvgTime: timeBySource[s.source]?.buyerAvgTime || 0,
+      }));
+
+      // Build smarter insights
+      const totalConversions = sources.reduce((sum: number, s: any) => sum + s.conversions, 0);
+      const totalVisitors = sources.reduce((sum: number, s: any) => sum + s.visitors, 0);
+      const mobilePct = mobile && totalVisitors > 0 ? Math.round((mobile.visitors / totalVisitors) * 100) : 0;
+      const insights: string[] = [];
+
+      // Time insight
+      if (overallAvgTime > 60) {
+        const mins = Math.floor(overallAvgTime / 60);
+        const secs = overallAvgTime % 60;
+        const timeStr = mins > 0 ? `${mins}m${secs > 0 ? ` ${secs}s` : ''}` : `${secs}s`;
+        insights.push(`Average visitor spends ${timeStr} on your page`);
+        if (overallBuyerAvgTime > 0 && overallBuyerAvgTime > overallAvgTime * 1.2) {
+          const bMins = Math.floor(overallBuyerAvgTime / 60);
+          const bSecs = overallBuyerAvgTime % 60;
+          const buyerStr = bMins > 0 ? `${bMins}m${bSecs > 0 ? ` ${bSecs}s` : ''}` : `${bSecs}s`;
+          insights.push(`Buyers spend ${buyerStr} on average — ${Math.round((overallBuyerAvgTime / overallAvgTime - 1) * 100)}% longer than non-buyers`);
+        }
+      }
+
+      // Conversion attribution insight
+      if (totalConversions === 0 && totalVisitors > 20) {
+        insights.push(`No conversions attributed to traffic sources yet — connect Stripe or Whop in Settings to see which sources actually convert`);
+      } else if (topInsight) {
+        insights.push(topInsight);
+      }
+      if (deviceInsight) insights.push(deviceInsight);
+
+      // Mobile dominance insight
+      if (mobilePct >= 70 && !deviceInsight) {
+        insights.push(`${mobilePct}% of visitors are on mobile — prioritize your mobile page experience`);
+      }
+
+      const combinedInsight = insights.slice(0, 2).join(" · ");
+      return res.json({
+        sources: sourcesWithTime,
+        devices,
+        topInsight: combinedInsight,
+        deviceInsight,
+        overallAvgTime,
+        overallBuyerAvgTime,
+        totalConversions,
+        mobilePct,
+      });
     } finally {
       await pgPool.end();
     }

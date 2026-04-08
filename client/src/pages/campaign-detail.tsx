@@ -2383,6 +2383,18 @@ interface TrafficSourcesData {
   sources: TrafficSourceRow[];
   devices: DeviceRow[];
   topInsight: string;
+  overallAvgTime: number;
+  overallBuyerAvgTime: number;
+  totalConversions: number;
+  mobilePct: number;
+}
+
+function formatDuration(seconds: number): string {
+  if (!seconds || seconds <= 0) return "—";
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m > 0) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  return `${s}s`;
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -2440,6 +2452,8 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
   const sources = data?.sources ?? [];
   const devices = data?.devices ?? [];
   const topInsight = data?.topInsight ?? "";
+  const overallAvgTime = data?.overallAvgTime ?? 0;
+  const overallBuyerAvgTime = data?.overallBuyerAvgTime ?? 0;
   const maxSourceVisitors = sources.length > 0 ? Math.max(...sources.map((s) => s.visitors)) : 1;
   const maxDeviceVisitors = devices.length > 0 ? Math.max(...devices.map((d) => d.visitors)) : 1;
 
@@ -2451,6 +2465,19 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
           Traffic Sources
         </CardTitle>
         <p className="text-xs text-muted-foreground">Conversion rate and revenue by traffic origin.</p>
+        {/* Overall avg time on page — shown in header when data is available */}
+        {overallAvgTime > 0 && (
+          <div className="flex items-center gap-4 pt-1">
+            <div className="text-[11px] text-muted-foreground">
+              <span className="font-semibold text-foreground">{formatDuration(overallAvgTime)}</span> avg time on page
+            </div>
+            {overallBuyerAvgTime > 0 && (
+              <div className="text-[11px] text-muted-foreground">
+                <span className="font-semibold text-green-600">{formatDuration(overallBuyerAvgTime)}</span> avg buyer time
+              </div>
+            )}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="space-y-5">
         {isLoading ? (
@@ -2487,6 +2514,9 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
                       <span className="font-medium text-foreground">{label}</span>
                       <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
                         <span>{row.visitors.toLocaleString()} visitors</span>
+                        {(row as any).avgTimeOnPage > 0 && (
+                          <span>⏱ {formatDuration((row as any).avgTimeOnPage)}</span>
+                        )}
                         <span className="font-semibold" style={{ color }}>{row.conversionRate}% CVR</span>
                         {row.revenue > 0 && (
                           <span>${row.revenue.toLocaleString()}</span>
@@ -2724,8 +2754,8 @@ function VisitorFeedPanel({ campaignId, campaignType }: { campaignId: number; ca
                     </div>
                     <div>
                       <div className="text-muted-foreground mb-1">Avg Time</div>
-                      <div className={`font-medium ${isLeadGen ? "text-blue-600" : "text-green-600"}`}>{s.buyerAvgTime}s</div>
-                      <div className="text-muted-foreground">{s.visitorAvgTime}s</div>
+                      <div className={`font-medium ${isLeadGen ? "text-blue-600" : "text-green-600"}`}>{formatDuration(s.buyerAvgTime)}</div>
+                      <div className="text-muted-foreground">{formatDuration(s.visitorAvgTime)}</div>
                     </div>
                     <div>
                       <div className="text-muted-foreground mb-1">Avg Clicks</div>
@@ -2804,7 +2834,7 @@ function VisitorFeedPanel({ campaignId, campaignType }: { campaignId: number; ca
                             {/* Behavior */}
                             <div className="flex gap-4 text-xs text-muted-foreground">
                               <span>↕ {v.maxScrollDepth}% scroll</span>
-                              <span>⏱ {v.timeOnPage}s on page</span>
+                              <span>⏱ {formatDuration(v.timeOnPage)} on page</span>
                               <span>{v.clickCount} clicks</span>
                             </div>
                             {v.referrer && (
