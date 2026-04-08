@@ -3642,77 +3642,101 @@ function TestSectionCard({
       {!isNotTestable && expanded && (
         <div className="border-t border-border">
           <CardContent className="pt-4">
-            {/* Traffic allocation slider */}
+            {/* Traffic Split — per-variant typed inputs */}
             {section.isActive && (() => {
-              // trafficPct = % of visitors who see a CHALLENGER variant.
-              // Control always gets the remaining (100 - trafficPct)%.
-              // Equal split: set to numChallengers / numVariants * 100
               const challengers = sectionVariants.filter(v => !v.isControl && v.isActive !== false);
               const numChallengers = Math.max(challengers.length, 1);
               const perChallengerPct = Math.round(trafficPct / numChallengers);
               const controlPct = 100 - trafficPct;
-              // Equal split point: e.g. 2 variants → 50%, 3 variants → 67%
               const equalSplitPct = Math.round((numChallengers / (numChallengers + 1)) * 100);
               const isEqualSplit = trafficPct === equalSplitPct;
+              const totalPct = controlPct + (perChallengerPct * numChallengers);
+              const isValid = totalPct === 100;
+
+              const handleControlChange = (val: number) => {
+                const clamped = Math.max(10, Math.min(90, val));
+                const newTrafficPct = 100 - clamped;
+                setTrafficPct(newTrafficPct);
+              };
+              const handleChallengerChange = (val: number) => {
+                const perChallenger = Math.max(5, Math.min(90, val));
+                const newTrafficPct = perChallenger * numChallengers;
+                const clamped = Math.max(10, Math.min(90, newTrafficPct));
+                setTrafficPct(clamped);
+              };
+              const commitTraffic = () => trafficMutation.mutate(trafficPct);
 
               return (
                 <div className="mb-4 p-3 rounded-lg bg-muted/30 border border-border">
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center justify-between mb-3">
                     <div className="flex items-center gap-1.5">
                       <Activity className="w-3 h-3 text-muted-foreground" />
                       <span className="text-xs font-medium">Traffic Split</span>
                     </div>
-                    <span className={`text-xs font-semibold tabular-nums ${
-                      isEqualSplit ? "text-emerald-600 dark:text-emerald-400" : "text-foreground"
-                    }`}>
-                      {isEqualSplit ? "Equal split" : `${trafficPct}% test · ${controlPct}% control`}
-                    </span>
-                  </div>
-                  {/* Visual bar: control (grey) + challengers (colored) */}
-                  <div className="flex h-2 rounded-full overflow-hidden gap-px mb-1.5">
-                    <div
-                      style={{ width: `${controlPct}%` }}
-                      className="bg-slate-300 dark:bg-slate-600"
-                      title={`Control: ${controlPct}%`}
-                    />
-                    {challengers.map((v, i) => (
-                      <div
-                        key={v.id}
-                        style={{ width: `${perChallengerPct}%` }}
-                        className="bg-primary"
-                        title={`Challenger ${i + 1}: ${perChallengerPct}%`}
-                      />
-                    ))}
-                  </div>
-                  <div className="flex justify-between text-[10px] text-muted-foreground mb-2">
-                    <span>Control {controlPct}%</span>
-                    {challengers.length > 1
-                      ? <span>{challengers.length} challengers × {perChallengerPct}%</span>
-                      : <span>Challenger {perChallengerPct}%</span>
-                    }
-                  </div>
-                  <input
-                    type="range"
-                    min="10"
-                    max="90"
-                    step="5"
-                    value={trafficPct}
-                    onChange={e => setTrafficPct(Number(e.target.value))}
-                    onMouseUp={e => trafficMutation.mutate(Number((e.target as HTMLInputElement).value))}
-                    onTouchEnd={e => trafficMutation.mutate(Number((e.target as HTMLInputElement).value))}
-                    className="w-full h-1.5 accent-primary cursor-pointer"
-                    data-testid={`slider-traffic-${section.id}`}
-                  />
-                  <div className="flex items-center justify-between text-[10px] text-muted-foreground mt-1">
-                    <span>10% test</span>
                     <button
                       onClick={() => { setTrafficPct(equalSplitPct); trafficMutation.mutate(equalSplitPct); }}
-                      className="text-primary underline hover:no-underline"
+                      className={`text-[11px] font-medium px-2 py-0.5 rounded-full transition-colors ${
+                        isEqualSplit
+                          ? "bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400"
+                          : "bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80"
+                      }`}
                     >
-                      Equal split ({equalSplitPct}%)
+                      {isEqualSplit ? "✓ Equal split" : "Reset to equal"}
                     </button>
-                    <span>90% test</span>
                   </div>
+
+                  {/* Visual bar */}
+                  <div className="flex h-1.5 rounded-full overflow-hidden gap-px mb-3">
+                    <div style={{ width: `${controlPct}%` }} className="bg-slate-300 dark:bg-slate-600 transition-all" />
+                    {challengers.map((v, i) => (
+                      <div key={v.id} style={{ width: `${perChallengerPct}%` }} className="bg-primary transition-all" />
+                    ))}
+                  </div>
+
+                  {/* Per-variant typed inputs */}
+                  <div className="flex gap-2">
+                    {/* Control */}
+                    <div className="flex-1">
+                      <div className="text-[10px] text-muted-foreground mb-1">Control (original)</div>
+                      <div className="flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1">
+                        <input
+                          type="number"
+                          min="10" max="90" step="5"
+                          value={controlPct}
+                          onChange={e => handleControlChange(Number(e.target.value))}
+                          onBlur={commitTraffic}
+                          onKeyDown={e => e.key === 'Enter' && commitTraffic()}
+                          className="w-full text-xs font-semibold bg-transparent outline-none tabular-nums"
+                          data-testid={`input-control-traffic-${section.id}`}
+                        />
+                        <span className="text-[10px] text-muted-foreground">%</span>
+                      </div>
+                    </div>
+                    {/* Challenger(s) */}
+                    {challengers.slice(0, 3).map((v, i) => (
+                      <div key={v.id} className="flex-1">
+                        <div className="text-[10px] text-muted-foreground mb-1">
+                          {challengers.length === 1 ? 'Challenger' : `Var ${i + 1}`}
+                        </div>
+                        <div className="flex items-center gap-1 rounded-md border border-primary/40 bg-background px-2 py-1">
+                          <input
+                            type="number"
+                            min="5" max="90" step="5"
+                            value={perChallengerPct}
+                            onChange={e => handleChallengerChange(Number(e.target.value))}
+                            onBlur={commitTraffic}
+                            onKeyDown={e => e.key === 'Enter' && commitTraffic()}
+                            className="w-full text-xs font-semibold bg-transparent outline-none tabular-nums text-primary"
+                            data-testid={`input-challenger-traffic-${section.id}-${i}`}
+                          />
+                          <span className="text-[10px] text-muted-foreground">%</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {!isValid && (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1.5">Values don\'t add up to 100% — adjust to fix</p>
+                  )}
                 </div>
               );
             })()}
