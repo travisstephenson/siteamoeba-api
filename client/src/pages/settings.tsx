@@ -608,6 +608,25 @@ function StripeIntegration({ userId }: { userId?: number }) {
 
       {expanded && (
         <div className="px-4 pb-4 pt-1 border-t border-border space-y-3">
+          {/* Webhook URL — always shown so user can set it up in Stripe */}
+          {userId && (
+            <div className="rounded-md border border-border bg-muted/40 p-3 space-y-1.5">
+              <p className="text-xs font-semibold">Stripe Webhook URL</p>
+              <p className="text-[11px] text-muted-foreground">
+                Add this in <a href="https://dashboard.stripe.com/webhooks" target="_blank" rel="noreferrer" className="underline">Stripe Dashboard → Webhooks</a>.
+                Listen for <code className="bg-muted px-0.5 rounded">checkout.session.completed</code> and <code className="bg-muted px-0.5 rounded">payment_intent.succeeded</code>.
+                SiteAmoeba will automatically match every payment to the right visitor — no revenue amount needed in the pixel.
+              </p>
+              <div className="flex items-center gap-2 mt-1">
+                <code className="text-[11px] bg-muted px-2 py-1 rounded flex-1 overflow-auto select-all whitespace-nowrap">
+                  {getApiBaseUrl()}/api/webhooks/stripe/account/{userId}
+                </code>
+                <Button size="sm" variant="outline" className="shrink-0 h-7 text-xs" onClick={() =>
+                  navigator.clipboard.writeText(getApiBaseUrl() + "/api/webhooks/stripe/account/" + userId)
+                }>Copy</Button>
+              </div>
+            </div>
+          )}
           {statusLoading ? (
             <Skeleton className="h-10 w-full" />
           ) : isConnected ? (

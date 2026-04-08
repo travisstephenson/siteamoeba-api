@@ -766,6 +766,8 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
 
       // 3b. Append sa_vid to all checkout/payment links so it survives cross-domain redirect
       // Covers Stripe, ThriveCart, PayPal, Whop, Kajabi, ClickFunnels, GHL, etc.
+      // For Stripe Payment Links (buy.stripe.com) we ALSO inject client_reference_id=sa_vid
+      // so the Stripe webhook can attribute the purchase directly to this visitor.
       var CHECKOUT_PATTERNS = [
         'checkout.stripe.com', 'buy.stripe.com',
         'thrivecart.com', 'whop.com', 'paypal.com', 'pay.paypal.com',
@@ -781,7 +783,14 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
             if (href.indexOf(CHECKOUT_PATTERNS[p]) !== -1) { isCheckout = true; break; }
           }
           if (isCheckout && href.indexOf("sa_vid") === -1) {
-            links[l].setAttribute("href", href + (href.indexOf("?") !== -1 ? "&" : "?") + "sa_vid=" + vid);
+            var sep = href.indexOf("?") !== -1 ? "&" : "?";
+            href = href + sep + "sa_vid=" + vid;
+            // For Stripe Payment Links, also inject client_reference_id so the
+            // server-side webhook can match the purchase directly to this visitor.
+            if (href.indexOf("buy.stripe.com") !== -1 || href.indexOf("checkout.stripe.com") !== -1) {
+              href = href + "&client_reference_id=" + vid;
+            }
+            links[l].setAttribute("href", href);
           }
         } catch(e) {}
       }

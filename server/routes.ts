@@ -3109,18 +3109,51 @@ export async function registerRoutes(server: Server, app: Express) {
     // Attribution runs async after response is sent
     const vid = (req.query.vid || req.query.sa_vid) as string;
     const cid = req.query.cid as string;
-    const amount = parseFloat(req.query.revenue as string) || 0;
+    let amount = parseFloat(req.query.revenue as string) || 0;
     const product = req.query.product as string | undefined;
     const email = req.query.email as string | undefined;
     const mode = req.query.mode as string | undefined;
+    // payment_intent — Stripe puts this in the success URL automatically
+    // e.g. ?payment_intent=pi_xxx — we look it up to get the REAL amount + email
+    const paymentIntent = req.query.payment_intent as string | undefined;
+    const paymentIntentSecret = req.query.payment_intent_client_secret as string | undefined;
 
     if (!vid || !cid) return;
     try {
+      // If payment_intent is provided AND Stripe is connected for this campaign's user,
+      // fetch the real amount and email directly from Stripe — no manual revenue needed
+      let stripeEmail: string | undefined = email;
+      if (paymentIntent && paymentIntent.startsWith("pi_")) {
+        try {
+          const campaign = await storage.getCampaign(parseInt(cid));
+          if (campaign) {
+            const campaignUser = await storage.getUserById(campaign.userId);
+            if (campaignUser && (campaignUser as any).stripeAccessToken) {
+              const decryptedKey = decryptApiKey((campaignUser as any).stripeAccessToken);
+              if (decryptedKey.startsWith("sk_") || decryptedKey.startsWith("rk_")) {
+                const stripeClient = new Stripe(decryptedKey);
+                const pi = await stripeClient.paymentIntents.retrieve(paymentIntent);
+                if (pi.status === "succeeded") {
+                  amount = pi.amount_received / 100;
+                  stripeEmail = pi.receipt_email ||
+                    (pi as any).charges?.data?.[0]?.billing_details?.email ||
+                    stripeEmail;
+                  console.log(`[pixel] Stripe PI ${paymentIntent} → $${amount} ${stripeEmail || ""}`);
+                }
+              }
+            }
+          }
+        } catch (piErr) {
+          // Non-fatal — fall back to the revenue param
+          console.warn("[pixel] PI lookup failed:", piErr);
+        }
+      }
+
       await recordPurchaseEvent({
         vid,
         pixelCampaignId: parseInt(cid),
         amount,
-        customerEmail: email,
+        customerEmail: stripeEmail,
         product,
         source: mode === "convert" ? "oto_pixel" : "pixel",
       });
@@ -3399,6 +3432,181 @@ export async function registerRoutes(server: Server, app: Express) {
       await pgPool.end();
     }
   }
+
+  // ──────────────────────────────────────────────────────────────
+  // USER-LEVEL STRIPE WEBHOOK
+  // POST /api/webhooks/stripe/account/:userId
+  //
+  // The widget injects ?sa_vid=<id>&client_reference_id=<id> into every
+  // buy.stripe.com Payment Link. Stripe passes client_reference_id through to
+  // the checkout.session.completed webhook event, giving us a direct visitor
+  // match without needing the pixel to fire at all.
+  //
+  // Attribution chain (in order):
+  //   1. client_reference_id matches a v_xxx visitor  → direct match
+  //   2. metadata.sa_vid matches a visitor            → direct match
+  //   3. customer email matches a known visitor       → email match
+  //   4. charge date >= campaign creation AND only 1 active campaign → assign
+  //   5. Skip — do not guess
+  // ──────────────────────────────────────────────────────────────
+  app.post("/api/webhooks/stripe/account/:userId", async (req: Request, res: Response) => {
+    try {
+      const userId = paramId(req.params.userId);
+      const user = await storage.getUserById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      // Optional signature verification using the user's stored webhook secret
+      const webhookSecret = (user as any).stripeWebhookSecret;
+      if (webhookSecret && stripe) {
+        const sig = req.headers["stripe-signature"] as string;
+        if (sig && req.rawBody) {
+          try {
+            stripe.webhooks.constructEvent(req.rawBody as Buffer, sig, webhookSecret);
+          } catch {
+            return res.status(400).json({ error: "Invalid signature" });
+          }
+        }
+      }
+
+      const event = req.body;
+      const eventType: string = event.type;
+      const obj = event.data?.object || {};
+
+      if (
+        eventType === "checkout.session.completed" ||
+        eventType === "payment_intent.succeeded" ||
+        eventType === "charge.succeeded"
+      ) {
+        const amountRaw = obj.amount_total ?? obj.amount_received ?? obj.amount ?? 0;
+        const amount = amountRaw / 100;
+        const customerEmail =
+          obj.customer_details?.email || obj.receipt_email ||
+          obj.customer_email || obj.metadata?.customer_email || null;
+        const externalId = obj.id || event.id;
+        const metadata = obj.metadata || {};
+
+        // Attribution chain
+        let resolvedVisitorId: string | null = null;
+        let resolvedCampaignId: number | null = null;
+
+        // 1. client_reference_id (set by widget on Stripe Payment Links)
+        const clientRef = obj.client_reference_id || metadata.sa_vid || null;
+        if (clientRef && /^v_[a-z0-9_]+$/.test(clientRef)) {
+          const visitor = await storage.getVisitor(clientRef);
+          if (visitor) {
+            resolvedVisitorId = visitor.id;
+            resolvedCampaignId = visitor.campaignId;
+          }
+        }
+
+        // 2. Email match across all user campaigns
+        if (!resolvedVisitorId && customerEmail) {
+          const emailMatch = await pool.query(
+            `SELECT v.id, v.campaign_id FROM visitors v
+             JOIN campaigns c ON c.id = v.campaign_id
+             WHERE c.user_id = $1 AND (
+               v.customer_email = $2 OR
+               v.id IN (SELECT re.visitor_id FROM revenue_events re WHERE re.customer_email = $2 AND re.visitor_id IS NOT NULL)
+             )
+             ORDER BY v.first_seen ASC LIMIT 1`,
+            [userId, customerEmail]
+          );
+          if (emailMatch.rows.length > 0) {
+            resolvedVisitorId = emailMatch.rows[0].id;
+            resolvedCampaignId = emailMatch.rows[0].campaign_id;
+          }
+        }
+
+        // 3. If no match but charge date >= campaign launch, assign to active campaign
+        if (!resolvedCampaignId) {
+          const chargeDate = new Date((obj.created || Date.now() / 1000) * 1000);
+          const userCampaigns = await storage.getCampaignsByUser(userId);
+          const matchedCampaign = userCampaigns.find((c: any) =>
+            c.status === "active" && c.isActive &&
+            chargeDate >= new Date(c.createdAt)
+          ) ?? null;
+          if (matchedCampaign) resolvedCampaignId = matchedCampaign.id;
+        }
+
+        if (!resolvedCampaignId) {
+          return res.json({ received: true, attributed: false, reason: "no campaign match" });
+        }
+
+        // Dedup by external_id
+        const existing = await pool.query(
+          `SELECT id FROM revenue_events WHERE external_id = $1 LIMIT 1`, [externalId]
+        );
+        if (existing.rows.length === 0) {
+          await storage.addRevenueEvent({
+            visitorId: resolvedVisitorId || undefined,
+            campaignId: resolvedCampaignId,
+            source: "stripe_webhook",
+            eventType: "purchase",
+            amount,
+            currency: (obj.currency || "usd").toUpperCase(),
+            externalId,
+            customerEmail: customerEmail || undefined,
+            metadata: JSON.stringify({ clientRef, chargeDate: new Date((obj.created || 0) * 1000).toISOString() }),
+          });
+        }
+
+        // Mark the visitor as converted with the REAL amount from Stripe
+        if (resolvedVisitorId) {
+          const visitor = await storage.getVisitor(resolvedVisitorId);
+          if (visitor && !visitor.converted) {
+            await storage.markConverted(resolvedVisitorId, externalId, amount, customerEmail || undefined);
+          } else if (visitor && visitor.converted && amount > 0) {
+            // Upsell — accumulate revenue on the visitor so CVR stays accurate
+            await pool.query(
+              `UPDATE visitors SET revenue = COALESCE(revenue, 0) + $1 WHERE id = $2`,
+              [amount, resolvedVisitorId]
+            );
+          }
+          // Store email for future upsell attribution
+          if (customerEmail && !visitor?.customerEmail) {
+            await pool.query(
+              `UPDATE visitors SET customer_email = $1 WHERE id = $2`,
+              [customerEmail, resolvedVisitorId]
+            );
+          }
+        }
+
+        console.log(`[stripe-webhook] ${eventType} $${amount} — visitor: ${resolvedVisitorId || "unmatched"} campaign: ${resolvedCampaignId}`);
+        return res.json({ received: true, attributed: !!resolvedVisitorId, campaignId: resolvedCampaignId });
+      }
+
+      if (eventType === "charge.refunded") {
+        const amount = (obj.amount_refunded || 0) / 100;
+        const externalId = `refund_${obj.id || event.id}`;
+        const customerEmail = obj.receipt_email || null;
+        // Find which campaign to attribute the refund to
+        const userCampaigns = await storage.getCampaignsByUser(userId);
+        if (userCampaigns.length > 0) {
+          const emailCampaign = customerEmail
+            ? await pool.query(
+                `SELECT campaign_id FROM revenue_events WHERE customer_email = $1 LIMIT 1`,
+                [customerEmail]
+              )
+            : { rows: [] };
+          const campaignId = emailCampaign.rows[0]?.campaign_id ?? userCampaigns[0].id;
+          await storage.addRevenueEvent({
+            campaignId,
+            source: "stripe_webhook",
+            eventType: "refund",
+            amount: -amount,
+            externalId,
+            customerEmail: customerEmail || undefined,
+          });
+        }
+        return res.json({ received: true });
+      }
+
+      res.json({ received: true });
+    } catch (err) {
+      console.error("[stripe-webhook] error:", err);
+      res.status(422).json({ error: "Webhook processing failed" });
+    }
+  });
 
   // A) Stripe webhook: POST /api/webhooks/stripe/:campaignId
   app.post("/api/webhooks/stripe/:campaignId", async (req: Request, res: Response) => {
