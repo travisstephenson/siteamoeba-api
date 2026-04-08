@@ -967,7 +967,10 @@ function CampaignWizard({
                     <div>
                       <p className="text-sm font-medium">Analyzing your page structure…</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        Identifying testable sections with AI
+                        {user?.llmProvider === "manus"
+                          ? "Manus is working extra hard on your behalf — this may take a few minutes."
+                          : "Identifying testable sections with AI"
+                        }
                       </p>
                     </div>
                   </div>
