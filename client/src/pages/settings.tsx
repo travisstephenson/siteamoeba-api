@@ -48,6 +48,11 @@ function AIConfigCard({ currentProvider }: { currentProvider?: string | null }) 
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // Sync provider state if the prop updates (e.g. after parent re-fetches user)
+  useEffect(() => {
+    if (currentProvider && !saved) setProvider(currentProvider);
+  }, [currentProvider]);
+
   const mutation = useMutation({
     mutationFn: async () => {
       const res = await apiRequest("PATCH", "/api/settings/llm", {
@@ -64,6 +69,9 @@ function AIConfigCard({ currentProvider }: { currentProvider?: string | null }) 
     onSuccess: () => {
       setSaved(true);
       setApiKey(""); // Clear key from UI after save
+      // Refresh user data so the badge and parent state reflect the new provider
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/settings"] });
       toast({ title: "AI provider saved", description: `Now using ${PROVIDER_LABELS[provider] || provider}` });
       setTimeout(() => setSaved(false), 3000);
     },
