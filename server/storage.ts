@@ -1316,7 +1316,6 @@ class StorageImpl implements IStorage {
       `SELECT
         COUNT(*) as total_visitors,
         COUNT(CASE WHEN v.converted = true THEN 1 END) as total_buyers,
-        COALESCE(SUM(CASE WHEN v.converted = true THEN v.revenue ELSE 0 END), 0) as total_revenue,
         ROUND(AVG(CASE WHEN v.converted = true THEN vs.max_scroll_depth END)) as buyer_avg_scroll,
         ROUND(AVG(CASE WHEN v.converted = false THEN vs.max_scroll_depth END)) as visitor_avg_scroll,
         ROUND(AVG(CASE WHEN v.converted = true THEN vs.time_on_page END)) as buyer_avg_time,
@@ -1330,6 +1329,27 @@ class StorageImpl implements IStorage {
     );
 
     const summary = summaryResult.rows[0] || {};
+
+    // Fetch total revenue from revenue_events (includes upsells, not just first purchase)
+    const revenueResult = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) as total FROM revenue_events WHERE campaign_id = $1`,
+      [campaignId]
+    );
+    const totalRevenue = parseFloat(revenueResult.rows[0]?.total) || 0;
+
+    // For each conversion in the feed, also sum all revenue_events for that visitor
+    // so upsells are reflected in the individual conversion card
+    const visitorRevenueResult = await pool.query(
+      `SELECT visitor_id, SUM(amount) as total
+       FROM revenue_events
+       WHERE campaign_id = $1 AND visitor_id IS NOT NULL
+       GROUP BY visitor_id`,
+      [campaignId]
+    );
+    const visitorRevMap: Record<string, number> = {};
+    for (const row of visitorRevenueResult.rows) {
+      visitorRevMap[row.visitor_id] = parseFloat(row.total) || 0;
+    }
 
     const mapRow = (r: any) => {
       let device = r.device_type || "desktop";
@@ -1347,7 +1367,8 @@ class StorageImpl implements IStorage {
         sectionsViewed: r.sections_viewed ? (() => { try { return JSON.parse(r.sections_viewed); } catch { return []; } })() : [],
         converted: r.converted || false,
         convertedAt: r.converted_at || null,
-        revenue: r.revenue ? parseFloat(r.revenue) : 0,
+        // Use sum of all revenue_events for this visitor (captures upsells)
+        revenue: visitorRevMap[r.visitor_id] ?? (r.revenue ? parseFloat(r.revenue) : 0),
         createdAt: r.first_seen,
         headlineVariant: r.headline_variant || null,
         headlineIsControl: r.headline_is_control || false,
@@ -1364,7 +1385,7 @@ class StorageImpl implements IStorage {
       summary: {
         totalVisitors: parseInt(summary.total_visitors) || 0,
         totalBuyers: parseInt(summary.total_buyers) || 0,
-        totalRevenue: parseFloat(summary.total_revenue) || 0,
+        totalRevenue, // from revenue_events — includes all upsells
         buyerAvgScroll: parseInt(summary.buyer_avg_scroll) || 0,
         visitorAvgScroll: parseInt(summary.visitor_avg_scroll) || 0,
         buyerAvgTime: parseInt(summary.buyer_avg_time) || 0,
@@ -1382,15 +1403,17 @@ class StorageImpl implements IStorage {
     convertedAvgScroll: number;
     nonConvertedAvgScroll: number;
   }> {
+    // visitor_sessions does NOT have a converted column — must join visitors
     const result = await pool.query(
       `SELECT
-        AVG(max_scroll_depth) as avg_scroll,
-        AVG(time_on_page) as avg_time,
-        AVG(CASE WHEN video_played THEN 1.0 ELSE 0.0 END) as video_rate,
-        AVG(CASE WHEN converted THEN max_scroll_depth END) as converted_scroll,
-        AVG(CASE WHEN NOT converted THEN max_scroll_depth END) as non_converted_scroll
-       FROM visitor_sessions
-       WHERE campaign_id = $1`,
+        AVG(vs.max_scroll_depth) as avg_scroll,
+        AVG(vs.time_on_page) as avg_time,
+        AVG(CASE WHEN vs.video_played THEN 1.0 ELSE 0.0 END) as video_rate,
+        AVG(CASE WHEN v.converted = true THEN vs.max_scroll_depth END) as converted_scroll,
+        AVG(CASE WHEN v.converted = false THEN vs.max_scroll_depth END) as non_converted_scroll
+       FROM visitor_sessions vs
+       JOIN visitors v ON v.id = vs.visitor_id
+       WHERE vs.campaign_id = $1`,
       [campaignId]
     );
     const r = result.rows[0] || {};

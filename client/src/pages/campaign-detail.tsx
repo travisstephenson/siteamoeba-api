@@ -4976,9 +4976,24 @@ export default function CampaignDetailPage() {
 
   const handleConversionsClick = () => {
     setScrollToFeed(n => n + 1);
+    // scrollIntoView works on the nearest scrollable ancestor
+    // The page uses a flex child with overflow-y-auto, so we scroll that container
     setTimeout(() => {
-      visitorFeedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 50);
+      const el = visitorFeedRef.current;
+      if (!el) return;
+      // Walk up to find the scrollable parent
+      let parent = el.parentElement;
+      while (parent && parent !== document.body) {
+        const style = window.getComputedStyle(parent);
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+          parent.scrollTo({ top: el.offsetTop - 24, behavior: 'smooth' });
+          return;
+        }
+        parent = parent.parentElement;
+      }
+      // Fallback to native scrollIntoView
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
   };
 
   const restartMutation = useMutation({
