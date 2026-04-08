@@ -1621,11 +1621,16 @@ export async function registerRoutes(server: Server, app: Express) {
     // 40KB covers essentially every sales/landing page in full
     const cleaned = (titleText + bodyText).slice(0, 40000);
 
-    const messages = buildPageScanPrompt(url, cleaned);
+    // Manus is an autonomous agent — sending it a huge prompt causes it to
+    // browse, plan, and write reports. Cap the content and use a minimal
+    // directive prompt so it responds with JSON directly.
+    const isManus = llmConfigResolved.config.provider === "manus";
+    const pageContent = isManus ? cleaned.slice(0, 8000) : cleaned;
+    const messages = buildPageScanPrompt(url, pageContent, isManus);
 
     let rawResponse: string;
     try {
-      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 8000 });
+      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 4000 });
     } catch (err: any) {
       console.error("Page scan LLM call failed:", err);
       scanJobs.set(jobId, { status: "error", error: err.message || "AI provider error. Check your API key and credits in Settings.", createdAt: Date.now() }); return;

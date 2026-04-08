@@ -257,7 +257,27 @@ Return ONLY the JSON array, no other text.`;
 // PAGE SCAN PROMPT
 // ============================================================
 
-export function buildPageScanPrompt(url: string, htmlContent: string): LLMMessage[] {
+export function buildPageScanPrompt(url: string, htmlContent: string, minimal = false): LLMMessage[] {
+  // Manus minimal mode: short directive prompt — no system/user split, no brain context.
+  // Tells Manus to skip its agent planning loop and just return JSON.
+  if (minimal) {
+    const minimalPrompt = `Return ONLY a valid JSON object — no browsing, no planning, no explanation. Analyze the page content below and identify testable sections.
+
+Required JSON format:
+{"pageName":"...","pageType":"sales_page|opt_in_page|product_page|landing_page|service_page","pageGoal":"direct_purchase|lead_capture|webinar_signup|free_trial","pricePoint":"$XX or null","niche":"brief descriptor","sections":[{"id":"hero-headline","label":"Hero Headline","purpose":"...","selector":"h1","currentText":"...","testPriority":1,"category":"headline","testMethod":"text_swap"}]}
+
+Section categories: headline (ONE only — the very first hero headline), subheadline (ONE only), cta, social_proof, guarantee, hero_journey, pricing, faq, testimonials, body_copy, product_stack, bonus
+testMethod: text_swap | html_swap | visibility_toggle | not_testable
+Priority order: headline(1) > cta(2-3) > social_proof(4-5) > guarantee(6) > others
+
+Page URL: ${url}
+Page content:
+${htmlContent}
+
+Return only the JSON object, nothing else.`;
+    return [{ role: "user", content: minimalPrompt }];
+  }
+
   const systemPrompt = `You are an expert conversion rate optimization (CRO) analyst and direct-response copywriter. Your task is to analyze the HTML of a web page and identify all distinct, testable content sections.
 
 For each section you identify, you must:
