@@ -292,10 +292,12 @@ function VariantComparisonChart({
       for (const section of activeSections) {
         const sectionVars = variants
           .filter((v) => {
-            // Match variants directly linked to this section
+            if (placed.has(v.id)) return false;
+            // Direct link via testSectionId
             if (v.testSectionId === section.id) return true;
-            // Also match control variants by type for this section (controls often lack testSectionId)
-            if (!v.testSectionId && v.isControl && v.type === section.category) {
+            // Fallback: match by type when testSectionId is null
+            // (covers controls AND challengers that were added before testSectionId was set)
+            if (!v.testSectionId && v.type === section.category) {
               // Only match if there's exactly one active section of this category
               const sameCatActive = activeSections.filter((s2) => s2.category === section.category);
               return sameCatActive.length <= 1;
@@ -304,9 +306,10 @@ function VariantComparisonChart({
           })
           .sort((a, b) => (b.conversionRate ?? 0) - (a.conversionRate ?? 0));
 
-        // Only show sections with a real test (2+ variants: at least control + challenger)
+        // Show section if it has at least 1 control + 1 challenger (real test running)
+        const hasControl = sectionVars.some((v) => v.isControl);
         const hasChallenger = sectionVars.some((v) => !v.isControl);
-        if (sectionVars.length > 1 && hasChallenger) {
+        if (hasControl && hasChallenger) {
           sectionVars.forEach((v) => placed.add(v.id));
           groups.push({
             key: `section-${section.id}`,
