@@ -1059,7 +1059,7 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(400).json({ error: "provider and apiKey are required" });
     }
 
-    const validProviders = ["anthropic", "openai", "gemini", "mistral", "xai", "meta"];
+    const validProviders = ["anthropic", "openai", "gemini", "mistral", "xai", "meta", "manus"];
     if (!validProviders.includes(provider)) {
       return res.status(400).json({ error: "Invalid provider" });
     }

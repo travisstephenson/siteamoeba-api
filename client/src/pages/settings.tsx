@@ -37,6 +37,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   mistral: "Mistral AI",
   xai: "xAI / Grok",
   meta: "Meta / Llama (via Groq)",
+  manus: "Manus (Autonomous Agent)",
 };
 
 function AIConfigCard({ currentProvider }: { currentProvider?: string | null }) {
@@ -110,9 +111,16 @@ function AIConfigCard({ currentProvider }: { currentProvider?: string | null }) 
               <SelectItem value="mistral">Mistral AI</SelectItem>
               <SelectItem value="xai">xAI / Grok</SelectItem>
               <SelectItem value="meta">Meta / Llama (via Groq)</SelectItem>
+              <SelectItem value="manus">Manus (Autonomous Agent)</SelectItem>
             </SelectContent>
           </Select>
         </div>
+
+        {provider === "manus" && (
+          <div className="rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+            Manus is an autonomous agent — it plans and executes tasks independently rather than responding instantly. Brain Chat responses may take 1–5 minutes. Best suited for deep research and CRO reports.
+          </div>
+        )}
 
         <div className="space-y-2">
           <Label htmlFor="ai-api-key" className="text-xs font-medium">API Key</Label>

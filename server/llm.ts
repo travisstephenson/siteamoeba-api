@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 
 export interface LLMConfig {
-  provider: "anthropic" | "openai" | "gemini" | "mistral" | "xai" | "meta";
+  provider: "anthropic" | "openai" | "gemini" | "mistral" | "xai" | "meta" | "manus";
   apiKey: string;
   model?: string; // optional override
 }
@@ -65,6 +65,7 @@ const DEFAULT_MODELS: Record<LLMConfig["provider"], string> = {
   mistral: "mistral-large-latest",
   xai: "grok-2",
   meta: "llama-3.1-70b-versatile",
+  manus: "default", // Manus uses agent profiles, not chat models
 };
 
 const OPENAI_COMPATIBLE_BASE_URLS: Partial<Record<LLMConfig["provider"], string>> = {
@@ -208,6 +209,7 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   mistral: "Mistral",
   xai: "xAI (Grok)",
   meta: "Meta/Groq (Llama)",
+  manus: "Manus",
 };
 
 export async function callLLM(
@@ -231,6 +233,61 @@ async function _callLLMInternal(
   model: string,
   maxTokens?: number
 ): Promise<string> {
+
+  // Manus: autonomous agent API — creates a task, polls until complete, returns result text
+  if (config.provider === "manus") {
+    // Collapse messages into a single task prompt for Manus
+    const systemMsg = messages.find((m) => m.role === "system");
+    const lastUser = [...messages].reverse().find((m) => m.role === "user");
+    const taskContent = [
+      systemMsg ? `Context:\n${systemMsg.content}` : "",
+      lastUser ? lastUser.content : "",
+    ].filter(Boolean).join("\n\n");
+
+    // Create task
+    const createRes = await fetch("https://api.manus.ai/v2/task.create", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-manus-api-key": config.apiKey,
+      },
+      body: JSON.stringify({ message: { content: taskContent } }),
+    });
+    if (!createRes.ok) {
+      const errBody = await createRes.json().catch(() => ({}));
+      throw new Error(errBody?.error?.message || `Manus API error ${createRes.status}`);
+    }
+    const created = await createRes.json();
+    if (!created.ok) throw new Error(created.error?.message || "Manus task creation failed");
+    const taskId = created.data?.id;
+    if (!taskId) throw new Error("Manus did not return a task ID");
+
+    // Poll for completion (max 5 minutes, 6s interval)
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 6000));
+      const pollRes = await fetch(`https://api.manus.ai/v2/task.get?task_id=${taskId}`, {
+        headers: { "x-manus-api-key": config.apiKey },
+      });
+      if (!pollRes.ok) continue;
+      const poll = await pollRes.json();
+      const status = poll.data?.status;
+      if (status === "completed" || status === "success") {
+        // Extract text from result
+        const result = poll.data?.result;
+        if (typeof result === "string") return result;
+        if (result?.content) return result.content;
+        if (result?.text) return result.text;
+        // Fallback: stringify whatever we got
+        return JSON.stringify(result);
+      }
+      if (status === "failed" || status === "error" || status === "cancelled") {
+        throw new Error(`Manus task ${status}: ${poll.data?.error || "unknown error"}`);
+      }
+      // Still running — keep polling
+    }
+    throw new Error("Manus task timed out after 5 minutes.");
+  }
 
   if (config.provider === "anthropic") {
     const client = new Anthropic({ apiKey: config.apiKey });
