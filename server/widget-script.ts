@@ -168,7 +168,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     // contains the expected control text. Without this, text gets distributed across 20+ H1s.
     if (elements.length > 1) {
       var fp = (currentText || controlText || "").trim().toLowerCase();
-      var fpTokens = fp.split(/\s+/).filter(function(w) { return w.length > 2; }).slice(0, 6);
+      var fpTokens = fp.split(/ +/).filter(function(w) { return w.length > 2; }).slice(0, 6);
       if (fpTokens.length >= 2) {
         var filtered = [];
         for (var fi = 0; fi < elements.length; fi++) {
@@ -189,7 +189,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     // Uses token scoring so minor text changes (added words, punctuation) still match.
     var fingerprints = [currentText, controlText].filter(Boolean);
     for (var fp = 0; fp < fingerprints.length; fp++) {
-      var tokens = (fingerprints[fp] || "").trim().toLowerCase().split(/\\s+/).filter(function(w) { return w.length > 2; });
+      var tokens = (fingerprints[fp] || "").trim().toLowerCase().split(/ +/).filter(function(w) { return w.length > 2; });
       if (tokens.length === 0) continue;
 
       // Choose candidate tags based on element category
@@ -228,7 +228,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     // STRATEGY 3: Broader fallback — any visible text node that partially overlaps
     // Last resort. Searches all block-level elements for any token overlap.
     if (fingerprints.length > 0) {
-      var anyTokens = (fingerprints[0] || "").trim().toLowerCase().split(/\\s+/)
+      var anyTokens = (fingerprints[0] || "").trim().toLowerCase().split(/ +/)
         .filter(function(w) { return w.length > 3; }).slice(0, 3);
       if (anyTokens.length > 0) {
         var allEls = document.querySelectorAll("h1,h2,h3,h4,p,button,a,span,div");
@@ -257,7 +257,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   function validateRender(el, variantText) {
     if (!el || !variantText) return true;
     var actual = (el.textContent || "").trim().toLowerCase();
-    var words = variantText.trim().toLowerCase().split(/\s+/).filter(function(w) { return w.length > 2; }).slice(0, 6);
+    var words = variantText.trim().toLowerCase().split(/ +/).filter(function(w) { return w.length > 2; }).slice(0, 6);
     if (words.length < 2) return true; // too short to validate
     var found = 0;
     for (var i = 0; i < words.length; i++) { if (actual.indexOf(words[i]) !== -1) found++; }
@@ -315,7 +315,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     }
 
     // Split variant text into words
-    var words = text.split(/\s+/).filter(Boolean);
+    var words = text.split(/ +/).filter(Boolean);
     if (words.length === 0) return;
 
     // Distribute words across elements proportionally
