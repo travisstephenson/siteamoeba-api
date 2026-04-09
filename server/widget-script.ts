@@ -281,6 +281,23 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
 
     var allElements = findElements(selector, currentText, controlText, category);
 
+    // For headline/subheadline/cta: pick the single element whose text best matches currentText.
+    // Multi-element distribution is only valid for body_copy sections.
+    var isInlineCategory = category === "headline" || category === "subheadline" || category === "cta" || category === "button";
+    if (isInlineCategory && allElements.length > 1) {
+      var fp2 = (currentText || controlText || "").trim().toLowerCase();
+      var fpToks = fp2.split(/ +/).filter(function(w) { return w.length > 2; });
+      var bestEl = allElements[0];
+      var bestScore2 = -1;
+      for (var bi = 0; bi < allElements.length; bi++) {
+        var elTxt2 = (allElements[bi].textContent || "").trim().toLowerCase();
+        var score2 = 0;
+        for (var bj = 0; bj < fpToks.length; bj++) { if (elTxt2.indexOf(fpToks[bj]) !== -1) score2++; }
+        if (score2 > bestScore2) { bestScore2 = score2; bestEl = allElements[bi]; }
+      }
+      allElements = [bestEl];
+    }
+
     if (allElements.length === 0) {
       console.log("SiteAmoeba: element not found | selector:", selector, "| fingerprint:", (currentText || controlText || "").substring(0, 40));
       return;
