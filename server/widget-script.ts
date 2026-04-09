@@ -575,8 +575,37 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   // === BEHAVIORAL TRACKING ===
   var events = [];
   var startTime = Date.now();
+  var activeTime = 0;          // milliseconds of VISIBLE time only
+  var tabHiddenAt = 0;         // timestamp when tab was hidden (0 = currently visible)
   var maxScroll = 0;
   var device = window.innerWidth < 768 ? "mobile" : window.innerWidth < 1024 ? "tablet" : "desktop";
+
+  // Single visibilitychange handler — manages active time AND sends data
+  // This fires BEFORE the heartbeat and beforeunload handlers below
+  document.addEventListener("visibilitychange", function() {
+    if (document.visibilityState === "hidden") {
+      // Accumulate active time and mark as hidden
+      if (tabHiddenAt === 0) {
+        activeTime += (Date.now() - startTime);
+        tabHiddenAt = Date.now();
+      }
+    } else {
+      // Tab visible again — reset the start reference
+      if (tabHiddenAt > 0) {
+        startTime = Date.now();
+        tabHiddenAt = 0;
+      }
+    }
+  });
+
+  function getActiveSeconds() {
+    // activeTime = accumulated ms from previous visible periods
+    // If tab is currently visible, add the current visible period
+    var current = tabHiddenAt === 0 ? (Date.now() - startTime) : 0;
+    var total = Math.round((activeTime + current) / 1000);
+    // Cap at 30 minutes — anything over is a backgrounded/abandoned tab
+    return Math.min(total, 1800);
+  }
 
   // Scroll tracking (throttled) — always update maxScroll, push events at milestones
   var scrollTimeout;
@@ -645,31 +674,30 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   // Send initial heartbeat after 5 seconds (captures early scroll + device)
   setTimeout(function() {
     var batch = events.splice(0, events.length);
-    var timeOnPage = Math.round((Date.now() - startTime) / 1000);
-    sendBatch(batch, timeOnPage);
+    sendBatch(batch, getActiveSeconds());
   }, 5000);
 
-  // Heartbeat every 15 seconds — always sends scroll/time even if no events
+  // Heartbeat every 15 seconds — skip if tab is hidden
   setInterval(function() {
+    if (document.visibilityState === "hidden") return; // don't fire while backgrounded
     var batch = events.splice(0, events.length);
-    var timeOnPage = Math.round((Date.now() - startTime) / 1000);
-    sendBatch(batch, timeOnPage);
+    sendBatch(batch, getActiveSeconds());
   }, 15000);
 
   // Send on page exit
   window.addEventListener("beforeunload", function() {
-    var timeOnPage = Math.round((Date.now() - startTime) / 1000);
-    events.push({type: "page_exit", data: JSON.stringify({maxScroll: maxScroll, timeOnPage: timeOnPage}), ts: Date.now()});
+    var t = getActiveSeconds();
+    events.push({type: "page_exit", data: JSON.stringify({maxScroll: maxScroll, timeOnPage: t}), ts: Date.now()});
     var batch = events.splice(0, events.length);
-    sendBatch(batch, timeOnPage);
+    sendBatch(batch, t);
   });
 
-  // Also send on visibility change (handles mobile tab switches / app backgrounding)
+  // Send data snapshot whenever tab goes hidden (beacon before browser suspends JS)
+  // Note: the visibilitychange handler above has already updated activeTime at this point
   document.addEventListener("visibilitychange", function() {
     if (document.visibilityState === "hidden") {
-      var timeOnPage = Math.round((Date.now() - startTime) / 1000);
       var batch = events.splice(0, events.length);
-      sendBatch(batch, timeOnPage);
+      sendBatch(batch, getActiveSeconds());
     }
   });
 

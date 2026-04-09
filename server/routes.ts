@@ -3228,7 +3228,8 @@ export async function registerRoutes(server: Server, app: Express) {
         // Always upsert session with scroll/time data — even on empty heartbeats
         const sessionUpdates: Parameters<typeof storage.upsertVisitorSession>[2] = {};
         if (typeof maxScroll === "number" && maxScroll > 0) sessionUpdates.maxScrollDepth = maxScroll;
-        if (typeof timeOnPage === "number" && timeOnPage > 0) sessionUpdates.timeOnPage = timeOnPage;
+        // Cap at 30 minutes (1800s) — anything over is a backgrounded/abandoned tab
+        if (typeof timeOnPage === "number" && timeOnPage > 0) sessionUpdates.timeOnPage = Math.min(timeOnPage, 1800);
         if (device) sessionUpdates.deviceType = device;
 
         // Aggregate from events
