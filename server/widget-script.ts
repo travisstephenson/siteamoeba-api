@@ -452,36 +452,34 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     fetch(API + "/api/widget/preview-data?cid=" + CID + "&variantId=" + previewVid + "&token=" + encodeURIComponent(previewToken))
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        // Retry with delays for dynamic pages (GHL renders content after load)
-        // Check if the target elements exist before considering the apply "done"
-        var retries = [0, 500, 1000, 2000, 3000, 5000, 8000];
-        var applied = false;
-        function checkApplied(data) {
-          // Use findElements() — the same lookup used at apply time.
-          // If it can find the element, we can apply the variant.
-          var checks = [];
-          if (data.headline) checks.push(data.headline);
-          if (data.subheadline) checks.push(data.subheadline);
-          if (data.sections) data.sections.forEach(function(s) { checks.push(s); });
-          for (var i = 0; i < checks.length; i++) {
-            var v = checks[i];
-            if (!v || !v.text) continue;
-            var found = findElements(v.selector, v.currentText, v.controlText, v.category);
-            if (found.length > 0) return true;
-          }
-          return false;
+        // Surface API errors (e.g. invalid/expired token) instead of silently failing
+        if (data.error) {
+          console.warn("SiteAmoeba preview error:", data.error);
+          return;
         }
+        // Retry with delays for dynamic pages (GHL, Webflow etc. render content after load)
+        // In preview mode: attempt to apply on every retry until it succeeds
+        var retries = [0, 300, 800, 1500, 2500, 4000, 6000];
+        var applied = false;
         retries.forEach(function(delay) {
           setTimeout(function() {
             if (applied) return;
-            if (checkApplied(data)) {
-              handleAssignData(data);
-              applied = true;
+            handleAssignData(data);
+            // Check if it actually landed — if yes, stop retrying
+            var checks = [];
+            if (data.headline) checks.push(data.headline);
+            if (data.subheadline) checks.push(data.subheadline);
+            if (data.sections) data.sections.forEach(function(s) { checks.push(s); });
+            for (var i = 0; i < checks.length; i++) {
+              var v = checks[i];
+              if (!v || !v.text || v.isControl) continue;
+              var found = findElements(v.selector, v.currentText, v.controlText, v.category);
+              if (found.length > 0) { applied = true; break; }
             }
           }, delay);
         });
       })
-      .catch(function(e) { console.log("SiteAmoeba preview: error", e); });
+      .catch(function(e) { console.warn("SiteAmoeba preview: fetch error", e); });
   } else {
     // NORMAL MODE: standard variant assignment
     var assignUrl = API + "/api/widget/assign?vid=" + vid + "&cid=" + CID + "&ref=" + encodeURIComponent(document.referrer) + (fp ? "&fp=" + fp : "");

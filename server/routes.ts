@@ -3359,7 +3359,7 @@ export async function registerRoutes(server: Server, app: Express) {
     const baseUrl = host.includes("localhost") ? `http://${host}` : PUBLIC_API;
     const script = generateWidgetScript(baseUrl, campaignId);
     res.set("Content-Type", "application/javascript");
-    res.set("Cache-Control", "public, max-age=300"); // 5-min cache
+    res.set("Cache-Control", "public, max-age=30"); // short TTL so fixes propagate quickly
     res.send(script);
   });
 
