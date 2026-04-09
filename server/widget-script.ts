@@ -280,6 +280,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     if (!text) return;
 
     var allElements = findElements(selector, currentText, controlText, category);
+    console.log("[SA] applySectionVariant", category, "found", allElements.length, "elements", "selector:", selector);
 
     // For headline/subheadline/cta: pick the single element whose text best matches currentText.
     // Multi-element distribution is only valid for body_copy sections.
@@ -295,11 +296,12 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         for (var bj = 0; bj < fpToks.length; bj++) { if (elTxt2.indexOf(fpToks[bj]) !== -1) score2++; }
         if (score2 > bestScore2) { bestScore2 = score2; bestEl = allElements[bi]; }
       }
+      console.log("[SA] reduced to best match, score:", bestScore2, "text:", (bestEl.textContent||"").substring(0,60));
       allElements = [bestEl];
     }
 
     if (allElements.length === 0) {
-      console.log("SiteAmoeba: element not found | selector:", selector, "| fingerprint:", (currentText || controlText || "").substring(0, 40));
+      console.log("[SA] element not found | selector:", selector, "| fingerprint:", (currentText || controlText || "").substring(0, 40));
       return;
     }
 
@@ -364,14 +366,16 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     // === SAFETY CHECK for multi-element ===
     // Validate that the primary element shows a reasonable portion of the variant text.
     // If distribution looks wrong, revert all elements to originals.
-    if (!validateRender(allElements[0], text)) {
+    var renderOk = validateRender(allElements[0], text);
+    console.log("[SA] validateRender:", renderOk, "| el text after swap:", (allElements[0].textContent||"").substring(0,60));
+    if (!renderOk) {
       for (var rv = 0; rv < allElements.length; rv++) {
         allElements[rv].textContent = originals[rv];
         allElements[rv].style.display = "";
         allElements[rv].removeAttribute("data-sa-hidden");
       }
       reportDisplayIssue(variantId, "multi_element_mismatch");
-      console.warn("SiteAmoeba: multi-element variant check failed, reverted to control", selector);
+      console.warn("[SA] validateRender FAILED — reverted to original. selector:", selector);
     }
   }
 
