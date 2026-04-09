@@ -998,19 +998,25 @@ export async function registerRoutes(server: Server, app: Express) {
     const visitorConversions = headlineStats.reduce((sum, v) => sum + v.conversions, 0);
     const visitorRevenue = headlineStats.reduce((sum, v) => sum + v.revenue, 0);
 
-    // ALSO count revenue_events directly — covers Stripe/Whop synced purchases
-    // where no visitor email match was found (no pixel visitor record)
+    // ALSO count revenue_events for unmatched purchases (Stripe/Whop with no pixel visitor).
+    // For conversion RATE: count unique buyers (by email) — not raw event count.
+    // One person buying 3 upsells = 1 conversion, not 3.
+    // For revenue: sum ALL amounts (include upsells).
     const reRow = await pool.query(
-      `SELECT COUNT(DISTINCT re.external_id) FILTER (WHERE re.visitor_id IS NULL AND re.event_type = 'purchase') AS unmatched_conversions,
-              COALESCE(SUM(re.amount) FILTER (WHERE re.visitor_id IS NULL AND re.event_type = 'purchase'), 0) AS unmatched_revenue
+      `SELECT
+        COUNT(DISTINCT COALESCE(re.customer_email, re.external_id)) FILTER (WHERE re.visitor_id IS NULL AND re.event_type = 'purchase') AS unmatched_conversions,
+        COALESCE(SUM(re.amount) FILTER (WHERE re.visitor_id IS NULL AND re.event_type = 'purchase'), 0) AS unmatched_revenue,
+        COALESCE(SUM(re.amount) FILTER (WHERE re.event_type = 'purchase'), 0) AS total_revenue_all
        FROM revenue_events re WHERE re.campaign_id = $1`,
       [campaign.id]
     );
     const unmatchedConversions = parseInt(reRow.rows[0]?.unmatched_conversions || "0");
     const unmatchedRevenue = parseFloat(reRow.rows[0]?.unmatched_revenue || "0");
+    const totalRevenueFromEvents = parseFloat(reRow.rows[0]?.total_revenue_all || "0");
 
     const totalConversions = visitorConversions + unmatchedConversions;
-    const totalRevenue = visitorRevenue + unmatchedRevenue;
+    // Revenue = ALL revenue_events (matched + unmatched, includes all upsells)
+    const totalRevenue = totalRevenueFromEvents || (visitorRevenue + unmatchedRevenue);
     const conversionRate = totalVisitors > 0 ? totalConversions / totalVisitors : 0;
 
     // Map to the shape the frontend expects

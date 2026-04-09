@@ -1068,18 +1068,21 @@ class StorageImpl implements IStorage {
       );
       const convResult = await pool.query(
         `SELECT (
-           SELECT COUNT(*) FROM visitors v INNER JOIN variants var ON var.id = v.headline_variant_id WHERE v.campaign_id = $1 AND v.converted = true
+           -- Unique converted visitors (pixel-tracked)
+           SELECT COUNT(*) FROM visitors v WHERE v.campaign_id = $1 AND v.converted = true
          ) + (
-           SELECT COUNT(DISTINCT re.external_id) FROM revenue_events re WHERE re.campaign_id = $1 AND re.visitor_id IS NULL AND re.event_type = 'purchase'
+           -- Unique unmatched buyers by email/external_id (no pixel, e.g. Stripe sync)
+           SELECT COUNT(DISTINCT COALESCE(re.customer_email, re.external_id))
+           FROM revenue_events re
+           WHERE re.campaign_id = $1 AND re.visitor_id IS NULL AND re.event_type = 'purchase'
          ) AS count`,
         [campaign.id]
       );
+      // All revenue_events for this campaign (captures all upsells, not just first purchase)
       const revResult = await pool.query(
-        `SELECT (
-           SELECT COALESCE(SUM(v.revenue), 0) FROM visitors v INNER JOIN variants var ON var.id = v.headline_variant_id WHERE v.campaign_id = $1 AND v.converted = true
-         ) + (
-           SELECT COALESCE(SUM(re.amount), 0) FROM revenue_events re WHERE re.campaign_id = $1 AND re.visitor_id IS NULL AND re.event_type = 'purchase'
-         ) AS total`,
+        `SELECT COALESCE(SUM(amount), 0) AS total
+         FROM revenue_events
+         WHERE campaign_id = $1 AND event_type = 'purchase'`,
         [campaign.id]
       );
       const varResult = await pool.query(
