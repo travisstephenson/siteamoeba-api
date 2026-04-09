@@ -996,27 +996,30 @@ export async function registerRoutes(server: Server, app: Express) {
     const headlineStats = variantStats.filter(v => v.type === "headline");
     const totalVisitors = headlineStats.reduce((sum, v) => sum + v.impressions, 0);
     const visitorConversions = headlineStats.reduce((sum, v) => sum + v.conversions, 0);
-    const visitorRevenue = headlineStats.reduce((sum, v) => sum + v.revenue, 0);
 
-    // ALSO count revenue_events for unmatched purchases (Stripe/Whop with no pixel visitor).
-    // For conversion RATE: count unique buyers (by email) — not raw event count.
-    // One person buying 3 upsells = 1 conversion, not 3.
-    // For revenue: sum ALL amounts (include upsells).
+    // Total revenue = ALL revenue_events (includes upsells for all matched + unmatched)
     const reRow = await pool.query(
       `SELECT
-        COUNT(DISTINCT COALESCE(re.customer_email, re.external_id)) FILTER (WHERE re.visitor_id IS NULL AND re.event_type = 'purchase') AS unmatched_conversions,
-        COALESCE(SUM(re.amount) FILTER (WHERE re.visitor_id IS NULL AND re.event_type = 'purchase'), 0) AS unmatched_revenue,
+        -- Unmatched conversions: unique buyers NOT already tracked by pixel
+        -- Exclude emails that already appear in converted visitors to avoid double-counting
+        COUNT(DISTINCT re.customer_email) FILTER (
+          WHERE re.visitor_id IS NULL
+          AND re.event_type = 'purchase'
+          AND re.customer_email IS NOT NULL
+          AND re.customer_email NOT IN (
+            SELECT customer_email FROM visitors
+            WHERE campaign_id = $1 AND converted = true AND customer_email IS NOT NULL
+          )
+        ) AS unmatched_conversions,
         COALESCE(SUM(re.amount) FILTER (WHERE re.event_type = 'purchase'), 0) AS total_revenue_all
        FROM revenue_events re WHERE re.campaign_id = $1`,
       [campaign.id]
     );
     const unmatchedConversions = parseInt(reRow.rows[0]?.unmatched_conversions || "0");
-    const unmatchedRevenue = parseFloat(reRow.rows[0]?.unmatched_revenue || "0");
     const totalRevenueFromEvents = parseFloat(reRow.rows[0]?.total_revenue_all || "0");
 
     const totalConversions = visitorConversions + unmatchedConversions;
-    // Revenue = ALL revenue_events (matched + unmatched, includes all upsells)
-    const totalRevenue = totalRevenueFromEvents || (visitorRevenue + unmatchedRevenue);
+    const totalRevenue = totalRevenueFromEvents;
     const conversionRate = totalVisitors > 0 ? totalConversions / totalVisitors : 0;
 
     // Map to the shape the frontend expects
@@ -1042,6 +1045,7 @@ export async function registerRoutes(server: Server, app: Express) {
       conversionRate: conversionRate * 100,
       variants,
       campaignType: campaign.campaignType || "purchase",
+      testStartDate: testStartDate?.toISOString() ?? null,
     });
   });
 

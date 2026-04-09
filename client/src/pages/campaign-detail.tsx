@@ -127,6 +127,7 @@ interface CampaignStats {
   conversionRate: number;
   variants: VariantStats[];
   campaignType?: string;
+  testStartDate?: string | null;
 }
 
 interface DailyStat {
@@ -252,10 +253,12 @@ function VariantComparisonChart({
   variants,
   testSections,
   isLoading,
+  testStartDate,
 }: {
   variants: VariantStats[];
   testSections: TestSection[];
   isLoading: boolean;
+  testStartDate?: string | null;
 }) {
   const TEAL = "hsl(160, 84%, 36%)";
   const TEAL_LIGHT = "hsl(160, 60%, 72%)";
@@ -497,11 +500,18 @@ function VariantComparisonChart({
           <BarChart3 className="w-4 h-4" />
           Variant Performance
         </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          <span className="inline-block w-2 h-2 rounded-full bg-amber-400 mr-1" /> Control
-          <span className="inline-block w-2 h-2 rounded-full bg-teal-500 ml-3 mr-1" /> Challenger
-          <span className="inline-block w-2 h-2 rounded-full bg-green-500 ml-3 mr-1" /> Leader
-        </p>
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-muted-foreground">
+            <span className="inline-block w-2 h-2 rounded-full bg-amber-400 mr-1" /> Control
+            <span className="inline-block w-2 h-2 rounded-full bg-teal-500 ml-3 mr-1" /> Challenger
+            <span className="inline-block w-2 h-2 rounded-full bg-green-500 ml-3 mr-1" /> Leader
+          </p>
+          {testStartDate && (
+            <p className="text-[10px] text-muted-foreground">
+              Since {new Date(testStartDate).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+            </p>
+          )}
+        </div>
       </CardHeader>
       <CardContent className="space-y-6">
         {allChartData.map((group) => (
@@ -5525,7 +5535,7 @@ export default function CampaignDetailPage() {
         />
 
         {/* Variant comparison chart */}
-        <VariantComparisonChart variants={variants} testSections={testSections} isLoading={statsLoading} />
+        <VariantComparisonChart variants={variants} testSections={testSections} isLoading={statsLoading} testStartDate={stats?.testStartDate} />
 
 
         {/* Traffic Sources — referrer + UTM breakdown */}

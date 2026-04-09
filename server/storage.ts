@@ -946,17 +946,24 @@ class StorageImpl implements IStorage {
         );
       } else {
         const column = isHeadline ? "headline_variant_id" : "subheadline_variant_id";
+        // Scope to visitors who arrived AFTER this variant was created
+        // (pre-variant visitors skew the split because they only saw the control)
+        const createdAt = v.createdAt || new Date(0);
         impResult = await pool.query(
-          `SELECT COUNT(DISTINCT id) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2`,
-          [campaignId, v.id]
+          `SELECT COUNT(DISTINCT id) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND first_seen >= $3`,
+          [campaignId, v.id, createdAt]
         );
         convResult = await pool.query(
-          `SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND converted = true`,
-          [campaignId, v.id]
+          `SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND converted = true AND first_seen >= $3`,
+          [campaignId, v.id, createdAt]
         );
+        // Revenue: sum from revenue_events for matched visitors (captures upsells)
         revResult = await pool.query(
-          `SELECT COALESCE(SUM(revenue), 0) as total FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND converted = true`,
-          [campaignId, v.id]
+          `SELECT COALESCE(SUM(re.amount), 0) as total
+           FROM revenue_events re
+           JOIN visitors v ON v.id = re.visitor_id
+           WHERE re.campaign_id = $1 AND v.${column} = $2 AND v.first_seen >= $3 AND re.event_type = 'purchase'`,
+          [campaignId, v.id, createdAt]
         );
       }
 
