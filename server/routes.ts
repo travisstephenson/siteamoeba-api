@@ -1030,6 +1030,7 @@ export async function registerRoutes(server: Server, app: Express) {
       isControl: v.isControl,
       isActive: v.isActive,
       testSectionId: v.testSectionId,
+      createdAt: v.createdAt,
       visitors: v.impressions,
       conversions: v.conversions,
       conversionRate: v.conversionRate * 100,
@@ -1038,6 +1039,16 @@ export async function registerRoutes(server: Server, app: Express) {
       persuasionTags: v.persuasionTags,
     }));
 
+    // testStartDate = when the earliest active challenger was created
+    // Used by the UI to show "Stats since [date]" on the variant chart
+    const headlineChallengers = variantStats.filter(v => !v.isControl && v.type === "headline" && v.createdAt);
+    const testStartDate = headlineChallengers.length > 0
+      ? headlineChallengers.reduce((earliest: Date, v) => {
+          const d = new Date(v.createdAt!);
+          return !isNaN(d.getTime()) && d < earliest ? d : earliest;
+        }, new Date())
+      : null;
+
     res.json({
       totalVisitors,
       totalConversions,
@@ -1045,7 +1056,7 @@ export async function registerRoutes(server: Server, app: Express) {
       conversionRate: conversionRate * 100,
       variants,
       campaignType: campaign.campaignType || "purchase",
-      testStartDate: testStartDate?.toISOString() ?? null,
+      testStartDate: testStartDate && !isNaN(testStartDate.getTime()) ? testStartDate.toISOString() : null,
     });
   });
 
