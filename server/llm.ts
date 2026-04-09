@@ -91,7 +91,11 @@ export function resolveLLMConfig(opts: {
 }): { config: LLMConfig; useBrainData: boolean; creditCost: number; source: "user" | "platform" } {
   const { operation, userPlan, userProvider, userApiKey, userModel } = opts;
   const isPaid = userPlan !== "free";
-  const hasUserKey = !!(userProvider && userApiKey);
+  // Treat unsupported providers (e.g. 'manus' saved before removal) as if no key is set
+  // so they always fall through to the platform key
+  const SUPPORTED_PROVIDERS = ["anthropic", "openai", "gemini", "mistral", "xai", "meta"];
+  const providerIsSupported = SUPPORTED_PROVIDERS.includes(userProvider || "");
+  const hasUserKey = !!(userProvider && userApiKey && providerIsSupported);
   const platformKey = process.env.PLATFORM_ANTHROPIC_KEY;
   const tier = OPERATION_TIERS[operation] || "fast";
   const creditCost = OPERATION_CREDIT_COSTS[operation] || 1;
