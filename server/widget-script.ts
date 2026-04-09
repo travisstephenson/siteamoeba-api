@@ -282,22 +282,40 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     var allElements = findElements(selector, currentText, controlText, category);
     console.log("[SA] applySectionVariant", category, "found", allElements.length, "elements", "selector:", selector);
 
-    // For headline/subheadline/cta: pick the single element whose text best matches currentText.
-    // Multi-element distribution is only valid for body_copy sections.
+    // For headline/subheadline/cta: find the single best-matching element by text.
+    // CSS selectors on GHL/Webflow return wrong elements due to nested DOM structure.
+    // Always search ALL page elements of the right tag type for the highest token score.
     var isInlineCategory = category === "headline" || category === "subheadline" || category === "cta" || category === "button";
-    if (isInlineCategory && allElements.length > 1) {
+    if (isInlineCategory) {
       var fp2 = (currentText || controlText || "").trim().toLowerCase();
-      var fpToks = fp2.split(/ +/).filter(function(w) { return w.length > 2; });
-      var bestEl = allElements[0];
-      var bestScore2 = -1;
-      for (var bi = 0; bi < allElements.length; bi++) {
-        var elTxt2 = (allElements[bi].textContent || "").trim().toLowerCase();
-        var score2 = 0;
-        for (var bj = 0; bj < fpToks.length; bj++) { if (elTxt2.indexOf(fpToks[bj]) !== -1) score2++; }
-        if (score2 > bestScore2) { bestScore2 = score2; bestEl = allElements[bi]; }
+      var fpToks2 = fp2.split(/ +/).filter(function(w) { return w.length > 2; });
+      if (fpToks2.length > 0) {
+        // Search all heading-type elements on the page, not just selector matches
+        var tagSearch = category === "cta" || category === "button"
+          ? ["button", "a", "span"]
+          : ["h1", "h2", "h3", "[class*='heading']", "[class*='cheading']", "[class*='title']"];
+        var bestEl2 = null;
+        var bestScore2 = 0;
+        for (var ts2 = 0; ts2 < tagSearch.length; ts2++) {
+          try {
+            var cands2 = document.querySelectorAll(tagSearch[ts2]);
+            for (var ci2 = 0; ci2 < cands2.length; ci2++) {
+              var elTxt2 = (cands2[ci2].textContent || "").trim().toLowerCase();
+              var score2 = 0;
+              for (var bj = 0; bj < fpToks2.length; bj++) { if (elTxt2.indexOf(fpToks2[bj]) !== -1) score2++; }
+              if (score2 > bestScore2) { bestScore2 = score2; bestEl2 = cands2[ci2]; }
+            }
+          } catch(e2) {}
+        }
+        if (bestEl2 && bestScore2 >= Math.ceil(fpToks2.length * 0.5)) {
+          console.log("[SA] best match score:", bestScore2 + "/" + fpToks2.length, "text:", (bestEl2.textContent||"").substring(0,60));
+          allElements = [bestEl2];
+        } else if (allElements.length > 1) {
+          allElements = [allElements[0]];
+        }
+      } else if (allElements.length > 1) {
+        allElements = [allElements[0]];
       }
-      console.log("[SA] reduced to best match, score:", bestScore2, "text:", (bestEl.textContent||"").substring(0,60));
-      allElements = [bestEl];
     }
 
     if (allElements.length === 0) {
