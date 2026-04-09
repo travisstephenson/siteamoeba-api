@@ -149,24 +149,24 @@ export function resolveLLMConfig(opts: {
     };
   }
 
-  // Free user without key — allow platform key for scan/classify ONLY (the hook)
-  const FREE_ALLOWED_OPS: LLMOperation[] = ["scan", "classify"];
-  if (!isPaid && !hasUserKey && platformKey && FREE_ALLOWED_OPS.includes(operation)) {
-    const tierConfig = PLATFORM_MODELS.fast; // Always use cheapest model for free users
+  // Free user without BYOK — use platform key for ALL operations.
+  // Brain data is still gated to paid plans; free users get platform AI but without brain injection.
+  if (!hasUserKey && platformKey) {
+    const tierConfig = isPaid ? PLATFORM_MODELS[tier] : PLATFORM_MODELS.fast;
     return {
       config: {
         provider: tierConfig.provider,
         apiKey: platformKey,
         model: tierConfig.model,
       },
-      useBrainData: false,
-      creditCost: 0,
+      useBrainData: isPaid, // Brain data only for paid users
+      creditCost: isPaid ? creditCost : 0,
       source: "platform",
     };
   }
 
-  // No key available at all — will throw when called
-  throw new Error("No AI key available. Add your API key in Settings or upgrade to a paid plan.");
+  // No platform key and no user key — shouldn't happen in production
+  throw new Error("No AI key configured. Please contact support.");
 }
 
 // Classify common LLM API errors into user-friendly messages
