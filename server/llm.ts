@@ -100,17 +100,34 @@ export function resolveLLMConfig(opts: {
   const tier = OPERATION_TIERS[operation] || "fast";
   const creditCost = OPERATION_CREDIT_COSTS[operation] || 1;
 
-  // Paid user with their own key — use it (saves us money), inject brain data
-  // For fast operations (scan/classify/observation), enforce fast model to prevent timeouts
-  const FAST_OPS: LLMOperation[] = ["scan", "classify", "observation"];
+  // ---------------------------------------------------------------
+  // Priority order:
+  // 1. Paid user  → ALWAYS use platform key (our AI, our quality)
+  //    BYOK is supplemental — only used if platform key is missing
+  // 2. Free user  → platform key (fast model, no brain data)
+  //    BYOK override available if they want their own model
+  // ---------------------------------------------------------------
+
+  // PAID: platform key is primary
+  if (isPaid && platformKey) {
+    const tierConfig = PLATFORM_MODELS[tier];
+    return {
+      config: { provider: tierConfig.provider, apiKey: platformKey, model: tierConfig.model },
+      useBrainData: true,
+      creditCost,
+      source: "platform",
+    };
+  }
+
+  // PAID fallback: platform key missing, use their BYOK if available
   if (isPaid && hasUserKey) {
-    const forceFastModel = FAST_OPS.includes(operation);
+    const FAST_OPS: LLMOperation[] = ["scan", "classify", "observation"];
+    const forceFast = FAST_OPS.includes(operation);
     return {
       config: {
         provider: userProvider as LLMConfig["provider"],
         apiKey: userApiKey!,
-        // For scan/classify: use haiku regardless of user preference to prevent timeouts
-        model: forceFastModel
+        model: forceFast
           ? (userProvider === "anthropic" ? "claude-haiku-4-5-20251001" : userModel || undefined)
           : (userModel || undefined),
       },
@@ -120,52 +137,27 @@ export function resolveLLMConfig(opts: {
     };
   }
 
-  // Paid user without key — use platform key
-  if (isPaid && platformKey) {
-    const tierConfig = PLATFORM_MODELS[tier];
+  // FREE: platform key (fast model, no brain data)
+  if (platformKey) {
     return {
-      config: {
-        provider: tierConfig.provider,
-        apiKey: platformKey,
-        model: tierConfig.model,
-      },
-      useBrainData: true,
-      creditCost,
+      config: { provider: PLATFORM_MODELS.fast.provider, apiKey: platformKey, model: PLATFORM_MODELS.fast.model },
+      useBrainData: false,
+      creditCost: 0,
       source: "platform",
     };
   }
 
-  // Free BYOK user — use their key, no brain data
+  // FREE fallback: BYOK only
   if (hasUserKey) {
     return {
-      config: {
-        provider: userProvider as LLMConfig["provider"],
-        apiKey: userApiKey!,
-        model: userModel || undefined,
-      },
+      config: { provider: userProvider as LLMConfig["provider"], apiKey: userApiKey!, model: userModel || undefined },
       useBrainData: false,
-      creditCost: 0, // Free tier doesn't deduct platform credits
+      creditCost: 0,
       source: "user",
     };
   }
 
-  // Free user without BYOK — use platform key for ALL operations.
-  // Brain data is still gated to paid plans; free users get platform AI but without brain injection.
-  if (!hasUserKey && platformKey) {
-    const tierConfig = isPaid ? PLATFORM_MODELS[tier] : PLATFORM_MODELS.fast;
-    return {
-      config: {
-        provider: tierConfig.provider,
-        apiKey: platformKey,
-        model: tierConfig.model,
-      },
-      useBrainData: isPaid, // Brain data only for paid users
-      creditCost: isPaid ? creditCost : 0,
-      source: "platform",
-    };
-  }
-
-  // No platform key and no user key — shouldn't happen in production
+  // Nothing available — shouldn’t happen in production
   throw new Error("No AI key configured. Please contact support.");
 }
 
