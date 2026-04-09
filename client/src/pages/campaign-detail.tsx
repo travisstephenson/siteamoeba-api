@@ -2450,6 +2450,7 @@ const SOURCE_COLORS: Record<string, string> = {
 
 function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
   const [sourceFilter, setSourceFilter] = useState<string | null>(null);
+  const [deviceFilter, setDeviceFilter] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery<TrafficSourcesData>({
     queryKey: ["/api/campaigns", campaignId, "traffic-sources"],
@@ -2473,6 +2474,15 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
   const allConversions = feedData?.recentConversions ?? [];
   const filteredConversions = sourceFilter
     ? allConversions.filter((c) => c.trafficSource === sourceFilter)
+    : [];
+
+  const filteredDeviceConversions = deviceFilter
+    ? allConversions.filter((c) => {
+        const d = c.device?.toLowerCase() ?? "";
+        if (deviceFilter === "mobile") return d === "mobile" || d === "ios" || d === "android";
+        if (deviceFilter === "desktop") return d === "desktop" || d === "desktop_mac" || d === "desktop_windows";
+        return d === deviceFilter;
+      })
     : [];
 
   const sources = data?.sources ?? [];
@@ -2603,13 +2613,13 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
                               </div>
                               <button
                                 className="rounded-md bg-background/60 px-2 py-1.5 text-center transition-colors hover:bg-background cursor-pointer group"
-                                onClick={() => setSourceFilter(f => f === row.source ? null : row.source)}
-                                title={`View ${row.conversions} conversion${row.conversions !== 1 ? 's' : ''} from ${SOURCE_LABELS[row.source] ?? row.source}`}
+                                onClick={() => setDeviceFilter(f => f === key ? null : key)}
+                                title={`View ${row.conversions} conversion${row.conversions !== 1 ? 's' : ''} from ${label}`}
                               >
                                 <p className="text-sm font-semibold text-foreground group-hover:underline decoration-dotted">{row.conversions.toLocaleString()}</p>
                                 <p className="text-[9px] text-muted-foreground uppercase tracking-wide flex items-center justify-center gap-0.5">
                                   Conversions
-                                  {row.conversions > 0 && <ChevronDown className="w-2.5 h-2.5 inline" style={{ transform: sourceFilter === row.source ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />}
+                                  {row.conversions > 0 && <ChevronDown className="w-2.5 h-2.5 inline" style={{ transform: deviceFilter === key ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />}
                                 </p>
                               </button>
                             </div>
@@ -2650,6 +2660,43 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Device conversion drill-down */}
+            {deviceFilter && (
+              <div className="mt-4 rounded-lg border border-border bg-muted/30 p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-foreground capitalize">
+                    Conversions from {deviceFilter}
+                  </span>
+                  <button onClick={() => setDeviceFilter(null)} className="text-muted-foreground hover:text-foreground transition-colors">
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                {filteredDeviceConversions.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No recent conversions recorded for this device type. Older conversions may exist but aren't shown in the recent feed.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {filteredDeviceConversions.map((c, i) => (
+                      <div key={i} className="flex items-start justify-between gap-2 text-xs border-b border-border/50 pb-2 last:border-0 last:pb-0">
+                        <div className="space-y-0.5 min-w-0">
+                          {c.customerEmail && <p className="font-medium text-foreground truncate">{c.customerEmail}</p>}
+                          <p className="text-muted-foreground">
+                            {c.headlineVariant
+                              ? (c.headlineIsControl ? `Control: "${c.headlineVariant.slice(0, 45)}${c.headlineVariant.length > 45 ? '...' : ''}"` : `Variant: "${c.headlineVariant.slice(0, 45)}${c.headlineVariant.length > 45 ? '...' : ''}"`) 
+                              : 'Headline unknown'}
+                          </p>
+                          <p className="text-muted-foreground capitalize">{c.trafficSource} · {c.convertedAt ? new Date(c.convertedAt).toLocaleDateString() : 'unknown date'}</p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          {c.revenue > 0 && <p className="font-semibold text-green-600">${c.revenue.toFixed(2)}</p>}
+                          <p className="text-[10px] text-muted-foreground capitalize">{c.device}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
