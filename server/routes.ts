@@ -2645,17 +2645,14 @@ export async function registerRoutes(server: Server, app: Express) {
     const messages = buildCROReportPrompt(pageContent, campaignMeta);
     const llmConfig = llmConfigResolved.config;
 
-    // Keep-alive to prevent Cloudflare 30s timeout during long AI report generation
-    const kaReport = keepAliveJson(res);
-
     let report: string;
     try {
       report = await callLLM(llmConfig, messages, { maxTokens: 4000 });
     } catch (err: any) {
-      return kaReport.fail(502, { error: err.message || "AI provider error." });
+      return res.status(502).json({ error: err.message || "AI provider error." });
     }
 
-    kaReport.send({ report, url: reportUrl });
+    return res.json({ report, url: reportUrl });
   });
 
   // ============== TRAFFIC SOURCE HELPERS ==============

@@ -4647,7 +4647,18 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
     setMessages(prev => [...prev, { role: "user", content: "Generate a full CRO report for this page." }]);
     setTimeout(scrollToBottom, 50);
     try {
-      const res = await apiRequest("POST", "/api/ai/cro-report", { campaignId });
+      // CRO report can take 60+ seconds — bypass Cloudflare's 30s proxy timeout
+      // app.siteamoeba.com goes directly to Railway (no CF proxy), so no timeout
+      const DIRECT_API = "https://app.siteamoeba.com";
+      const token = getAuthToken();
+      const res = await fetch(`${DIRECT_API}/api/ai/cro-report`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ campaignId }),
+      });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       setMessages(prev => [...prev, { role: "assistant", content: data.report }]);
