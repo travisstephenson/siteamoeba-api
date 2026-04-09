@@ -4697,38 +4697,50 @@ export async function registerRoutes(server: Server, app: Express) {
         [campaignId]
       );
 
-      // Also query LTV from revenue_events per traffic source
+      // LTV from revenue_events per traffic source
+      // Total revenue = ALL transactions (initial + upsells)
+      // LTV = total revenue / unique buyers
+      // AOV = total revenue / total transactions
       const ltvRows = await pgPool.query(
         `SELECT
           COALESCE(v.traffic_source, 'direct') AS source,
-          COALESCE(SUM(re.amount), 0) AS ltv_revenue,
-          COUNT(DISTINCT COALESCE(re.visitor_id, re.customer_email)) AS ltv_customers
+          COALESCE(SUM(re.amount), 0) AS total_revenue,
+          COUNT(DISTINCT COALESCE(re.customer_email, re.visitor_id)) AS unique_buyers,
+          COUNT(re.id) AS total_transactions
         FROM revenue_events re
         LEFT JOIN visitors v ON v.id = re.visitor_id
-        WHERE re.campaign_id = $1 AND re.event_type != 'refund'
+        WHERE re.campaign_id = $1 AND re.event_type = 'purchase'
         GROUP BY COALESCE(v.traffic_source, 'direct')`,
         [campaignId]
       );
-      const ltvBySource: Record<string, { ltv: number }> = {};
+      const ltvBySource: Record<string, { totalRevenue: number; ltv: number; aov: number; transactions: number }> = {};
       for (const row of ltvRows.rows) {
-        const rev = parseFloat(row.ltv_revenue) || 0;
-        const cust = parseInt(row.ltv_customers) || 1;
-        ltvBySource[row.source] = { ltv: parseFloat((rev / cust).toFixed(2)) };
+        const rev = parseFloat(row.total_revenue) || 0;
+        const buyers = parseInt(row.unique_buyers) || 1;
+        const txns = parseInt(row.total_transactions) || 1;
+        ltvBySource[row.source] = {
+          totalRevenue: rev,
+          ltv: parseFloat((rev / buyers).toFixed(2)),
+          aov: parseFloat((rev / txns).toFixed(2)),
+          transactions: txns,
+        };
       }
 
       const sources = sourceRows.rows.map((r: any) => {
         const vis = parseInt(r.visitors) || 0;
         const conv = parseInt(r.conversions) || 0;
-        const rev = parseFloat(r.revenue) || 0;
-        const ltvData = ltvBySource[r.source];
+        const ltvData = ltvBySource[r.source] ?? { totalRevenue: 0, ltv: 0, aov: 0, transactions: 0 };
         return {
           source: r.source,
           visitors: vis,
           conversions: conv,
           conversionRate: vis > 0 ? parseFloat(((conv / vis) * 100).toFixed(1)) : 0,
-          revenue: parseFloat(rev.toFixed(2)),
-          revenuePerVisitor: vis > 0 ? parseFloat((rev / vis).toFixed(2)) : 0,
-          ltv: ltvData ? ltvData.ltv : 0,
+          // revenue = total from revenue_events (all upsells included)
+          revenue: ltvData.totalRevenue,
+          revenuePerVisitor: vis > 0 ? parseFloat((ltvData.totalRevenue / vis).toFixed(2)) : 0,
+          ltv: ltvData.ltv,
+          aov: ltvData.aov,
+          transactions: ltvData.transactions,
         };
       });
 
@@ -4752,17 +4764,51 @@ export async function registerRoutes(server: Server, app: Express) {
         [campaignId]
       );
 
+      // LTV by device from revenue_events
+      const deviceLtvRows = await pgPool.query(
+        `SELECT
+          CASE
+            WHEN COALESCE(v.device_category, 'other') IN ('ios', 'android') THEN 'mobile'
+            WHEN COALESCE(v.device_category, 'other') IN ('desktop_mac', 'desktop_windows') THEN 'desktop'
+            WHEN COALESCE(v.device_category, 'other') = 'tablet' THEN 'tablet'
+            ELSE 'other'
+          END AS device,
+          COALESCE(SUM(re.amount), 0) AS total_revenue,
+          COUNT(DISTINCT COALESCE(re.customer_email, re.visitor_id)) AS unique_buyers,
+          COUNT(re.id) AS total_transactions
+        FROM revenue_events re
+        LEFT JOIN visitors v ON v.id = re.visitor_id
+        WHERE re.campaign_id = $1 AND re.event_type = 'purchase' AND re.visitor_id IS NOT NULL
+        GROUP BY 1`,
+        [campaignId]
+      );
+      const ltvByDevice: Record<string, { totalRevenue: number; ltv: number; aov: number; transactions: number }> = {};
+      for (const row of deviceLtvRows.rows) {
+        const rev = parseFloat(row.total_revenue) || 0;
+        const buyers = parseInt(row.unique_buyers) || 1;
+        const txns = parseInt(row.total_transactions) || 1;
+        ltvByDevice[row.device] = {
+          totalRevenue: rev,
+          ltv: parseFloat((rev / buyers).toFixed(2)),
+          aov: parseFloat((rev / txns).toFixed(2)),
+          transactions: txns,
+        };
+      }
+
       const devices = deviceRows.rows.map((r: any) => {
         const vis = parseInt(r.visitors) || 0;
         const conv = parseInt(r.conversions) || 0;
-        const rev = parseFloat(r.revenue) || 0;
+        const ltvData = ltvByDevice[r.device] ?? { totalRevenue: 0, ltv: 0, aov: 0, transactions: 0 };
         return {
           device: r.device,
           visitors: vis,
           conversions: conv,
           conversionRate: vis > 0 ? parseFloat(((conv / vis) * 100).toFixed(1)) : 0,
-          revenue: parseFloat(rev.toFixed(2)),
-          revenuePerVisitor: vis > 0 ? parseFloat((rev / vis).toFixed(2)) : 0,
+          revenue: ltvData.totalRevenue,
+          revenuePerVisitor: vis > 0 ? parseFloat((ltvData.totalRevenue / vis).toFixed(2)) : 0,
+          ltv: ltvData.ltv,
+          aov: ltvData.aov,
+          transactions: ltvData.transactions,
         };
       });
 

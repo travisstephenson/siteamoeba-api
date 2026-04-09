@@ -2377,6 +2377,9 @@ interface TrafficSourceRow {
   conversionRate: number;
   revenue: number;
   revenuePerVisitor: number;
+  ltv: number;
+  aov: number;
+  transactions: number;
 }
 
 interface DeviceRow {
@@ -2386,6 +2389,9 @@ interface DeviceRow {
   conversionRate: number;
   revenue: number;
   revenuePerVisitor: number;
+  ltv: number;
+  aov: number;
+  transactions: number;
 }
 
 interface TrafficSourcesData {
@@ -2624,11 +2630,25 @@ function TrafficSourcesPanel({ campaignId }: { campaignId: number }) {
                               </button>
                             </div>
 
-                            {/* Revenue if available */}
-                            {row.revenue > 0 && (
-                              <p className="text-[11px] text-muted-foreground">
-                                ${row.revenue.toLocaleString()} revenue
-                              </p>
+                            {/* Revenue + LTV */}
+                            {(row.revenue > 0 || row.ltv > 0) && (
+                              <div className="flex items-center gap-3 pt-0.5 flex-wrap">
+                                {row.revenue > 0 && (
+                                  <div className="text-[10px] text-muted-foreground">
+                                    <span className="font-semibold text-foreground">${row.revenue.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span> total rev
+                                  </div>
+                                )}
+                                {row.ltv > 0 && (
+                                  <div className="text-[10px] text-muted-foreground">
+                                    <span className="font-semibold text-green-600">${row.ltv.toFixed(2)}</span> LTV
+                                  </div>
+                                )}
+                                {row.aov > 0 && (
+                                  <div className="text-[10px] text-muted-foreground">
+                                    <span className="font-semibold text-foreground">${row.aov.toFixed(2)}</span> AOV
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </>
                         ) : (
