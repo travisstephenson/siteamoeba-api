@@ -3268,6 +3268,10 @@ export async function registerRoutes(server: Server, app: Express) {
         // Cap at 30 minutes (1800s) — anything over is a backgrounded/abandoned tab
         if (typeof timeOnPage === "number" && timeOnPage > 0) sessionUpdates.timeOnPage = Math.min(timeOnPage, 1800);
         if (device) sessionUpdates.deviceType = device;
+        // Passive learning: page dimensions
+        const { pageHeight, screenWidth } = body;
+        if (typeof pageHeight === "number" && pageHeight > 0) (sessionUpdates as any).pageHeight = pageHeight;
+        if (typeof screenWidth === "number" && screenWidth > 0) (sessionUpdates as any).screenWidth = screenWidth;
 
         // Aggregate from events
         let clickDelta = 0;
@@ -3453,6 +3457,83 @@ export async function registerRoutes(server: Server, app: Express) {
       sectionVisibilityRates,
       clickPatterns,
       deviceBreakdown,
+    });
+  });
+
+  // GET /api/campaigns/:id/page-insights — passive learning metrics from ALL visitors
+  // Works even without active tests — learns from every installed pixel
+  app.get("/api/campaigns/:id/page-insights", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const result = await pgPool.query(
+      `SELECT
+        COUNT(DISTINCT v.id) as total_visitors,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.converted = true) as total_conversions,
+
+        -- Mobile vs Desktop split
+        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type IN ('ios','android')) as mobile_visitors,
+        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type IN ('desktop_mac','desktop_windows','desktop')) as desktop_visitors,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type IN ('ios','android')) as mobile_conversions,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type IN ('desktop_mac','desktop_windows','desktop')) as desktop_conversions,
+
+        -- Avg metrics by device
+        ROUND(AVG(vs.time_on_page) FILTER (WHERE vs.device_type IN ('ios','android') AND vs.time_on_page > 0)) as mobile_avg_time,
+        ROUND(AVG(vs.time_on_page) FILTER (WHERE vs.device_type IN ('desktop_mac','desktop_windows','desktop') AND vs.time_on_page > 0)) as desktop_avg_time,
+        ROUND(AVG(vs.max_scroll_depth) FILTER (WHERE vs.device_type IN ('ios','android'))) as mobile_avg_scroll,
+        ROUND(AVG(vs.max_scroll_depth) FILTER (WHERE vs.device_type IN ('desktop_mac','desktop_windows','desktop'))) as desktop_avg_scroll,
+
+        -- Page dimensions (median approximation via avg)
+        ROUND(AVG(vs.page_height) FILTER (WHERE vs.device_type IN ('ios','android') AND vs.page_height > 0)) as mobile_avg_page_height,
+        ROUND(AVG(vs.page_height) FILTER (WHERE vs.device_type IN ('desktop_mac','desktop_windows','desktop') AND vs.page_height > 0)) as desktop_avg_page_height,
+        ROUND(AVG(vs.screen_width) FILTER (WHERE vs.screen_width > 0)) as avg_screen_width,
+
+        -- Overall
+        ROUND(AVG(vs.time_on_page) FILTER (WHERE vs.time_on_page > 0)) as overall_avg_time,
+        ROUND(AVG(vs.max_scroll_depth)) as overall_avg_scroll,
+        ROUND(AVG(vs.click_count)) as overall_avg_clicks,
+        COUNT(DISTINCT v.id) FILTER (WHERE vs.video_played) as video_plays
+      FROM visitors v
+      LEFT JOIN visitor_sessions vs ON vs.visitor_id = v.id AND vs.campaign_id = v.campaign_id
+      WHERE v.campaign_id = $1`,
+      [campaignId]
+    );
+
+    const r = result.rows[0] || {};
+    const totalV = parseInt(r.total_visitors) || 0;
+    const mobileV = parseInt(r.mobile_visitors) || 0;
+    const desktopV = parseInt(r.desktop_visitors) || 0;
+    const mobileConv = parseInt(r.mobile_conversions) || 0;
+    const desktopConv = parseInt(r.desktop_conversions) || 0;
+
+    return res.json({
+      totalVisitors: totalV,
+      totalConversions: parseInt(r.total_conversions) || 0,
+      overallConversionRate: totalV > 0 ? parseFloat(((parseInt(r.total_conversions) || 0) / totalV * 100).toFixed(2)) : 0,
+      overallAvgTime: parseInt(r.overall_avg_time) || 0,
+      overallAvgScroll: parseInt(r.overall_avg_scroll) || 0,
+      overallAvgClicks: parseInt(r.overall_avg_clicks) || 0,
+      videoPlays: parseInt(r.video_plays) || 0,
+      mobile: {
+        visitors: mobileV,
+        conversions: mobileConv,
+        conversionRate: mobileV > 0 ? parseFloat((mobileConv / mobileV * 100).toFixed(2)) : 0,
+        avgTime: parseInt(r.mobile_avg_time) || 0,
+        avgScroll: parseInt(r.mobile_avg_scroll) || 0,
+        avgPageHeight: parseInt(r.mobile_avg_page_height) || 0,
+      },
+      desktop: {
+        visitors: desktopV,
+        conversions: desktopConv,
+        conversionRate: desktopV > 0 ? parseFloat((desktopConv / desktopV * 100).toFixed(2)) : 0,
+        avgTime: parseInt(r.desktop_avg_time) || 0,
+        avgScroll: parseInt(r.desktop_avg_scroll) || 0,
+        avgPageHeight: parseInt(r.desktop_avg_page_height) || 0,
+      },
+      avgScreenWidth: parseInt(r.avg_screen_width) || 0,
     });
   });
 

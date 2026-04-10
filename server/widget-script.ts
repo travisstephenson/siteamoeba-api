@@ -710,7 +710,9 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   });
 
   function sendBatch(batch, timeOnPage) {
-    var payload = JSON.stringify({vid: vid, cid: CID, events: batch, timeOnPage: timeOnPage, maxScroll: maxScroll, device: device});
+    var pageHeight = document.documentElement.scrollHeight || 0;
+    var screenWidth = window.innerWidth || 0;
+    var payload = JSON.stringify({vid: vid, cid: CID, events: batch, timeOnPage: timeOnPage, maxScroll: maxScroll, device: device, pageHeight: pageHeight, screenWidth: screenWidth});
     if (navigator.sendBeacon) {
       navigator.sendBeacon(API + "/api/widget/events", new Blob([payload], {type: "application/json"}));
     } else {

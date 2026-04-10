@@ -1212,6 +1212,8 @@ class StorageImpl implements IStorage {
     videoCompleted?: boolean;
     deviceType?: string;
     converted?: boolean;
+    pageHeight?: number;
+    screenWidth?: number;
   }): Promise<void> {
     const now = new Date().toISOString();
     // Try to get existing session
@@ -1226,8 +1228,8 @@ class StorageImpl implements IStorage {
       await pool.query(
         `INSERT INTO visitor_sessions
           (visitor_id, campaign_id, max_scroll_depth, time_on_page, sections_viewed, click_count,
-           video_played, video_completed, device_type, converted, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           video_played, video_completed, device_type, converted, page_height, screen_width, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          ON CONFLICT (visitor_id, campaign_id) DO NOTHING`,
         [
           visitorId,
@@ -1240,6 +1242,8 @@ class StorageImpl implements IStorage {
           updates.videoCompleted ?? false,
           updates.deviceType ?? null,
           updates.converted ?? false,
+          updates.pageHeight ?? 0,
+          updates.screenWidth ?? 0,
           now,
           now,
         ]
@@ -1266,7 +1270,9 @@ class StorageImpl implements IStorage {
           video_completed = video_completed OR $8,
           device_type = COALESCE(device_type, $9),
           converted = converted OR $10,
-          updated_at = $11
+          page_height = GREATEST(page_height, $11),
+          screen_width = GREATEST(screen_width, $12),
+          updated_at = $13
          WHERE visitor_id = $1 AND campaign_id = $2`,
         [
           visitorId,
@@ -1279,6 +1285,8 @@ class StorageImpl implements IStorage {
           updates.videoCompleted ?? false,
           updates.deviceType ?? null,
           updates.converted ?? false,
+          updates.pageHeight ?? 0,
+          updates.screenWidth ?? 0,
           now,
         ]
       );

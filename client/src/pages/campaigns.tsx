@@ -1615,7 +1615,7 @@ function ActiveTestsPanel({ tests }: { tests: DashboardStats['activeTests'] }) {
 // ============================================================
 
 // ── Onboarding Modal for new free users ──
-function OnboardingModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+function OnboardingModal({ open, onClose, onStartScan }: { open: boolean; onClose: () => void; onStartScan: () => void }) {
   const [, navigate] = useLocation();
   return (
     <Dialog open={open} onOpenChange={onClose}>
@@ -1623,52 +1623,48 @@ function OnboardingModal({ open, onClose }: { open: boolean; onClose: () => void
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2 text-lg">
             <Sparkles className="w-5 h-5 text-primary" />
-            Welcome to SiteAmoeba
+            Let's set up your first campaign
           </DialogTitle>
         </DialogHeader>
         <div className="space-y-4 py-2">
           <p className="text-sm text-muted-foreground">
-            You're on the <strong>Free plan</strong> — which means you can use your own AI API keys for unlimited testing at no cost.
+            SiteAmoeba uses AI to analyze your page, identify what to test, and start improving your conversion rate. It takes about 2 minutes.
           </p>
           <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
-            <p className="text-sm font-medium">To get started:</p>
             <div className="flex items-start gap-3">
               <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</div>
               <div className="text-sm text-muted-foreground">
-                Go to <strong>Settings</strong> and add your AI API key from any supported provider: OpenAI, Anthropic, Google, Mistral, xAI, or Meta.
+                <strong>Paste your page URL</strong> — we'll scan it with AI to identify your headline, CTAs, and other testable sections.
               </div>
             </div>
             <div className="flex items-start gap-3">
               <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</div>
               <div className="text-sm text-muted-foreground">
-                Come back here and click <strong>"New Campaign"</strong> to scan your first page.
+                <strong>Install a one-line pixel</strong> on your page — works with GHL, ClickFunnels, WordPress, Shopify, and any platform.
               </div>
             </div>
             <div className="flex items-start gap-3">
               <div className="w-6 h-6 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">3</div>
               <div className="text-sm text-muted-foreground">
-                The AI will identify testable sections and generate optimized variants — your first test can be live in under 5 minutes.
+                <strong>Start learning immediately</strong> — even before running a test, we'll track visitor behavior, scroll depth, time on page, and conversion data across every traffic source.
               </div>
             </div>
           </div>
-          <div className="flex gap-2 pt-1">
-            <Button
-              className="flex-1"
-              onClick={() => { onClose(); navigate("/settings"); }}
-              data-testid="button-onboarding-settings"
-            >
-              <Settings className="w-4 h-4 mr-2" />
-              Go to Settings
-            </Button>
-            <Button
-              variant="outline"
-              className="flex-1"
-              onClick={onClose}
-              data-testid="button-onboarding-dismiss"
-            >
-              I'll do this later
-            </Button>
-          </div>
+          <Button
+            className="w-full"
+            onClick={() => { onClose(); onStartScan(); }}
+            data-testid="button-onboarding-scan"
+          >
+            <ScanLine className="w-4 h-4 mr-2" />
+            Scan your first page
+          </Button>
+          <button
+            className="w-full text-xs text-muted-foreground hover:text-foreground transition-colors py-1"
+            onClick={onClose}
+            data-testid="button-onboarding-dismiss"
+          >
+            I'll do this later
+          </button>
         </div>
       </DialogContent>
     </Dialog>
@@ -1723,9 +1719,8 @@ export default function CampaignsPage() {
   });
 
   // Show onboarding for new free users without API keys
+  // Show onboarding for any user with zero campaigns (regardless of plan or API key)
   const needsOnboarding = !authLoading && isAuthenticated && user
-    && user.plan === "free"
-    && !user.llmProvider
     && campaigns !== undefined
     && campaigns.length === 0;
 
@@ -1754,7 +1749,7 @@ export default function CampaignsPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Onboarding modal for new free users */}
-      <OnboardingModal open={showOnboarding} onClose={() => setShowOnboarding(false)} />
+      <OnboardingModal open={showOnboarding} onClose={() => setShowOnboarding(false)} onStartScan={() => setWizardOpen(true)} />
 
       {/* Page header */}
       <div className="flex items-center justify-between gap-4 px-6 py-5 border-b border-border">
