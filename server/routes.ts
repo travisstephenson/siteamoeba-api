@@ -1682,6 +1682,15 @@ export async function registerRoutes(server: Server, app: Express) {
     // 40KB covers essentially every sales/landing page in full
     const cleaned = (titleText + bodyText).slice(0, 40000);
 
+    // Extract page copy metrics from raw HTML for passive learning
+    const pageWordCount = bodyText.split(/\s+/).filter((w: string) => w.length > 0).length;
+    const pageCharCount = bodyText.length;
+    const pageHeadingCount = (rawHtml.match(/<h[1-6][^>]*>/gi) || []).length;
+    const pageCtaCount = (rawHtml.match(/<button[^>]*>|<a[^>]*class=["'][^"']*(?:btn|cta|button)[^"']*["']/gi) || []).length;
+    const pageImageCount = (rawHtml.match(/<img[^>]*>/gi) || []).length;
+    const pageVideoCount = (rawHtml.match(/<video[^>]*>|<iframe[^>]*(?:youtube|vimeo|wistia)[^>]*>/gi) || []).length;
+    let pageSectionCount = 0; // set after LLM parse
+
     const messages = buildPageScanPrompt(url, cleaned);
 
     let rawResponse: string;
@@ -1778,11 +1787,19 @@ export async function registerRoutes(server: Server, app: Express) {
       try {
         const targetCampaign = await storage.getCampaign(campaignId);
         if (targetCampaign && targetCampaign.userId === req.userId) {
+          pageSectionCount = scanResult.sections?.length || 0;
           await storage.updateCampaign(campaignId, {
             pageType: scanResult.pageType || null,
             pageGoal: scanResult.pageGoal || null,
             pricePoint: (scanResult.pricePoint && scanResult.pricePoint !== "null") ? scanResult.pricePoint : null,
             niche: scanResult.niche || null,
+            pageWordCount,
+            pageCharCount,
+            pageHeadingCount,
+            pageCtaCount,
+            pageImageCount,
+            pageVideoCount,
+            pageSectionCount,
           } as any);
         }
       } catch (err) {
@@ -3535,6 +3552,145 @@ export async function registerRoutes(server: Server, app: Express) {
       },
       avgScreenWidth: parseInt(r.avg_screen_width) || 0,
     });
+  });
+
+  // GET /api/conversion-intelligence — cross-campaign correlation analysis
+  // Correlates page metrics + behavioral data against conversion rates across ALL campaigns
+  app.get("/api/conversion-intelligence", requireAuth, async (req: Request, res: Response) => {
+    // Pull per-campaign metrics with enough visitors to be meaningful
+    const result = await pgPool.query(
+      `SELECT
+        c.id, c.url, c.page_type, c.niche, c.price_point,
+        c.page_word_count, c.page_char_count, c.page_heading_count,
+        c.page_cta_count, c.page_image_count, c.page_video_count,
+
+        COUNT(DISTINCT v.id) as visitors,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.converted) as conversions,
+
+        -- Behavioral averages
+        ROUND(AVG(vs.time_on_page) FILTER (WHERE vs.time_on_page > 0)) as avg_time,
+        ROUND(AVG(vs.max_scroll_depth)) as avg_scroll,
+        ROUND(AVG(vs.click_count)) as avg_clicks,
+        ROUND(AVG(vs.page_height) FILTER (WHERE vs.page_height > 0)) as avg_page_height,
+
+        -- Mobile vs desktop conversion rates
+        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type IN ('ios','android')) as mobile_visitors,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type IN ('ios','android')) as mobile_conversions,
+        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type IN ('desktop_mac','desktop_windows','desktop')) as desktop_visitors,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type IN ('desktop_mac','desktop_windows','desktop')) as desktop_conversions,
+
+        -- Converter vs non-converter behavior
+        ROUND(AVG(vs.time_on_page) FILTER (WHERE v.converted AND vs.time_on_page > 0)) as buyer_avg_time,
+        ROUND(AVG(vs.time_on_page) FILTER (WHERE NOT v.converted AND vs.time_on_page > 0)) as visitor_avg_time,
+        ROUND(AVG(vs.max_scroll_depth) FILTER (WHERE v.converted)) as buyer_avg_scroll,
+        ROUND(AVG(vs.max_scroll_depth) FILTER (WHERE NOT v.converted)) as visitor_avg_scroll
+
+      FROM campaigns c
+      JOIN visitors v ON v.campaign_id = c.id
+      LEFT JOIN visitor_sessions vs ON vs.visitor_id = v.id AND vs.campaign_id = c.id
+      WHERE c.status = 'active'
+      GROUP BY c.id
+      HAVING COUNT(DISTINCT v.id) >= 10
+      ORDER BY COUNT(DISTINCT v.id) DESC`
+    );
+
+    const campaigns = result.rows.map((r: any) => {
+      const vis = parseInt(r.visitors) || 0;
+      const conv = parseInt(r.conversions) || 0;
+      const mVis = parseInt(r.mobile_visitors) || 0;
+      const dVis = parseInt(r.desktop_visitors) || 0;
+      const mConv = parseInt(r.mobile_conversions) || 0;
+      const dConv = parseInt(r.desktop_conversions) || 0;
+      return {
+        campaignId: r.id,
+        url: r.url,
+        pageType: r.page_type,
+        niche: r.niche,
+        pricePoint: r.price_point,
+        pageWordCount: parseInt(r.page_word_count) || 0,
+        pageHeadingCount: parseInt(r.page_heading_count) || 0,
+        pageCtaCount: parseInt(r.page_cta_count) || 0,
+        pageImageCount: parseInt(r.page_image_count) || 0,
+        pageVideoCount: parseInt(r.page_video_count) || 0,
+        visitors: vis,
+        conversions: conv,
+        conversionRate: vis > 0 ? parseFloat((conv / vis * 100).toFixed(2)) : 0,
+        avgTime: parseInt(r.avg_time) || 0,
+        avgScroll: parseInt(r.avg_scroll) || 0,
+        avgClicks: parseInt(r.avg_clicks) || 0,
+        avgPageHeight: parseInt(r.avg_page_height) || 0,
+        mobile: {
+          visitors: mVis,
+          conversionRate: mVis > 0 ? parseFloat((mConv / mVis * 100).toFixed(2)) : 0,
+        },
+        desktop: {
+          visitors: dVis,
+          conversionRate: dVis > 0 ? parseFloat((dConv / dVis * 100).toFixed(2)) : 0,
+        },
+        buyerAvgTime: parseInt(r.buyer_avg_time) || 0,
+        visitorAvgTime: parseInt(r.visitor_avg_time) || 0,
+        buyerAvgScroll: parseInt(r.buyer_avg_scroll) || 0,
+        visitorAvgScroll: parseInt(r.visitor_avg_scroll) || 0,
+      };
+    });
+
+    // Compute cross-campaign correlations if we have enough data
+    const correlations: { metric: string; correlation: string; insight: string }[] = [];
+    if (campaigns.length >= 3) {
+      // Simple correlation observations
+      const avgCVR = campaigns.reduce((s: number, c: any) => s + c.conversionRate, 0) / campaigns.length;
+      const highCVR = campaigns.filter((c: any) => c.conversionRate > avgCVR);
+      const lowCVR = campaigns.filter((c: any) => c.conversionRate <= avgCVR);
+
+      const avgMetric = (arr: any[], key: string) => {
+        const vals = arr.map((c: any) => c[key]).filter((v: number) => v > 0);
+        return vals.length > 0 ? vals.reduce((a: number, b: number) => a + b, 0) / vals.length : 0;
+      };
+
+      // Word count vs conversion
+      const highWords = avgMetric(highCVR, 'pageWordCount');
+      const lowWords = avgMetric(lowCVR, 'pageWordCount');
+      if (highWords > 0 && lowWords > 0) {
+        correlations.push({
+          metric: 'pageWordCount',
+          correlation: highWords > lowWords ? 'positive' : 'negative',
+          insight: `Higher-converting pages average ${Math.round(highWords)} words vs ${Math.round(lowWords)} for lower-converting pages.`,
+        });
+      }
+
+      // Scroll depth vs conversion
+      const highScroll = avgMetric(highCVR, 'buyerAvgScroll');
+      const lowScroll = avgMetric(lowCVR, 'visitorAvgScroll');
+      if (highScroll > 0) {
+        correlations.push({
+          metric: 'scrollDepth',
+          correlation: 'behavioral',
+          insight: `Buyers scroll ${Math.round(highScroll)}% of the page on average vs ${Math.round(lowScroll)}% for non-buyers.`,
+        });
+      }
+
+      // Time on page vs conversion
+      const highTime = avgMetric(highCVR, 'buyerAvgTime');
+      const lowTime = avgMetric(lowCVR, 'visitorAvgTime');
+      if (highTime > 0) {
+        correlations.push({
+          metric: 'timeOnPage',
+          correlation: 'behavioral',
+          insight: `Buyers spend ${Math.round(highTime)}s on page vs ${Math.round(lowTime)}s for non-buyers.`,
+        });
+      }
+
+      // Mobile vs desktop
+      const totalMobileCVR = campaigns.reduce((s: number, c: any) => s + (c.mobile.conversionRate || 0), 0) / campaigns.length;
+      const totalDesktopCVR = campaigns.reduce((s: number, c: any) => s + (c.desktop.conversionRate || 0), 0) / campaigns.length;
+      correlations.push({
+        metric: 'deviceType',
+        correlation: totalMobileCVR > totalDesktopCVR ? 'mobile_higher' : 'desktop_higher',
+        insight: `Mobile converts at ${totalMobileCVR.toFixed(2)}% vs Desktop at ${totalDesktopCVR.toFixed(2)}% across all pages.`,
+      });
+    }
+
+    return res.json({ campaigns, correlations, totalCampaigns: campaigns.length });
   });
 
   // Stripe webhook for campaign conversions
