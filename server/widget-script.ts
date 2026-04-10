@@ -282,15 +282,29 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     var allElements = findElements(selector, currentText, controlText, category);
     console.log("[SA] applySectionVariant", category, "found", allElements.length, "elements", "selector:", selector);
 
-    // For headline/subheadline/cta: find the single best-matching element by text.
-    // CSS selectors on GHL/Webflow return wrong elements due to nested DOM structure.
-    // Always search ALL page elements of the right tag type for the highest token score.
+    // For headline/subheadline/cta: ensure we have the right element(s).
+    // On GHL, CSS selectors with comma-separated classes (multi-line headings) may
+    // correctly return 2-3 elements that form ONE visual headline — keep them all.
+    // On GHL with generic selectors (h1:first-of-type), Strategy 1 returns many wrong
+    // elements — in that case, search all page elements for the best text match.
     var isInlineCategory = category === "headline" || category === "subheadline" || category === "cta" || category === "button";
-    if (isInlineCategory) {
+    if (isInlineCategory && allElements.length !== 0) {
+      // Check if the combined text of allElements matches the control text well
+      var combinedText = "";
+      for (var ce = 0; ce < allElements.length; ce++) combinedText += " " + (allElements[ce].textContent || "");
+      combinedText = combinedText.trim().toLowerCase();
       var fp2 = (currentText || controlText || "").trim().toLowerCase();
       var fpToks2 = fp2.split(/ +/).filter(function(w) { return w.length > 2; });
-      if (fpToks2.length > 0) {
-        // Search all heading-type elements on the page, not just selector matches
+      var combinedScore = 0;
+      for (var cs = 0; cs < fpToks2.length; cs++) { if (combinedText.indexOf(fpToks2[cs]) !== -1) combinedScore++; }
+      console.log("[SA] combined score:", combinedScore + "/" + fpToks2.length, "elements:", allElements.length);
+      
+      // If combined elements match well (>60%), keep them all (multi-line heading)
+      if (combinedScore >= Math.ceil(fpToks2.length * 0.6)) {
+        // Good match — keep allElements as-is for text distribution
+      } else {
+        // Poor match — CSS selector returned wrong elements.
+        // Search ALL page elements for the single best text match.
         var tagSearch = category === "cta" || category === "button"
           ? ["button", "a", "span"]
           : ["h1", "h2", "h3", "[class*='heading']", "[class*='cheading']", "[class*='title']"];
@@ -301,20 +315,16 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
             var cands2 = document.querySelectorAll(tagSearch[ts2]);
             for (var ci2 = 0; ci2 < cands2.length; ci2++) {
               var elTxt2 = (cands2[ci2].textContent || "").trim().toLowerCase();
-              var score2 = 0;
-              for (var bj = 0; bj < fpToks2.length; bj++) { if (elTxt2.indexOf(fpToks2[bj]) !== -1) score2++; }
-              if (score2 > bestScore2) { bestScore2 = score2; bestEl2 = cands2[ci2]; }
+              var sc2 = 0;
+              for (var bj = 0; bj < fpToks2.length; bj++) { if (elTxt2.indexOf(fpToks2[bj]) !== -1) sc2++; }
+              if (sc2 > bestScore2) { bestScore2 = sc2; bestEl2 = cands2[ci2]; }
             }
           } catch(e2) {}
         }
         if (bestEl2 && bestScore2 >= Math.ceil(fpToks2.length * 0.5)) {
-          console.log("[SA] best match score:", bestScore2 + "/" + fpToks2.length, "text:", (bestEl2.textContent||"").substring(0,60));
+          console.log("[SA] fallback best match:", bestScore2 + "/" + fpToks2.length, "text:", (bestEl2.textContent||"").substring(0,60));
           allElements = [bestEl2];
-        } else if (allElements.length > 1) {
-          allElements = [allElements[0]];
         }
-      } else if (allElements.length > 1) {
-        allElements = [allElements[0]];
       }
     }
 
