@@ -365,6 +365,46 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({ url: portalSession.url });
   });
 
+  // Sync subscription status from Stripe — called after checkout redirect
+  // Ensures plan is upgraded even if webhook didn't fire
+  app.post("/api/billing/sync", requireAuth, async (req: Request, res: Response) => {
+    if (!stripe) return res.status(500).json({ error: "Stripe not configured" });
+    const user = await storage.getUserById(req.userId!);
+    if (!user?.stripeCustomerId) return res.json({ synced: false, reason: "no customer" });
+
+    try {
+      // Get all active subscriptions for this customer
+      const subs = await stripe.subscriptions.list({
+        customer: user.stripeCustomerId,
+        status: "active",
+        limit: 1,
+      });
+      if (subs.data.length > 0) {
+        const sub = subs.data[0];
+        const priceId = sub.items.data[0]?.price?.id;
+        // Find which plan this price belongs to
+        let matchedPlan: string | null = null;
+        for (const [planId, config] of Object.entries(PLANS)) {
+          if ((config as any).priceId === priceId) { matchedPlan = planId; break; }
+        }
+        if (matchedPlan && user.plan === "free") {
+          const planConfig = PLANS[matchedPlan] as any;
+          await storage.updateUser(user.id, {
+            plan: matchedPlan,
+            creditsLimit: planConfig.credits || 1000,
+            campaignsLimit: planConfig.campaigns || 999,
+            stripeSubscriptionId: sub.id,
+          });
+          return res.json({ synced: true, plan: matchedPlan });
+        }
+      }
+      return res.json({ synced: false, reason: "no active subscription found" });
+    } catch (err: any) {
+      console.error("[billing-sync]", err.message);
+      return res.status(500).json({ error: "Failed to sync" });
+    }
+  });
+
   // Stripe webhook for subscription events
   app.post("/api/webhook/stripe-billing", async (req: Request, res: Response) => {
     const event = req.body;

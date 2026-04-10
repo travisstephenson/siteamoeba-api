@@ -1,6 +1,7 @@
+import { useState, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { Check, CreditCard, ExternalLink, Zap, Brain, Rocket, Crown } from "lucide-react";
+import { Check, CreditCard, ExternalLink, Zap, Brain, Rocket, Crown, CircleCheck } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -91,6 +92,27 @@ export default function BillingPage() {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const [, navigate] = useLocation();
   const { toast } = useToast();
+  const [checkoutSuccess, setCheckoutSuccess] = useState(false);
+
+  // After Stripe checkout redirect: detect success param, sync subscription, refresh user
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    const isSuccess = hash.includes("success=true");
+    const isCanceled = hash.includes("canceled=true");
+    if (isSuccess) {
+      setCheckoutSuccess(true);
+      // Call sync endpoint to verify Stripe subscription and upgrade plan
+      apiRequest("POST", "/api/billing/sync").then(() => {
+        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+      }).catch(() => {});
+      // Clean URL
+      window.history.replaceState(null, "", "/#/billing");
+    }
+    if (isCanceled) {
+      toast({ title: "Checkout canceled", description: "No charges were made." });
+      window.history.replaceState(null, "", "/#/billing");
+    }
+  }, []);
 
   if (!authLoading && !isAuthenticated) {
     navigate("/auth");
@@ -146,6 +168,14 @@ export default function BillingPage() {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Success banner after checkout */}
+      {checkoutSuccess && (
+        <div className="bg-green-50 dark:bg-green-950/20 border-b border-green-200 dark:border-green-800 px-6 py-3 flex items-center gap-2">
+          <CircleCheck className="w-4 h-4 text-green-600" />
+          <p className="text-sm text-green-800 dark:text-green-200 font-medium">Payment successful. Your plan has been upgraded.</p>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between gap-4 px-6 py-5 border-b border-border">
         <div>
