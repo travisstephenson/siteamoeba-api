@@ -1198,87 +1198,80 @@ export async function registerRoutes(server: Server, app: Express) {
       );
       if (existing.rows.length > 0) continue;
 
-      // === STRICT ATTRIBUTION ===
-      // Rule: A Stripe charge can ONLY be attributed to a campaign if:
-      //   1. The charge description matches a campaign's product keywords, OR
-      //   2. The buyer's email matches a visitor who already has variant data on a specific campaign
-      // NO guessing. NO fallback to "most recent campaign." If we can't match it, skip it.
+      // === ATTRIBUTION via product_map + customer_campaigns ===
+      // 1. Check product_map: does this charge description map to a campaign?
+      // 2. Check customer_campaigns: is this Stripe customer already linked to a campaign?
+      // 3. If #1 matched, also set customer_campaigns for future LTV chaining.
+      // NO guessing. If neither matches, skip the charge.
       let matchedCampaignId: number | null = null;
       let matchedVisitorId: string | null = null;
       const chargeDesc = (charge.description || "").toLowerCase();
-      const chargeDate = new Date(charge.created * 1000).toISOString();
+      const stripeCustomerId = charge.customer as string || null;
 
-      // Skip non-campaign charges (SiteAmoeba billing, GHL auto-recharge)
+      // Skip non-campaign charges
       if (chargeDesc.includes("subscription creation") || chargeDesc.includes("subscription update")) continue;
       if (chargeDesc.includes("auto-recharge for sub-account")) continue;
 
-      // STRATEGY 1: Product keyword match (most reliable)
-      // Each campaign can have product_keywords like "Offer To Ads Archetype,Extraction Prompt"
-      for (const c of userCampaigns) {
-        const keywords = ((c as any).productKeywords || "").split(",").map((k: string) => k.trim().toLowerCase()).filter(Boolean);
-        if (keywords.length > 0 && keywords.some((kw: string) => chargeDesc.includes(kw))) {
-          matchedCampaignId = c.id;
-          break;
+      // STEP 1: product_map lookup (user-configured description -> campaign)
+      const pmMatch = await pool.query(
+        `SELECT campaign_id FROM product_map
+         WHERE user_id = $1 AND LOWER($2) LIKE '%' || LOWER(description_pattern) || '%'
+         LIMIT 1`,
+        [userId, charge.description || ""]
+      );
+      if (pmMatch.rows.length > 0) {
+        matchedCampaignId = pmMatch.rows[0].campaign_id;
+
+        // Set customer_campaigns for LTV chaining (first product purchase links customer to campaign)
+        if (stripeCustomerId) {
+          await pool.query(
+            `INSERT INTO customer_campaigns (user_id, stripe_customer_id, customer_email, campaign_id)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (user_id, stripe_customer_id) DO NOTHING`,
+            [userId, stripeCustomerId, customerEmail, matchedCampaignId]
+          );
         }
       }
 
-      // STRATEGY 2: Email → visitor with variant data (proves they were ON that campaign page)
-      // A visitor who was assigned a headline variant on campaign X = definitive proof they visited campaign X.
-      // Their email gets set when they convert via pixel or get backfilled from a Stripe charge.
+      // STEP 2: customer_campaigns lookup (this customer already bought from a specific campaign)
+      if (!matchedCampaignId && stripeCustomerId) {
+        const ccMatch = await pool.query(
+          `SELECT campaign_id FROM customer_campaigns
+           WHERE user_id = $1 AND stripe_customer_id = $2
+           LIMIT 1`,
+          [userId, stripeCustomerId]
+        );
+        if (ccMatch.rows.length > 0) {
+          matchedCampaignId = ccMatch.rows[0].campaign_id;
+        }
+      }
+
+      // STEP 3: Email-based lookup (visitor with variant data = proof they were on that page)
       if (!matchedCampaignId && customerEmail) {
-        const visitorWithVariant = await pool.query(
+        const emailMatch = await pool.query(
           `SELECT v.id AS visitor_id, v.campaign_id
-           FROM visitors v
-           JOIN campaigns c ON c.id = v.campaign_id
+           FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
            WHERE c.user_id = $1 AND v.customer_email = $2 AND v.headline_variant_id IS NOT NULL
            ORDER BY v.first_seen ASC LIMIT 1`,
           [userId, customerEmail]
         );
-        if (visitorWithVariant.rows.length > 0) {
-          matchedVisitorId = visitorWithVariant.rows[0].visitor_id;
-          matchedCampaignId = visitorWithVariant.rows[0].campaign_id;
-        }
-      }
-
-      // STRATEGY 3: Email appears in previous revenue_events for a specific campaign
-      // (handles upsells — if we attributed their first purchase to campaign X, upsells chain there too)
-      if (!matchedCampaignId && customerEmail) {
-        const prevRevenue = await pool.query(
-          `SELECT campaign_id FROM revenue_events
-           WHERE customer_email = $1 AND campaign_id IN (SELECT id FROM campaigns WHERE user_id = $2)
-           ORDER BY created_at ASC LIMIT 1`,
-          [customerEmail, userId]
-        );
-        if (prevRevenue.rows.length > 0) {
-          matchedCampaignId = prevRevenue.rows[0].campaign_id;
-        }
-      }
-
-      // STRATEGY 4: Time-proximity to a pixel conversion + backfill email
-      // If a pixel conversion fired within 1 hour of this charge, that's the campaign.
-      // Backfill the email onto the visitor for future LTV chaining.
-      if (!matchedCampaignId) {
-        const timeMatch = await pool.query(
-          `SELECT v.id AS visitor_id, v.campaign_id
-           FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
-           WHERE c.user_id = $1 AND v.converted = true AND v.converted_at IS NOT NULL
-             AND ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) < 3600
-           ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC LIMIT 1`,
-          [userId, chargeDate]
-        );
-        if (timeMatch.rows.length > 0) {
-          matchedVisitorId = timeMatch.rows[0].visitor_id;
-          matchedCampaignId = timeMatch.rows[0].campaign_id;
-          if (customerEmail) {
-            await pool.query('UPDATE visitors SET customer_email = $1 WHERE id = $2 AND customer_email IS NULL', [customerEmail, matchedVisitorId]);
+        if (emailMatch.rows.length > 0) {
+          matchedVisitorId = emailMatch.rows[0].visitor_id;
+          matchedCampaignId = emailMatch.rows[0].campaign_id;
+          // Also set customer_campaigns
+          if (stripeCustomerId) {
+            await pool.query(
+              `INSERT INTO customer_campaigns (user_id, stripe_customer_id, customer_email, campaign_id)
+               VALUES ($1, $2, $3, $4)
+               ON CONFLICT (user_id, stripe_customer_id) DO NOTHING`,
+              [userId, stripeCustomerId, customerEmail, matchedCampaignId]
+            );
           }
         }
       }
 
-      // NO FALLBACK. If none of the above matched, this charge is unattributable.
-      // Don't pollute campaign data with guesses.
+      // NO FALLBACK. Unmatched charges are skipped — not attributed to any campaign.
 
-      if (!matchedCampaignId) continue;
 
       const chargeAmount = charge.amount / 100;
 
@@ -1487,6 +1480,95 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   // D) GET /api/settings/stripe-transactions
+  // === TRANSACTION MAPPING ===
+  // Lists all unique Stripe charge descriptions the system has seen,
+  // along with which campaign (if any) they're mapped to.
+  app.get("/api/settings/product-map", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    const accessToken = (user as any).stripeAccessToken;
+    if (!accessToken) return res.status(400).json({ error: "Stripe not connected" });
+
+    try {
+      const decryptedKey = decryptApiKey(accessToken);
+      const stripeClient = new Stripe(decryptedKey);
+
+      // Fetch last 200 charges to discover all product descriptions
+      const charges = await stripeClient.charges.list({ limit: 100 });
+      const descriptionCounts: Record<string, { count: number; totalAmount: number; lastSeen: number }> = {};
+      for (const ch of charges.data) {
+        const desc = ch.description || "(no description)";
+        // Skip SiteAmoeba billing and GHL charges
+        if (desc.toLowerCase().includes("subscription creation") || desc.toLowerCase().includes("auto-recharge")) continue;
+        if (!descriptionCounts[desc]) descriptionCounts[desc] = { count: 0, totalAmount: 0, lastSeen: 0 };
+        descriptionCounts[desc].count++;
+        descriptionCounts[desc].totalAmount += ch.amount / 100;
+        descriptionCounts[desc].lastSeen = Math.max(descriptionCounts[desc].lastSeen, ch.created);
+      }
+
+      // Get existing mappings
+      const mappings = await pgPool.query(
+        `SELECT pm.description_pattern, pm.campaign_id, c.name as campaign_name
+         FROM product_map pm
+         LEFT JOIN campaigns c ON c.id = pm.campaign_id
+         WHERE pm.user_id = $1`,
+        [user.id]
+      );
+      const mapByDesc: Record<string, { campaignId: number | null; campaignName: string | null }> = {};
+      for (const m of mappings.rows) {
+        mapByDesc[m.description_pattern] = { campaignId: m.campaign_id, campaignName: m.campaign_name };
+      }
+
+      // Get user campaigns for dropdown
+      const campaigns = await storage.getCampaignsByUser(user.id);
+
+      const products = Object.entries(descriptionCounts)
+        .map(([desc, data]) => ({
+          description: desc,
+          charges: data.count,
+          totalRevenue: parseFloat(data.totalAmount.toFixed(2)),
+          lastSeen: new Date(data.lastSeen * 1000).toISOString(),
+          mappedCampaignId: mapByDesc[desc]?.campaignId ?? null,
+          mappedCampaignName: mapByDesc[desc]?.campaignName ?? null,
+        }))
+        .sort((a, b) => b.charges - a.charges);
+
+      return res.json({
+        products,
+        campaigns: campaigns.map((c: any) => ({ id: c.id, name: c.name, url: c.url })),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Save a product description → campaign mapping
+  app.post("/api/settings/product-map", requireAuth, async (req: Request, res: Response) => {
+    const { description, campaignId } = req.body;
+    if (!description) return res.status(400).json({ error: "description required" });
+
+    try {
+      if (campaignId) {
+        await pgPool.query(
+          `INSERT INTO product_map (user_id, description_pattern, campaign_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, description_pattern) DO UPDATE SET campaign_id = $3`,
+          [req.userId, description, campaignId]
+        );
+      } else {
+        // Unmap — remove the mapping
+        await pgPool.query(
+          `DELETE FROM product_map WHERE user_id = $1 AND description_pattern = $2`,
+          [req.userId, description]
+        );
+      }
+      return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/settings/stripe-transactions", requireAuth, async (req: Request, res: Response) => {
     const user = await storage.getUserById(req.userId!);
     if (!user) return res.status(401).json({ error: "User not found" });
