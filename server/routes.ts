@@ -1271,6 +1271,7 @@ export async function registerRoutes(server: Server, app: Express) {
       }
 
       // No match = skip. Pixel didn't fire for this purchase.
+      if (!matchedCampaignId) continue;
 
 
       await storage.addRevenueEvent({
