@@ -1198,79 +1198,72 @@ export async function registerRoutes(server: Server, app: Express) {
       );
       if (existing.rows.length > 0) continue;
 
-      // First-touch attribution: find the visitor’s ORIGINAL campaign entry by email.
-      // Look across ALL campaigns for this user, ordered by first_seen (earliest visit wins).
-      // This correctly attributes multi-product funnel revenue ($27+$97+$199) back to the
-      // campaign that originally drove the traffic.
+      // === ATTRIBUTION CHAIN ===
+      // P0: Skip non-campaign charges (SiteAmoeba billing, GHL auto-recharge)
+      // P1: Product keyword matching (reads Stripe charge description)
+      // P2: Email-based first-touch (LTV chaining for upsells)
+      // P3: Time-proximity to pixel conversion
+      // P4: Most recent campaign (last resort)
       let matchedCampaignId: number | null = null;
       let matchedVisitorId: string | null = null;
+      const chargeDesc = (charge.description || "").toLowerCase();
+      const chargeDate = new Date(charge.created * 1000).toISOString();
 
-      // First look by customer_email stored directly on the visitor record
-      // (set at first purchase), then fall back to revenue_events email matching.
-      // ORDER BY first_seen ASC = first-touch attribution
-      const visitorMatch = await pool.query(
-        `SELECT v.id AS visitor_id, v.campaign_id
-         FROM visitors v
-         JOIN campaigns c ON c.id = v.campaign_id
-         WHERE c.user_id = $1
-           AND (
-             v.customer_email = $2
-             OR v.id IN (
-               SELECT re.visitor_id FROM revenue_events re
-               WHERE re.customer_email = $2 AND re.visitor_id IS NOT NULL
-             )
-           )
-         ORDER BY v.first_seen ASC
-         LIMIT 1`,
-        [userId, customerEmail]
-      );
+      // P0: Skip non-campaign charges
+      if (chargeDesc.includes("subscription creation") || chargeDesc.includes("subscription update")) continue;
+      if (chargeDesc.includes("auto-recharge for sub-account")) continue;
 
-      if (visitorMatch.rows.length > 0) {
-        matchedVisitorId = visitorMatch.rows[0].visitor_id;
-        matchedCampaignId = visitorMatch.rows[0].campaign_id;
-      } else {
-        // No exact visitor match — try matching by email across revenue_events
+      // P1: Match by product keywords in Stripe description
+      for (const c of userCampaigns) {
+        const keywords = ((c as any).productKeywords || "").split(",").map((k: string) => k.trim().toLowerCase()).filter(Boolean);
+        if (keywords.length > 0 && keywords.some((kw: string) => chargeDesc.includes(kw))) {
+          matchedCampaignId = c.id;
+          break;
+        }
+      }
+
+      // P2: Email-based first-touch (for upsells — chains back to original campaign)
+      if (!matchedCampaignId && customerEmail) {
         const emailMatch = await pool.query(
-          `SELECT re.visitor_id, re.campaign_id
-           FROM revenue_events re
-           JOIN campaigns c ON c.id = re.campaign_id
-           WHERE re.customer_email = $1 AND c.user_id = $2 AND re.visitor_id IS NOT NULL
-           ORDER BY re.created_at ASC
-           LIMIT 1`,
-          [customerEmail, userId]
+          `SELECT v.id AS visitor_id, v.campaign_id
+           FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
+           WHERE c.user_id = $1
+             AND (v.customer_email = $2
+               OR v.id IN (SELECT re.visitor_id FROM revenue_events re WHERE re.customer_email = $2 AND re.visitor_id IS NOT NULL))
+           ORDER BY v.first_seen ASC LIMIT 1`,
+          [userId, customerEmail]
         );
         if (emailMatch.rows.length > 0) {
           matchedVisitorId = emailMatch.rows[0].visitor_id;
           matchedCampaignId = emailMatch.rows[0].campaign_id;
-        } else {
-          // No email match anywhere. Use time-proximity: find a campaign that had
-          // a pixel conversion within 1 hour of this Stripe charge.
-          const chargeDate = new Date(charge.created * 1000).toISOString();
-          const timeMatch = await pool.query(
-            `SELECT v.id AS visitor_id, v.campaign_id
-             FROM visitors v
-             JOIN campaigns c ON c.id = v.campaign_id
-             WHERE c.user_id = $1 AND v.converted = true AND v.converted_at IS NOT NULL
-               AND ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) < 3600
-             ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC
-             LIMIT 1`,
-            [userId, chargeDate]
-          );
-          if (timeMatch.rows.length > 0) {
-            matchedVisitorId = timeMatch.rows[0].visitor_id;
-            matchedCampaignId = timeMatch.rows[0].campaign_id;
-            // Backfill the email onto this visitor for future LTV attribution
-            if (customerEmail) {
-              await pool.query('UPDATE visitors SET customer_email = $1 WHERE id = $2 AND customer_email IS NULL', [customerEmail, matchedVisitorId]);
-            }
-          } else {
-            // Last resort: most recently created active campaign (not oldest)
-            const sorted = [...userCampaigns]
-              .filter((c: any) => c.status === "active" && new Date(chargeDate) >= new Date(c.createdAt))
-              .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-            matchedCampaignId = sorted[0]?.id ?? null;
+        }
+      }
+
+      // P3: Time-proximity to a pixel conversion (within 1 hour)
+      if (!matchedCampaignId) {
+        const timeMatch = await pool.query(
+          `SELECT v.id AS visitor_id, v.campaign_id
+           FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
+           WHERE c.user_id = $1 AND v.converted = true AND v.converted_at IS NOT NULL
+             AND ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) < 3600
+           ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC LIMIT 1`,
+          [userId, chargeDate]
+        );
+        if (timeMatch.rows.length > 0) {
+          matchedVisitorId = timeMatch.rows[0].visitor_id;
+          matchedCampaignId = timeMatch.rows[0].campaign_id;
+          if (customerEmail) {
+            await pool.query('UPDATE visitors SET customer_email = $1 WHERE id = $2 AND customer_email IS NULL', [customerEmail, matchedVisitorId]);
           }
         }
+      }
+
+      // P4: Most recent campaign (last resort)
+      if (!matchedCampaignId) {
+        const sorted = [...userCampaigns]
+          .filter((c: any) => c.status === "active" && new Date(chargeDate) >= new Date(c.createdAt))
+          .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        matchedCampaignId = sorted[0]?.id ?? null;
       }
 
       if (!matchedCampaignId) continue;
