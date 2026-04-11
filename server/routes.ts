@@ -1227,11 +1227,11 @@ export async function registerRoutes(server: Server, app: Express) {
       // Their email gets set when they convert via pixel or get backfilled from a Stripe charge.
       if (!matchedCampaignId && customerEmail) {
         const visitorWithVariant = await pool.query(
-          \`SELECT v.id AS visitor_id, v.campaign_id
+          `SELECT v.id AS visitor_id, v.campaign_id
            FROM visitors v
            JOIN campaigns c ON c.id = v.campaign_id
            WHERE c.user_id = $1 AND v.customer_email = $2 AND v.headline_variant_id IS NOT NULL
-           ORDER BY v.first_seen ASC LIMIT 1\`,
+           ORDER BY v.first_seen ASC LIMIT 1`,
           [userId, customerEmail]
         );
         if (visitorWithVariant.rows.length > 0) {
@@ -1244,9 +1244,9 @@ export async function registerRoutes(server: Server, app: Express) {
       // (handles upsells — if we attributed their first purchase to campaign X, upsells chain there too)
       if (!matchedCampaignId && customerEmail) {
         const prevRevenue = await pool.query(
-          \`SELECT campaign_id FROM revenue_events
+          `SELECT campaign_id FROM revenue_events
            WHERE customer_email = $1 AND campaign_id IN (SELECT id FROM campaigns WHERE user_id = $2)
-           ORDER BY created_at ASC LIMIT 1\`,
+           ORDER BY created_at ASC LIMIT 1`,
           [customerEmail, userId]
         );
         if (prevRevenue.rows.length > 0) {
@@ -1259,11 +1259,11 @@ export async function registerRoutes(server: Server, app: Express) {
       // Backfill the email onto the visitor for future LTV chaining.
       if (!matchedCampaignId) {
         const timeMatch = await pool.query(
-          \`SELECT v.id AS visitor_id, v.campaign_id
+          `SELECT v.id AS visitor_id, v.campaign_id
            FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
            WHERE c.user_id = $1 AND v.converted = true AND v.converted_at IS NOT NULL
              AND ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) < 3600
-           ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC LIMIT 1\`,
+           ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC LIMIT 1`,
           [userId, chargeDate]
         );
         if (timeMatch.rows.length > 0) {
