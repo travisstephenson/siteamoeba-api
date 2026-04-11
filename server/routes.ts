@@ -4492,16 +4492,34 @@ export async function registerRoutes(server: Server, app: Express) {
           matchedVisitorId = visitorMatch.rows[0].visitor_id;
           matchedCampaignId = visitorMatch.rows[0].campaign_id;
         } else {
-          // No visitor match. Use Whop membership start date to gate attribution to campaign window.
-          // mem.created_at is Unix seconds (when the membership was created on Whop)
+          // No visitor match by email. Try to match by looking at which campaign
+          // has the most recent visitor activity from this email across revenue_events,
+          // or fall back to the most recently created active campaign (not the oldest).
           const membershipDate = mem.created_at
             ? new Date(mem.created_at * 1000).toISOString()
-            : new Date().toISOString(); // fallback: today
-          const campaignForMem = userCampaigns.find((c: any) =>
-            c.status === "active" && c.isActive &&
-            new Date(membershipDate) >= new Date(c.createdAt)
-          ) ?? null;
-          matchedCampaignId = campaignForMem?.id ?? null;
+            : new Date().toISOString();
+
+          // Strategy 1: Find the campaign that last had a pixel conversion near this timestamp
+          // (within 1 hour of the Whop membership creation)
+          const recentConv = await pool.query(
+            `SELECT campaign_id FROM visitors
+             WHERE campaign_id IN (${userCampaigns.map((c: any) => c.id).join(',')})
+               AND converted = true
+               AND converted_at IS NOT NULL
+               AND ABS(EXTRACT(EPOCH FROM (converted_at::timestamptz - $1::timestamptz))) < 3600
+             ORDER BY converted_at DESC LIMIT 1`,
+            [membershipDate]
+          );
+          if (recentConv.rows.length > 0) {
+            matchedCampaignId = recentConv.rows[0].campaign_id;
+          } else {
+            // Strategy 2: Most recently created active campaign whose creation date
+            // is before the membership date (newest campaign gets priority, not oldest)
+            const sortedCampaigns = [...userCampaigns]
+              .filter((c: any) => c.status === "active" && new Date(membershipDate) >= new Date(c.createdAt))
+              .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            matchedCampaignId = sortedCampaigns[0]?.id ?? null;
+          }
         }
         if (!matchedCampaignId) continue;
 
