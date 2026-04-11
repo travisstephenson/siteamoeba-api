@@ -1273,6 +1273,7 @@ export async function registerRoutes(server: Server, app: Express) {
       // No match = skip. Pixel didn't fire for this purchase.
       if (!matchedCampaignId) continue;
 
+      const chargeAmount = charge.amount / 100;
 
       await storage.addRevenueEvent({
         visitorId: matchedVisitorId || undefined,
