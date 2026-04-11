@@ -452,7 +452,171 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   var previewToken = (window.location.search.match(/[?&]sa_token=([^&]+)/) || [])[1] || "";
   var isPreviewMode = !!previewMatch;
 
+  // === MUTATION ENGINE ===
+  // Applies a list of DOM mutations to transform the page.
+  // Each mutation is independent — if one fails, others still apply.
+  // All originals are captured for safe revert.
+  var _mutationOriginals = [];
+
+  function applyMutations(mutations) {
+    if (!mutations || !Array.isArray(mutations) || mutations.length === 0) return;
+    var device = window.innerWidth < 768 ? "mobile" : "desktop";
+
+    for (var mi = 0; mi < mutations.length; mi++) {
+      var m = mutations[mi];
+      try {
+        // Device filter
+        if (m.deviceFilter && m.deviceFilter !== "all" && m.deviceFilter !== device) continue;
+
+        // Find target element
+        var el = null;
+        if (m.selector) {
+          // Use our battle-tested findElements for text fingerprint matching
+          var found = findElements(m.selector, m.textFingerprint, m.textFingerprint, m.category || "body_copy");
+          if (found.length > 0) el = found[0];
+        }
+        if (!el && m.textFingerprint) {
+          // Fallback: search all block elements for text match
+          var tokens = m.textFingerprint.toLowerCase().split(/ +/).filter(function(w) { return w.length > 3; }).slice(0, 5);
+          if (tokens.length > 0) {
+            var candidates = document.querySelectorAll("h1,h2,h3,h4,h5,h6,p,div,section,span,li,blockquote,button,a");
+            var bestEl = null, bestScore = 0;
+            for (var ci = 0; ci < candidates.length; ci++) {
+              var ct = (candidates[ci].textContent || "").toLowerCase();
+              var score = 0;
+              for (var ti = 0; ti < tokens.length; ti++) { if (ct.indexOf(tokens[ti]) !== -1) score++; }
+              if (score > bestScore) { bestScore = score; bestEl = candidates[ci]; }
+            }
+            if (bestEl && bestScore >= Math.ceil(tokens.length * 0.5)) el = bestEl;
+          }
+        }
+
+        if (!el && m.type !== "html_inject") {
+          console.log("[SA] mutation skipped (element not found):", m.type, m.selector || m.textFingerprint?.substring(0, 30));
+          continue;
+        }
+
+        // Save original for revert
+        var original = { mutation: m, element: el, html: el ? el.innerHTML : "", display: el ? el.style.display : "", position: null };
+        _mutationOriginals.push(original);
+
+        // Apply by type
+        switch (m.type) {
+          case "text_swap":
+            if (el && m.text) el.textContent = m.text;
+            break;
+
+          case "html_replace":
+            if (el && m.html) el.innerHTML = m.html;
+            break;
+
+          case "visibility_toggle":
+            if (el) {
+              if (m.visible === false) {
+                el.style.display = "none";
+                el.setAttribute("data-sa-hidden", "true");
+              } else {
+                el.style.display = "";
+                el.removeAttribute("data-sa-hidden");
+              }
+            }
+            break;
+
+          case "style_override":
+            if (el && m.styles) {
+              var origStyles = {};
+              for (var prop in m.styles) {
+                origStyles[prop] = el.style[prop];
+                el.style[prop] = m.styles[prop];
+              }
+              original.origStyles = origStyles;
+            }
+            break;
+
+          case "html_inject":
+            if (m.html) {
+              var anchor = el || document.querySelector(m.targetSelector || "body");
+              if (anchor) {
+                var wrapper = document.createElement("div");
+                wrapper.innerHTML = m.html;
+                wrapper.setAttribute("data-sa-injected", "true");
+                // Inherit styles from adjacent elements
+                var sibling = anchor.previousElementSibling || anchor.nextElementSibling;
+                if (sibling) {
+                  var cs = window.getComputedStyle(sibling);
+                  wrapper.style.fontFamily = cs.fontFamily;
+                  wrapper.style.color = cs.color;
+                  wrapper.style.fontSize = cs.fontSize;
+                  wrapper.style.lineHeight = cs.lineHeight;
+                  wrapper.style.maxWidth = cs.maxWidth;
+                  wrapper.style.margin = cs.margin;
+                  wrapper.style.padding = cs.padding;
+                }
+                var pos = m.position || "after";
+                if (pos === "before") anchor.parentNode.insertBefore(wrapper, anchor);
+                else if (pos === "after") anchor.parentNode.insertBefore(wrapper, anchor.nextSibling);
+                else if (pos === "prepend") anchor.insertBefore(wrapper, anchor.firstChild);
+                else if (pos === "append") anchor.appendChild(wrapper);
+                original.injectedEl = wrapper;
+              }
+            }
+            break;
+
+          case "section_reorder":
+            if (el && m.targetSelector) {
+              var target = document.querySelector(m.targetSelector);
+              if (target && target.parentNode) {
+                original.position = { parent: el.parentNode, next: el.nextSibling };
+                target.parentNode.insertBefore(el, target);
+              }
+            }
+            break;
+
+          case "attribute_set":
+            if (el && m.attribute) {
+              original.origAttr = el.getAttribute(m.attribute);
+              el.setAttribute(m.attribute, m.value || "");
+            }
+            break;
+        }
+        console.log("[SA] mutation applied:", m.type, m.description || "");
+      } catch (err) {
+        console.warn("[SA] mutation failed:", m.type, err.message || err);
+        // Continue to next mutation — never break the page
+      }
+    }
+  }
+
+  function revertMutations() {
+    for (var ri = _mutationOriginals.length - 1; ri >= 0; ri--) {
+      var o = _mutationOriginals[ri];
+      try {
+        if (o.injectedEl && o.injectedEl.parentNode) o.injectedEl.parentNode.removeChild(o.injectedEl);
+        else if (o.element) {
+          if (o.mutation.type === "style_override" && o.origStyles) {
+            for (var p in o.origStyles) o.element.style[p] = o.origStyles[p];
+          } else if (o.mutation.type === "section_reorder" && o.position) {
+            o.position.parent.insertBefore(o.element, o.position.next);
+          } else if (o.mutation.type === "attribute_set") {
+            if (o.origAttr !== null) o.element.setAttribute(o.mutation.attribute, o.origAttr);
+            else o.element.removeAttribute(o.mutation.attribute);
+          } else {
+            o.element.innerHTML = o.html;
+            o.element.style.display = o.display;
+            o.element.removeAttribute("data-sa-hidden");
+          }
+        }
+      } catch (e) {}
+    }
+    _mutationOriginals = [];
+  }
+
   function handleAssignData(data) {
+      // NEW: Apply mutations if present (Phase 1 overlay engine)
+      if (data.mutations && Array.isArray(data.mutations) && data.mutations.length > 0) {
+        applyMutations(data.mutations);
+      }
+
       // Apply headline variant — SKIP if control (let original page be the control)
       if (data.headline && data.headline.text && !data.headline.isControl) {
         applySectionVariant(
