@@ -1243,14 +1243,33 @@ export async function registerRoutes(server: Server, app: Express) {
           matchedVisitorId = emailMatch.rows[0].visitor_id;
           matchedCampaignId = emailMatch.rows[0].campaign_id;
         } else {
-          // No email match. Only attribute if the Stripe charge date is within the campaign's active window.
-          // This prevents historical purchases from bleeding into a new campaign.
+          // No email match anywhere. Use time-proximity: find a campaign that had
+          // a pixel conversion within 1 hour of this Stripe charge.
           const chargeDate = new Date(charge.created * 1000).toISOString();
-          const campaignForCharge = userCampaigns.find((c: any) =>
-            c.status === "active" && c.isActive &&
-            new Date(chargeDate) >= new Date(c.createdAt)
-          ) ?? null;
-          matchedCampaignId = campaignForCharge?.id ?? null;
+          const timeMatch = await pool.query(
+            `SELECT v.id AS visitor_id, v.campaign_id
+             FROM visitors v
+             JOIN campaigns c ON c.id = v.campaign_id
+             WHERE c.user_id = $1 AND v.converted = true AND v.converted_at IS NOT NULL
+               AND ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) < 3600
+             ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC
+             LIMIT 1`,
+            [userId, chargeDate]
+          );
+          if (timeMatch.rows.length > 0) {
+            matchedVisitorId = timeMatch.rows[0].visitor_id;
+            matchedCampaignId = timeMatch.rows[0].campaign_id;
+            // Backfill the email onto this visitor for future LTV attribution
+            if (customerEmail) {
+              await pool.query('UPDATE visitors SET customer_email = $1 WHERE id = $2 AND customer_email IS NULL', [customerEmail, matchedVisitorId]);
+            }
+          } else {
+            // Last resort: most recently created active campaign (not oldest)
+            const sorted = [...userCampaigns]
+              .filter((c: any) => c.status === "active" && new Date(chargeDate) >= new Date(c.createdAt))
+              .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            matchedCampaignId = sorted[0]?.id ?? null;
+          }
         }
       }
 
