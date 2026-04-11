@@ -1198,22 +1198,22 @@ export async function registerRoutes(server: Server, app: Express) {
       );
       if (existing.rows.length > 0) continue;
 
-      // === ATTRIBUTION CHAIN ===
-      // P0: Skip non-campaign charges (SiteAmoeba billing, GHL auto-recharge)
-      // P1: Product keyword matching (reads Stripe charge description)
-      // P2: Email-based first-touch (LTV chaining for upsells)
-      // P3: Time-proximity to pixel conversion
-      // P4: Most recent campaign (last resort)
+      // === STRICT ATTRIBUTION ===
+      // Rule: A Stripe charge can ONLY be attributed to a campaign if:
+      //   1. The charge description matches a campaign's product keywords, OR
+      //   2. The buyer's email matches a visitor who already has variant data on a specific campaign
+      // NO guessing. NO fallback to "most recent campaign." If we can't match it, skip it.
       let matchedCampaignId: number | null = null;
       let matchedVisitorId: string | null = null;
       const chargeDesc = (charge.description || "").toLowerCase();
       const chargeDate = new Date(charge.created * 1000).toISOString();
 
-      // P0: Skip non-campaign charges
+      // Skip non-campaign charges (SiteAmoeba billing, GHL auto-recharge)
       if (chargeDesc.includes("subscription creation") || chargeDesc.includes("subscription update")) continue;
       if (chargeDesc.includes("auto-recharge for sub-account")) continue;
 
-      // P1: Match by product keywords in Stripe description
+      // STRATEGY 1: Product keyword match (most reliable)
+      // Each campaign can have product_keywords like "Offer To Ads Archetype,Extraction Prompt"
       for (const c of userCampaigns) {
         const keywords = ((c as any).productKeywords || "").split(",").map((k: string) => k.trim().toLowerCase()).filter(Boolean);
         if (keywords.length > 0 && keywords.some((kw: string) => chargeDesc.includes(kw))) {
@@ -1222,31 +1222,48 @@ export async function registerRoutes(server: Server, app: Express) {
         }
       }
 
-      // P2: Email-based first-touch (for upsells — chains back to original campaign)
+      // STRATEGY 2: Email → visitor with variant data (proves they were ON that campaign page)
+      // A visitor who was assigned a headline variant on campaign X = definitive proof they visited campaign X.
+      // Their email gets set when they convert via pixel or get backfilled from a Stripe charge.
       if (!matchedCampaignId && customerEmail) {
-        const emailMatch = await pool.query(
-          `SELECT v.id AS visitor_id, v.campaign_id
-           FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
-           WHERE c.user_id = $1
-             AND (v.customer_email = $2
-               OR v.id IN (SELECT re.visitor_id FROM revenue_events re WHERE re.customer_email = $2 AND re.visitor_id IS NOT NULL))
-           ORDER BY v.first_seen ASC LIMIT 1`,
+        const visitorWithVariant = await pool.query(
+          \`SELECT v.id AS visitor_id, v.campaign_id
+           FROM visitors v
+           JOIN campaigns c ON c.id = v.campaign_id
+           WHERE c.user_id = $1 AND v.customer_email = $2 AND v.headline_variant_id IS NOT NULL
+           ORDER BY v.first_seen ASC LIMIT 1\`,
           [userId, customerEmail]
         );
-        if (emailMatch.rows.length > 0) {
-          matchedVisitorId = emailMatch.rows[0].visitor_id;
-          matchedCampaignId = emailMatch.rows[0].campaign_id;
+        if (visitorWithVariant.rows.length > 0) {
+          matchedVisitorId = visitorWithVariant.rows[0].visitor_id;
+          matchedCampaignId = visitorWithVariant.rows[0].campaign_id;
         }
       }
 
-      // P3: Time-proximity to a pixel conversion (within 1 hour)
+      // STRATEGY 3: Email appears in previous revenue_events for a specific campaign
+      // (handles upsells — if we attributed their first purchase to campaign X, upsells chain there too)
+      if (!matchedCampaignId && customerEmail) {
+        const prevRevenue = await pool.query(
+          \`SELECT campaign_id FROM revenue_events
+           WHERE customer_email = $1 AND campaign_id IN (SELECT id FROM campaigns WHERE user_id = $2)
+           ORDER BY created_at ASC LIMIT 1\`,
+          [customerEmail, userId]
+        );
+        if (prevRevenue.rows.length > 0) {
+          matchedCampaignId = prevRevenue.rows[0].campaign_id;
+        }
+      }
+
+      // STRATEGY 4: Time-proximity to a pixel conversion + backfill email
+      // If a pixel conversion fired within 1 hour of this charge, that's the campaign.
+      // Backfill the email onto the visitor for future LTV chaining.
       if (!matchedCampaignId) {
         const timeMatch = await pool.query(
-          `SELECT v.id AS visitor_id, v.campaign_id
+          \`SELECT v.id AS visitor_id, v.campaign_id
            FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
            WHERE c.user_id = $1 AND v.converted = true AND v.converted_at IS NOT NULL
              AND ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) < 3600
-           ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC LIMIT 1`,
+           ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC LIMIT 1\`,
           [userId, chargeDate]
         );
         if (timeMatch.rows.length > 0) {
@@ -1258,13 +1275,8 @@ export async function registerRoutes(server: Server, app: Express) {
         }
       }
 
-      // P4: Most recent campaign (last resort)
-      if (!matchedCampaignId) {
-        const sorted = [...userCampaigns]
-          .filter((c: any) => c.status === "active" && new Date(chargeDate) >= new Date(c.createdAt))
-          .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        matchedCampaignId = sorted[0]?.id ?? null;
-      }
+      // NO FALLBACK. If none of the above matched, this charge is unattributable.
+      // Don't pollute campaign data with guesses.
 
       if (!matchedCampaignId) continue;
 
