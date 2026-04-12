@@ -3510,6 +3510,33 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // === AUTOMATIC STRIPE SYNC ===
+  // Every 15 minutes, sync Stripe charges for all users with connected accounts.
+  // This ensures revenue shows up in dashboards without manual action.
+  async function autoSyncStripe() {
+    try {
+      const usersWithStripe = await pgPool.query(
+        "SELECT id FROM users WHERE stripe_access_token IS NOT NULL"
+      );
+      for (const row of usersWithStripe.rows) {
+        try {
+          await matchStripeTransactionsToVisitors(row.id);
+        } catch (err: any) {
+          console.error(`[auto-sync] Stripe sync failed for user ${row.id}:`, err.message);
+        }
+      }
+      if (usersWithStripe.rows.length > 0) {
+        console.log(`[auto-sync] Stripe synced for ${usersWithStripe.rows.length} users`);
+      }
+    } catch (err: any) {
+      console.error("[auto-sync] Failed:", err.message);
+    }
+  }
+  // Run every 15 minutes
+  setInterval(autoSyncStripe, 15 * 60 * 1000);
+  // Also run once 30 seconds after startup
+  setTimeout(autoSyncStripe, 30000);
+
   // GET /api/widget/script/:campaignId — serve the widget JS with API base baked in
   app.get("/api/widget/script/:campaignId", widgetLimiter, (req: Request, res: Response) => {
     const campaignId = parseInt(String(req.params.campaignId));
