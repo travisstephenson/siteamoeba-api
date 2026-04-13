@@ -560,6 +560,10 @@ class StorageImpl implements IStorage {
     await pool.query(`
       ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS campaign_type TEXT NOT NULL DEFAULT 'purchase';
     `);
+    // Section map for drop-off analysis (populated by widget)
+    await pool.query(`
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS section_map JSONB;
+    `);
     // Traffic anomalies for lightbulb intelligence alerts
     await pool.query(`
       CREATE TABLE IF NOT EXISTS traffic_anomalies (

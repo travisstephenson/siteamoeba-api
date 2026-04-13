@@ -690,6 +690,90 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     sections.forEach(function(s) { observer.observe(s); });
   }
 
+  // === SECTION MAP: Build a structured map of page sections for drop-off analysis ===
+  var sectionMap = null;
+  var sectionMapSent = false;
+  function buildSectionMap() {
+    try {
+      var pageH = document.documentElement.scrollHeight || 1;
+      // Classify section by its content — look for keywords in headings, ids, classes
+      var classifyKeywords = {
+        hero: /hero|banner|above.?fold|masthead|jumbotron/i,
+        headline: /^h[12]$|headline|main.?title/i,
+        subheadline: /subtitle|sub.?head|tagline/i,
+        problem: /problem|pain|struggle|frustrat|challenge/i,
+        solution: /solution|answer|resolve|how.?it.?works/i,
+        benefits: /benefit|advantage|feature|what.?you.?get/i,
+        social_proof: /social.?proof|as.?seen|logo|trust|partner/i,
+        testimonials: /testimonial|review|what.?people|customer.?say|success.?stor/i,
+        case_study: /case.?study|result|outcome/i,
+        pricing: /pricing|price|plan|tier|cost|buy|purchase|order|checkout/i,
+        guarantee: /guarantee|refund|money.?back|risk.?free|no.?risk/i,
+        faq: /faq|question|ask|q\s*&\s*a/i,
+        cta: /cta|call.?to.?action|sign.?up|register|get.?started|buy.?now|order.?now|enroll/i,
+        about: /about|who.?we|our.?story|our.?mission|founder|team/i,
+        bonus: /bonus|extra|free.?gift|included/i,
+        scarcity: /limited|hurry|expir|countdown|urgent|only.*left/i,
+        footer: /footer|copyright|bottom/i,
+        video: /video|watch|play/i
+      };
+
+      function classifyEl(el) {
+        // Check id, class, and heading text for classification keywords
+        var searchText = (el.id || "") + " " + (el.className || "") + " ";
+        // Get the first heading inside
+        var heading = el.querySelector("h1, h2, h3, h4");
+        var headingText = heading ? (heading.innerText || "").substring(0, 120) : "";
+        searchText += headingText;
+        // Also check for specific elements
+        if (el.querySelector("video, iframe[src*='youtube'], iframe[src*='vimeo']")) searchText += " video";
+        if (el.querySelector("form")) searchText += " form cta";
+        if (el.querySelector("[class*='price'], [class*='pricing']")) searchText += " pricing";
+        if (el.querySelector("blockquote, [class*='testimonial'], [class*='review']")) searchText += " testimonial";
+        for (var key in classifyKeywords) {
+          if (classifyKeywords[key].test(searchText)) return key;
+        }
+        return "content";
+      }
+
+      // Find meaningful top-level sections — filter out tiny ones
+      var candidates = document.querySelectorAll("section, [class*='section'], [role='region'], main > div, .container > div, #content > div, [class*='block'], [class*='row']");
+      var map = [];
+      var seen = {};
+      candidates.forEach(function(el) {
+        // Skip tiny sections (< 100px tall) and invisible ones
+        var rect = el.getBoundingClientRect();
+        var absTop = rect.top + window.scrollY;
+        var height = rect.height;
+        if (height < 100 || rect.width < 200) return;
+        // Skip nested sections — if parent is already in our list, skip
+        var key = Math.round(absTop / 50) + "_" + Math.round(height / 50);
+        if (seen[key]) return;
+        seen[key] = true;
+        var offsetPct = Math.round(absTop / pageH * 100);
+        var label = classifyEl(el);
+        var heading = el.querySelector("h1, h2, h3, h4");
+        var headingText = heading ? (heading.innerText || "").substring(0, 100).trim() : "";
+        map.push({
+          idx: map.length,
+          offsetPct: offsetPct,
+          heightPct: Math.round(height / pageH * 100),
+          label: label,
+          heading: headingText,
+          id: el.id || ""
+        });
+      });
+      // Sort by position and limit to top 20
+      map.sort(function(a, b) { return a.offsetPct - b.offsetPct; });
+      map = map.slice(0, 20);
+      // Re-index
+      map.forEach(function(s, i) { s.idx = i; });
+      if (map.length >= 3) sectionMap = map;
+    } catch(e) { /* non-fatal */ }
+  }
+  // Build after DOM is likely stable
+  setTimeout(buildSectionMap, 3000);
+
   // Click tracking
   document.addEventListener("click", function(e) {
     var target = e.target;
@@ -712,7 +796,13 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   function sendBatch(batch, timeOnPage) {
     var pageHeight = document.documentElement.scrollHeight || 0;
     var screenWidth = window.innerWidth || 0;
-    var payload = JSON.stringify({vid: vid, cid: CID, events: batch, timeOnPage: timeOnPage, maxScroll: maxScroll, device: device, pageHeight: pageHeight, screenWidth: screenWidth});
+    var payloadObj = {vid: vid, cid: CID, events: batch, timeOnPage: timeOnPage, maxScroll: maxScroll, device: device, pageHeight: pageHeight, screenWidth: screenWidth};
+    // Include section map on first send only
+    if (sectionMap && !sectionMapSent) {
+      payloadObj.sectionMap = sectionMap;
+      sectionMapSent = true;
+    }
+    var payload = JSON.stringify(payloadObj);
     if (navigator.sendBeacon) {
       navigator.sendBeacon(API + "/api/widget/events", new Blob([payload], {type: "application/json"}));
     } else {

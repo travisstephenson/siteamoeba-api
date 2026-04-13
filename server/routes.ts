@@ -3528,7 +3528,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // POST /api/widget/events — batch event ingestion from the widget
   app.post("/api/widget/events", widgetLimiter, async (req: Request, res: Response) => {
-    const { vid, cid, events, timeOnPage, maxScroll, device } = req.body;
+    const { vid, cid, events, timeOnPage, maxScroll, device, sectionMap } = req.body;
 
     if (!vid || !cid) {
       return res.status(400).json({ error: "Missing vid or cid" });
@@ -3594,6 +3594,17 @@ export async function registerRoutes(server: Server, app: Express) {
         if (newSections.length > 0) sessionUpdates.sectionsViewed = newSections;
 
         await storage.upsertVisitorSession(vid, campaignId, sessionUpdates);
+
+        // Store section map on the campaign (only if we received one and campaign doesn't have one yet)
+        if (sectionMap && Array.isArray(sectionMap) && sectionMap.length >= 3) {
+          try {
+            const existing = await pool.query("SELECT section_map FROM campaigns WHERE id = $1", [campaignId]);
+            if (!existing.rows[0]?.section_map) {
+              await pool.query("UPDATE campaigns SET section_map = $1 WHERE id = $2", [JSON.stringify(sectionMap), campaignId]);
+              console.log(`[events] Stored section map (${sectionMap.length} sections) for campaign ${campaignId}`);
+            }
+          } catch (e) { /* non-fatal */ }
+        }
       } catch (err) {
         console.error("[events] error:", err);
       }
@@ -3830,6 +3841,132 @@ export async function registerRoutes(server: Server, app: Express) {
         avgPageHeight: parseInt(r.desktop_avg_page_height) || 0,
       },
       avgScreenWidth: parseInt(r.avg_screen_width) || 0,
+    });
+  });
+
+  // GET /api/campaigns/:id/section-dropoff — per-section reach & drop-off analysis
+  app.get("/api/campaigns/:id/section-dropoff", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    // Get section map from campaign
+    const mapResult = await pool.query("SELECT section_map FROM campaigns WHERE id = $1", [campaignId]);
+    const sectionMap = mapResult.rows[0]?.section_map;
+    if (!sectionMap || !Array.isArray(sectionMap) || sectionMap.length < 2) {
+      return res.json({ available: false, reason: "Section map not yet captured. Visit your page with the pixel installed to generate the section map." });
+    }
+
+    // Get scroll depth distribution from all visitor sessions
+    const scrollResult = await pool.query(
+      `SELECT
+        max_scroll_depth,
+        converted,
+        COUNT(*) as cnt
+       FROM visitor_sessions vs
+       JOIN visitors v ON v.id = vs.visitor_id AND v.campaign_id = vs.campaign_id
+       WHERE vs.campaign_id = $1 AND vs.max_scroll_depth > 0
+       GROUP BY max_scroll_depth, converted`,
+      [campaignId]
+    );
+
+    if (scrollResult.rows.length === 0) {
+      return res.json({ available: false, reason: "Not enough scroll data yet." });
+    }
+
+    // Build scroll distribution
+    let totalVisitors = 0;
+    let totalConverters = 0;
+    const scrollCounts: Record<number, { total: number; converted: number }> = {};
+    for (const row of scrollResult.rows) {
+      const depth = parseInt(row.max_scroll_depth);
+      const count = parseInt(row.cnt);
+      const isConverted = row.converted;
+      if (!scrollCounts[depth]) scrollCounts[depth] = { total: 0, converted: 0 };
+      scrollCounts[depth].total += count;
+      if (isConverted) scrollCounts[depth].converted += count;
+      totalVisitors += count;
+      if (isConverted) totalConverters += count;
+    }
+
+    // For each section, calculate reach (% of visitors who scrolled past its offsetPct)
+    const sections = (sectionMap as any[]).map((s: any, i: number) => {
+      const sectionStart = s.offsetPct;
+      // Count visitors who scrolled at least to this section's start
+      let reached = 0;
+      let reachedConverted = 0;
+      for (const [depthStr, counts] of Object.entries(scrollCounts)) {
+        const depth = parseInt(depthStr);
+        if (depth >= sectionStart) {
+          reached += (counts as any).total;
+          reachedConverted += (counts as any).converted;
+        }
+      }
+      const reachPct = totalVisitors > 0 ? Math.round(reached / totalVisitors * 100) : 0;
+      const converterReachPct = totalConverters > 0 ? Math.round(reachedConverted / totalConverters * 100) : 0;
+      return {
+        idx: i,
+        label: s.label,
+        heading: s.heading || "",
+        offsetPct: sectionStart,
+        heightPct: s.heightPct || 0,
+        reachPct,
+        converterReachPct,
+        visitors: reached,
+      };
+    });
+
+    // Calculate drop-off between consecutive sections
+    let biggestDropIdx = -1;
+    let biggestDropPct = 0;
+    for (let i = 1; i < sections.length; i++) {
+      const prev = sections[i - 1];
+      const curr = sections[i];
+      curr.dropFromPrev = prev.reachPct - curr.reachPct;
+      if (curr.dropFromPrev > biggestDropPct && curr.label !== "footer") {
+        biggestDropPct = curr.dropFromPrev;
+        biggestDropIdx = i;
+      }
+    }
+    if (sections.length > 0) sections[0].dropFromPrev = 0;
+
+    // Build recommendation
+    const SECTION_LABELS: Record<string, string> = {
+      hero: "Hero", headline: "Headline", subheadline: "Subheadline",
+      problem: "Problem/Pain", solution: "Solution", benefits: "Benefits",
+      social_proof: "Social Proof", testimonials: "Testimonials",
+      case_study: "Case Study", pricing: "Pricing", guarantee: "Guarantee",
+      faq: "FAQ", cta: "CTA", about: "About", bonus: "Bonus",
+      scarcity: "Scarcity/Urgency", footer: "Footer", video: "Video",
+      content: "Content",
+    };
+
+    let recommendation = null;
+    if (biggestDropIdx >= 0) {
+      const dropSection = sections[biggestDropIdx];
+      const prevSection = sections[biggestDropIdx - 1];
+      const label = SECTION_LABELS[dropSection.label] || dropSection.label;
+      const prevLabel = SECTION_LABELS[prevSection.label] || prevSection.label;
+      recommendation = {
+        sectionIdx: biggestDropIdx,
+        sectionLabel: label,
+        dropPct: biggestDropPct,
+        message: `${biggestDropPct}% of visitors leave between your ${prevLabel} and ${label} sections. Only ${dropSection.reachPct}% of visitors reach your ${label}. This is the biggest drop-off point on your page — test improving this section next.`,
+      };
+    }
+
+    res.json({
+      available: true,
+      totalVisitors,
+      totalConverters,
+      sectionCount: sections.length,
+      sections: sections.map(s => ({
+        ...s,
+        label: SECTION_LABELS[s.label] || s.label,
+      })),
+      recommendation,
     });
   });
 

@@ -63,6 +63,8 @@ import {
   FileText,
   RotateCcw,
   Activity,
+  ArrowDown,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Breadcrumb,
@@ -2377,6 +2379,178 @@ function generateEmbedCodeClient(apiBase: string, campaignId: number, headlineSe
     `</script>`,
   ];
   return lines.join("\n");
+}
+
+// ---- Section Drop-off Panel ----
+interface SectionDropoffData {
+  available: boolean;
+  reason?: string;
+  totalVisitors?: number;
+  totalConverters?: number;
+  sectionCount?: number;
+  sections?: Array<{
+    idx: number;
+    label: string;
+    heading: string;
+    offsetPct: number;
+    heightPct: number;
+    reachPct: number;
+    converterReachPct: number;
+    visitors: number;
+    dropFromPrev: number;
+  }>;
+  recommendation?: {
+    sectionIdx: number;
+    sectionLabel: string;
+    dropPct: number;
+    message: string;
+  };
+}
+
+function SectionDropoffPanel({ campaignId }: { campaignId: number }) {
+  const { data, isLoading } = useQuery<SectionDropoffData>({
+    queryKey: ["/api/campaigns", campaignId, "section-dropoff"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/campaigns/${campaignId}/section-dropoff`);
+      if (!res.ok) throw new Error("Failed to load section data");
+      return res.json();
+    },
+    staleTime: 300000,
+  });
+
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="pt-5 pb-5">
+          <Skeleton className="h-6 w-48 mb-4" />
+          <div className="space-y-2">
+            {[0, 1, 2, 3, 4].map(i => <Skeleton key={i} className="h-10 w-full" />)}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (!data?.available) return null;
+
+  const sections = data.sections || [];
+  const recommendation = data.recommendation;
+  const maxReach = Math.max(...sections.map(s => s.reachPct), 1);
+
+  return (
+    <Card data-testid="card-section-dropoff">
+      <CardContent className="pt-5 pb-5 space-y-4">
+        {/* Header */}
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-lg" style={{ background: "hsl(220 80% 55% / 0.1)" }}>
+            <ArrowDown className="w-4 h-4" style={{ color: "hsl(220 80% 55%)" }} />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">Section Drop-off</h3>
+            <p className="text-xs text-muted-foreground">
+              Where visitors stop scrolling ({data.totalVisitors?.toLocaleString()} sessions)
+            </p>
+          </div>
+        </div>
+
+        {/* Recommendation callout */}
+        {recommendation && (
+          <div
+            className="rounded-lg px-3.5 py-2.5 text-xs leading-relaxed"
+            style={{
+              background: "hsl(25 95% 53% / 0.08)",
+              border: "1px solid hsl(25 95% 53% / 0.25)",
+            }}
+            data-testid="text-dropoff-recommendation"
+          >
+            <div className="flex items-center gap-1.5 mb-1">
+              <AlertTriangle className="w-3.5 h-3.5" style={{ color: "hsl(25 95% 53%)" }} />
+              <span className="font-semibold" style={{ color: "hsl(25 95% 53%)" }}>Biggest Drop-off</span>
+            </div>
+            {recommendation.message}
+          </div>
+        )}
+
+        {/* Section funnel */}
+        <div className="space-y-1">
+          {sections.map((section, i) => {
+            const barWidth = maxReach > 0 ? (section.reachPct / maxReach) * 100 : 0;
+            const converterBarWidth = maxReach > 0 ? (section.converterReachPct / maxReach) * 100 : 0;
+            const isDropoff = recommendation?.sectionIdx === i;
+            const isDanger = section.dropFromPrev > 15;
+            const isWarning = section.dropFromPrev > 8;
+
+            return (
+              <div key={i} data-testid={`row-section-${i}`}>
+                {/* Drop-off indicator between sections */}
+                {i > 0 && section.dropFromPrev > 0 && (
+                  <div className={`flex items-center gap-2 pl-2 py-0.5 text-[10px] ${
+                    isDropoff ? "text-orange-500 font-semibold" : isDanger ? "text-red-400" : isWarning ? "text-amber-500" : "text-muted-foreground"
+                  }`}>
+                    <ChevronDown className="w-3 h-3" />
+                    <span>-{section.dropFromPrev}% drop</span>
+                  </div>
+                )}
+
+                <div className={`rounded-lg px-3 py-2 relative overflow-hidden ${
+                  isDropoff ? "ring-1 ring-orange-400/40" : ""
+                }`}>
+                  {/* Background bars */}
+                  <div
+                    className="absolute inset-y-0 left-0 opacity-[0.07]"
+                    style={{
+                      width: `${barWidth}%`,
+                      background: "hsl(220 80% 55%)",
+                    }}
+                  />
+                  <div
+                    className="absolute inset-y-0 left-0 opacity-[0.12]"
+                    style={{
+                      width: `${converterBarWidth}%`,
+                      background: "hsl(160 84% 36%)",
+                    }}
+                  />
+
+                  {/* Content */}
+                  <div className="relative flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-[10px] text-muted-foreground w-5 shrink-0 tabular-nums">{section.offsetPct}%</span>
+                      <span className="text-xs font-medium truncate">{section.label}</span>
+                      {section.heading && (
+                        <span className="text-[10px] text-muted-foreground truncate hidden sm:inline">
+                          {section.heading.slice(0, 40)}{section.heading.length > 40 ? "..." : ""}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className="text-xs tabular-nums font-medium" style={{ color: "hsl(220 80% 55%)" }}>
+                        {section.reachPct}%
+                      </span>
+                      <span className="text-[10px] tabular-nums" style={{ color: "hsl(160 84% 36%)" }}>
+                        {section.converterReachPct}%
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Legend */}
+        <div className="flex items-center gap-4 text-[10px] text-muted-foreground pt-1">
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-sm" style={{ background: "hsl(220 80% 55% / 0.3)" }} />
+            All visitors reached
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-2.5 h-2.5 rounded-sm" style={{ background: "hsl(160 84% 36% / 0.4)" }} />
+            Converters reached
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 // ---- Traffic Sources Panel ----
@@ -5551,6 +5725,9 @@ export default function CampaignDetailPage() {
 
         {/* Traffic Sources — referrer + UTM breakdown */}
         <TrafficSourcesPanel campaignId={campaignId} />
+
+        {/* Section Drop-off — where visitors stop scrolling */}
+        <SectionDropoffPanel campaignId={campaignId} />
 
         {/* Live Visitor Feed — positioned high for visibility */}
         <div ref={visitorFeedRef}>
