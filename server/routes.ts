@@ -1320,17 +1320,12 @@ export async function registerRoutes(server: Server, app: Express) {
             if (charges.data.length > 0) startingAfter = charges.data[charges.data.length - 1].id;
             pageCount++;
 
-            let allExisting = true; // Track if all charges on this page already exist
             for (const charge of charges.data) {
               if (charge.status !== "succeeded" && charge.status !== "refunded") continue;
-              // Wrap charge as a fake event for processStripeEvent
               const fakeEvent = { type: charge.refunded ? "charge.refunded" : "charge.succeeded", data: { object: charge }, created: charge.created };
               const ok = await processStripeEvent(u.id, stripeClient, fakeEvent);
-              if (ok) { processed++; allExisting = false; }
+              if (ok) processed++;
             }
-
-            // If every charge on this page was already processed, stop paginating
-            if (allExisting && charges.data.length > 0) break;
           }
 
           if (processed > 0) console.log(`[stripe-poll] User ${u.id}: ${processed} new events processed`);
@@ -1366,13 +1361,11 @@ export async function registerRoutes(server: Server, app: Express) {
         hasMore2 = charges.has_more;
         if (charges.data.length > 0) sa2 = charges.data[charges.data.length - 1].id;
         pages2++;
-        let allExist = true;
         for (const ch of charges.data) {
           if (ch.status !== "succeeded" && ch.status !== "refunded") continue;
           const ok = await processStripeEvent(userId, stripeClient, { type: ch.refunded ? "charge.refunded" : "charge.succeeded", data: { object: ch }, created: ch.created });
-          if (ok) { matched++; allExist = false; }
+          if (ok) matched++;
         }
-        if (allExist && charges.data.length > 0) break;
       }
       return matched;
     } catch (err: any) {
@@ -4039,9 +4032,19 @@ export async function registerRoutes(server: Server, app: Express) {
       ) {
         const amountRaw = obj.amount_total ?? obj.amount_received ?? obj.amount ?? 0;
         const amount = amountRaw / 100;
-        const customerEmail =
-          obj.customer_details?.email || obj.receipt_email ||
+        let customerEmail: string | null =
+          obj.customer_details?.email || obj.receipt_email || obj.billing_details?.email ||
           obj.customer_email || obj.metadata?.customer_email || null;
+        // Fallback: fetch email from Stripe Customer object
+        const custId = (typeof obj.customer === "string") ? obj.customer : null;
+        if (!customerEmail && custId) {
+          try {
+            const decKey = decryptApiKey((user as any).stripeAccessToken || "");
+            const sc = new Stripe(decKey);
+            const cust = await sc.customers.retrieve(custId);
+            if (cust && !(cust as any).deleted) customerEmail = (cust as any).email || null;
+          } catch { /* restricted key may not have customer read */ }
+        }
         const externalId = obj.id || event.id;
         const metadata = obj.metadata || {};
 
