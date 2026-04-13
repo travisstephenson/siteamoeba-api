@@ -936,6 +936,20 @@ class StorageImpl implements IStorage {
     const allVariants = await this.getVariantsByCampaign(campaignId);
     const stats: VariantStats[] = [];
 
+    // Determine test start date per type: when the newest challenger was created.
+    // This ensures BOTH control and challenger are only counted from when the test began,
+    // preventing pre-test conversions from inflating the control's stats.
+    const testStartByType: Record<string, Date> = {};
+    for (const v of allVariants) {
+      if (!v.isControl && v.isActive && v.createdAt) {
+        const t = v.type || "";
+        const created = new Date(v.createdAt);
+        if (!testStartByType[t] || created > testStartByType[t]) {
+          testStartByType[t] = created;
+        }
+      }
+    }
+
     for (const v of allVariants) {
       const isHeadline = v.type === "headline";
       const isSubheadline = v.type === "subheadline";
@@ -971,16 +985,17 @@ class StorageImpl implements IStorage {
         );
       } else {
         const column = isHeadline ? "headline_variant_id" : "subheadline_variant_id";
-        // Scope to visitors who arrived AFTER this variant was created
-        // (pre-variant visitors skew the split because they only saw the control)
-        const createdAt = v.createdAt || new Date(0);
+        // Scope to visitors who arrived AFTER the test started (when newest challenger was created).
+        // For controls, this prevents pre-test conversions from inflating stats.
+        // For challengers, their own createdAt is the test start date anyway.
+        const testStart = testStartByType[v.type || ""] || v.createdAt || new Date(0);
         impResult = await pool.query(
           `SELECT COUNT(DISTINCT id) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND first_seen >= $3`,
-          [campaignId, v.id, createdAt]
+          [campaignId, v.id, testStart]
         );
         convResult = await pool.query(
           `SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND converted = true AND first_seen >= $3`,
-          [campaignId, v.id, createdAt]
+          [campaignId, v.id, testStart]
         );
         // Revenue: sum from revenue_events for matched visitors (captures upsells)
         revResult = await pool.query(
@@ -988,7 +1003,7 @@ class StorageImpl implements IStorage {
            FROM revenue_events re
            JOIN visitors v ON v.id = re.visitor_id
            WHERE re.campaign_id = $1 AND v.${column} = $2 AND v.first_seen >= $3 AND re.event_type = 'purchase'`,
-          [campaignId, v.id, createdAt]
+          [campaignId, v.id, testStart]
         );
       }
 
