@@ -3133,8 +3133,15 @@ function VisitorFeedPanel({ campaignId, campaignType, forceExpand }: { campaignI
                               <span className="text-sm font-medium">{isLeadGen ? "Opted In" : `$${v.revenue}`}</span>
                               <span className="text-xs text-muted-foreground">{timeAgo(v.convertedAt)}</span>
                             </div>
-                            <div className="text-[10px] text-muted-foreground truncate">
-                              {v.headlineIsControl ? "Control" : "Variant"} headline · {v.device}
+                            <div className="text-[10px] text-muted-foreground truncate flex items-center gap-1">
+                              {v.headlineIsControl
+                                ? <span>Control headline</span>
+                                : <span style={{ color: 'hsl(160 84% 39%)' }} className="font-medium">Challenger headline</span>
+                              }
+                              {!v.subheadlineIsControl && v.subheadlineVariant && (
+                                <span style={{ color: 'hsl(160 84% 39%)' }} className="font-medium">· Challenger sub</span>
+                              )}
+                              <span>· {v.device}</span>
                             </div>
                           </div>
                           {isExpanded ? (
@@ -3155,7 +3162,10 @@ function VisitorFeedPanel({ campaignId, campaignType, forceExpand }: { campaignI
                                   <span className="font-medium">
                                     {v.headlineVariant.replace(/<[^>]*>/g, "").slice(0, 60)}{v.headlineVariant.replace(/<[^>]*>/g, "").length > 60 ? "…" : ""}
                                   </span>
-                                  {v.headlineIsControl && <Badge variant="secondary" className="ml-1 text-[9px] py-0">Control</Badge>}
+                                  {v.headlineIsControl
+                                    ? <Badge variant="secondary" className="ml-1 text-[9px] py-0">Control</Badge>
+                                    : <Badge className="ml-1 text-[9px] py-0 border-0" style={{ background: 'hsl(160 84% 36% / 0.15)', color: 'hsl(160 84% 39%)' }}>Challenger</Badge>
+                                  }
                                 </div>
                               )}
                               {v.subheadlineVariant && (
@@ -3164,7 +3174,10 @@ function VisitorFeedPanel({ campaignId, campaignType, forceExpand }: { campaignI
                                   <span className="font-medium">
                                     {v.subheadlineVariant.replace(/<[^>]*>/g, "").slice(0, 60)}{v.subheadlineVariant.replace(/<[^>]*>/g, "").length > 60 ? "…" : ""}
                                   </span>
-                                  {v.subheadlineIsControl && <Badge variant="secondary" className="ml-1 text-[9px] py-0">Control</Badge>}
+                                  {v.subheadlineIsControl
+                                    ? <Badge variant="secondary" className="ml-1 text-[9px] py-0">Control</Badge>
+                                    : <Badge className="ml-1 text-[9px] py-0 border-0" style={{ background: 'hsl(160 84% 36% / 0.15)', color: 'hsl(160 84% 39%)' }}>Challenger</Badge>
+                                  }
                                 </div>
                               )}
                             </div>

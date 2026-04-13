@@ -1396,18 +1396,32 @@ class StorageImpl implements IStorage {
     );
     const totalRevenue = parseFloat(revenueResult.rows[0]?.total) || 0;
 
-    // For each conversion in the feed, also sum all revenue_events for that visitor
-    // so upsells are reflected in the individual conversion card
+    // For each conversion in the feed, sum all revenue_events for that visitor
+    // so upsells are reflected in the individual conversion card.
+    // Include BOTH visitor-matched events AND Stripe charges matched by email.
     const visitorRevenueResult = await pool.query(
       `SELECT visitor_id, SUM(amount) as total
        FROM revenue_events
-       WHERE campaign_id = $1 AND visitor_id IS NOT NULL
+       WHERE campaign_id = $1 AND visitor_id IS NOT NULL AND amount > 0
        GROUP BY visitor_id`,
       [campaignId]
     );
     const visitorRevMap: Record<string, number> = {};
     for (const row of visitorRevenueResult.rows) {
       visitorRevMap[row.visitor_id] = parseFloat(row.total) || 0;
+    }
+
+    // For conversions with $0, try to find Stripe charges by customer email
+    const emailRevResult = await pool.query(
+      `SELECT customer_email, SUM(amount) as total
+       FROM revenue_events
+       WHERE campaign_id = $1 AND amount > 0 AND customer_email IS NOT NULL AND customer_email != ''
+       GROUP BY customer_email`,
+      [campaignId]
+    );
+    const emailRevMap: Record<string, number> = {};
+    for (const row of emailRevResult.rows) {
+      emailRevMap[row.customer_email.toLowerCase()] = parseFloat(row.total) || 0;
     }
 
     const mapRow = (r: any) => {
@@ -1427,7 +1441,10 @@ class StorageImpl implements IStorage {
         converted: r.converted || false,
         convertedAt: r.converted_at || null,
         // Use sum of all revenue_events for this visitor (captures upsells)
-        revenue: visitorRevMap[r.visitor_id] ?? (r.revenue ? parseFloat(r.revenue) : 0),
+        // Fallback chain: visitor-matched revenue → email-matched revenue → visitors.revenue → 0
+        revenue: visitorRevMap[r.visitor_id]
+          || (r.customer_email ? emailRevMap[r.customer_email.toLowerCase()] : 0)
+          || (r.revenue ? parseFloat(r.revenue) : 0),
         createdAt: r.first_seen,
         headlineVariant: r.headline_variant || null,
         headlineIsControl: r.headline_is_control || false,
