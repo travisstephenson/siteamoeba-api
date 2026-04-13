@@ -198,24 +198,28 @@ export async function evaluateAutopilotTests(
   if (campaign.autopilotStatus === "paused" || campaign.autopilotStatus === "completed") return null;
   if (campaign.autopilotStatus === "generating" || campaign.autopilotStatus === "advancing") return null;
 
-  const playbook = getPlaybook(campaign.pageType || "landing_page");
+  // Filter playbook to only sections the user selected as testable during the scan
+  const allSections = await storage.getTestSectionsByCampaign(campaignId);
+  const testableCategories = new Set(allSections.map(s => s.category));
+  const fullPlaybook = getPlaybook(campaign.pageType || "landing_page");
+  const playbook = fullPlaybook.filter(step => testableCategories.has(step.sectionCategory));
+
   const currentStepIndex = campaign.autopilotStep ?? 0;
   if (currentStepIndex >= playbook.length) {
-    // All steps complete
+    // All testable steps complete
     await storage.updateCampaign(campaignId, { autopilotStatus: "completed" } as any);
-    return { action: "no_action", message: "All playbook steps completed" };
+    return { action: "no_action", message: "All testable playbook steps completed" };
   }
 
   const currentPlaybookStep = playbook[currentStepIndex];
 
-  // Find the active test section matching the current playbook step category
-  const sections = await storage.getTestSectionsByCampaign(campaignId);
-  const activeSection = sections.find(
-    (s) => s.isActive && s.category === currentPlaybookStep.sectionCategory
+  // Find the test section matching the current playbook step category
+  const activeSection = allSections.find(
+    (s) => s.category === currentPlaybookStep.sectionCategory
   );
 
   if (!activeSection) {
-    // No active section for this step — nothing to evaluate
+    // Should not happen since we filtered, but handle gracefully
     return null;
   }
 
@@ -314,7 +318,12 @@ export async function advanceAutopilot(
   const user = await storage.getUserById(userId);
   if (!user) throw new Error("User not found");
 
-  const playbook = getPlaybook(campaign.pageType || "landing_page");
+  // Filter playbook to only sections the user selected as testable
+  const allSections = await storage.getTestSectionsByCampaign(campaignId);
+  const testableCategories = new Set(allSections.map(s => s.category));
+  const fullPlaybook = getPlaybook(campaign.pageType || "landing_page");
+  const playbook = fullPlaybook.filter(step => testableCategories.has(step.sectionCategory));
+
   const currentStepIndex = campaign.autopilotStep ?? 0;
 
   if (currentStepIndex >= playbook.length) {
@@ -325,27 +334,22 @@ export async function advanceAutopilot(
   const step = playbook[currentStepIndex];
 
   // Find the section that matches this playbook step category
-  const sections = await storage.getTestSectionsByCampaign(campaignId);
-  let targetSection = sections.find(
+  let targetSection = allSections.find(
     (s) => s.category === step.sectionCategory
   );
 
   if (!targetSection) {
-    // No section found for this step — skip it and try the next one
+    // Should not happen since we filtered, but handle gracefully
     console.log(
       `Autopilot: no section found for category "${step.sectionCategory}" in campaign ${campaignId}. Skipping.`
     );
     const nextStep = currentStepIndex + 1;
-    if (nextStep < playbook.length) {
-      await storage.updateCampaign(campaignId, {
-        autopilotStep: nextStep,
-        autopilotStatus: "advancing",
-      } as any);
-      return advanceAutopilot(campaignId, userId);
-    } else {
-      await storage.updateCampaign(campaignId, { autopilotStatus: "completed" } as any);
-      return;
-    }
+    await storage.updateCampaign(campaignId, {
+      autopilotStep: nextStep,
+      autopilotStatus: nextStep >= playbook.length ? "completed" : "advancing",
+    } as any);
+    if (nextStep < playbook.length) return advanceAutopilot(campaignId, userId);
+    return;
   }
 
   // Activate this section

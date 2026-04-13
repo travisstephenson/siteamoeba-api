@@ -2740,16 +2740,20 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const playbook = getPlaybook(campaign.pageType || "landing_page");
+    // Filter playbook to only sections the user selected as testable
+    const allSections = await storage.getTestSectionsByCampaign(campaign.id);
+    const testableCategories = new Set(allSections.map(s => s.category));
+    const fullPlaybook = getPlaybook(campaign.pageType || "landing_page");
+    const playbook = fullPlaybook.filter(step => testableCategories.has(step.sectionCategory));
+
     const currentStepIndex = campaign.autopilotStep ?? 0;
     const currentPlaybookStep = playbook[currentStepIndex] || null;
 
     // Find the current test section being tested
     let currentSectionId: number | null = null;
     if (currentPlaybookStep) {
-      const sections = await storage.getTestSectionsByCampaign(campaign.id);
-      const activeSection = sections.find(
-        (s) => s.isActive && s.category === currentPlaybookStep.sectionCategory
+      const activeSection = allSections.find(
+        (s) => s.category === currentPlaybookStep.sectionCategory
       );
       if (activeSection) currentSectionId = activeSection.id;
     }
@@ -2773,7 +2777,7 @@ export async function registerRoutes(server: Server, app: Express) {
       playbook,
       currentPlaybookStep,
       visitorsOnCurrentTest,
-      minVisitorsNeeded: null, // frontend can compute from user settings
+      minVisitorsNeeded: null,
       lastEvaluatedAt: null,
     });
   });
