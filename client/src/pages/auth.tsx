@@ -160,6 +160,13 @@ function RegisterForm({ onSuccess }: { onSuccess: () => void }) {
       queryClient.setQueryData(["/api/auth/me"], { user: data.user });
       queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
       queryClient.invalidateQueries({ queryKey: ["/api/campaigns"] });
+
+      // Fire conversion pixel for landing page campaign (C36)
+      // This tracks signups that came from the marketing site
+      try {
+        new Image().src = "https://api.siteamoeba.com/api/pixel/convert/36?t=" + Date.now();
+      } catch {}
+
       onSuccess();
     },
     onError: (err: Error) => {
