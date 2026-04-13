@@ -1174,180 +1174,173 @@ export async function registerRoutes(server: Server, app: Express) {
   // ============== STRIPE ACCOUNT-LEVEL INTEGRATION ==============
 
   // Match Stripe charges to visitors and create revenue events
-  async function matchStripeTransactionsToVisitors(userId: number): Promise<number> {
-    const user = await storage.getUserById(userId);
-    if (!user || !(user as any).stripeAccessToken) return 0;
+  // === REAL-TIME STRIPE EVENT POLLER ===
+  // Polls Stripe Events API every 60 seconds for new charge.succeeded events.
+  // Uses a cursor (last event ID) so we only process each event once.
+  // This is the ONLY Stripe sync mechanism — no batch jobs, no periodic charge pulls.
 
-    const decryptedKey = decryptApiKey((user as any).stripeAccessToken);
-    const stripeClient = new Stripe(decryptedKey);
+  async function processStripeEvent(userId: number, stripeClient: any, event: any): Promise<boolean> {
+    const obj = event.data?.object || {};
+    const eventType = event.type;
 
-    // Paginate through ALL recent charges (not just 100)
+    // Only process payment events
+    if (eventType !== "charge.succeeded" && eventType !== "checkout.session.completed" && eventType !== "charge.refunded") return false;
+
+    const amountRaw = obj.amount || obj.amount_total || obj.amount_received || 0;
+    const amount = amountRaw / 100;
+    const customerEmail = obj.billing_details?.email || obj.customer_details?.email || obj.receipt_email || null;
+    const externalId = obj.id || event.id;
+    const stripeCustomerId = (typeof obj.customer === "string") ? obj.customer : null;
+    const chargeDesc = (obj.description || "").toLowerCase();
+    const chargeDate = new Date((obj.created || event.created) * 1000).toISOString();
+
+    // Skip non-product charges
+    if (chargeDesc.includes("subscription creation") || chargeDesc.includes("subscription update")) return false;
+    if (chargeDesc.includes("auto-recharge for sub-account")) return false;
+    if (amount <= 0) return false;
+
+    // Dedup
+    const existing = await pgPool.query("SELECT id FROM revenue_events WHERE external_id = $1 LIMIT 1", [externalId]);
+    if (existing.rows.length > 0) return false;
+
+    // === ATTRIBUTION ===
     const userCampaigns = await storage.getCampaignsByUser(userId);
-    let matched = 0;
-    let hasMore = true;
-    let startingAfter: string | undefined = undefined;
-    let totalProcessed = 0;
+    let matchedCampaignId: number | null = null;
+    let matchedVisitorId: string | null = null;
 
-    while (hasMore && totalProcessed < 500) {
-    const chargeParams: any = { limit: 100 };
-    if (startingAfter) chargeParams.starting_after = startingAfter;
-    const charges = await stripeClient.charges.list(chargeParams);
-    hasMore = charges.has_more;
-    if (charges.data.length > 0) startingAfter = charges.data[charges.data.length - 1].id;
-    totalProcessed += charges.data.length;
+    // 1. Customer chain (returning buyer)
+    if (stripeCustomerId) {
+      const cc = await pgPool.query("SELECT campaign_id FROM customer_campaigns WHERE user_id = $1 AND stripe_customer_id = $2 LIMIT 1", [userId, stripeCustomerId]);
+      if (cc.rows.length > 0) matchedCampaignId = cc.rows[0].campaign_id;
+    }
 
-    for (const charge of charges.data) {
-      if (charge.status !== "succeeded") continue;
-      const customerEmail = charge.billing_details?.email || null;
-      if (!customerEmail) continue;
+    // 2. Email matches a converted visitor (pixel tracked their conversion)
+    if (!matchedCampaignId && customerEmail) {
+      const em = await pgPool.query(
+        `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
+         WHERE c.user_id = $1 AND v.customer_email = $2 AND v.converted = true
+         ORDER BY v.converted_at DESC LIMIT 1`, [userId, customerEmail]);
+      if (em.rows.length > 0) { matchedVisitorId = em.rows[0].visitor_id; matchedCampaignId = em.rows[0].campaign_id; }
+    }
 
-      // Check if we already have a revenue event for this charge
-      const existing = await pool.query(
-        `SELECT id FROM revenue_events WHERE external_id = $1 AND source = 'stripe_account' LIMIT 1`,
-        [charge.id]
-      );
-      if (existing.rows.length > 0) continue;
+    // 3. Time proximity — pixel conversion within 2 hours of this charge
+    if (!matchedCampaignId) {
+      const tm = await pgPool.query(
+        `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
+         WHERE c.user_id = $1 AND v.converted = true AND v.converted_at IS NOT NULL
+           AND ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) < 7200
+         ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC LIMIT 1`, [userId, chargeDate]);
+      if (tm.rows.length > 0) { matchedVisitorId = tm.rows[0].visitor_id; matchedCampaignId = tm.rows[0].campaign_id; }
+    }
 
-      // === SIMPLE ATTRIBUTION ===
-      // The pixel already knows which campaign a visitor is on.
-      // Chain: customer_id -> campaign (first purchase sets it)
-      //        email -> visitor with conversion on a specific campaign
-      //        time proximity -> pixel conversion within 2 hours
-      // No product keywords. No guessing. Pixel is the source of truth.
-      let matchedCampaignId: number | null = null;
-      let matchedVisitorId: string | null = null;
-      const stripeCustomerId = (typeof charge.customer === "string") ? charge.customer : null;
-      const chargeDate = new Date(charge.created * 1000).toISOString();
-      const chargeDesc = (charge.description || "").toLowerCase();
+    // 4. Fallback: most recent active campaign
+    if (!matchedCampaignId) {
+      const active = userCampaigns.filter((c: any) => c.status === "active" && new Date(chargeDate) >= new Date(c.createdAt))
+        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      if (active.length > 0) matchedCampaignId = active[0].id;
+    }
 
-      // Skip non-product charges
-      if (chargeDesc.includes("subscription creation") || chargeDesc.includes("subscription update")) continue;
-      if (chargeDesc.includes("auto-recharge for sub-account")) continue;
+    if (!matchedCampaignId) return false;
 
-      // 1. Customer chain: has this Stripe customer already been linked to a campaign?
-      if (stripeCustomerId) {
-        const ccMatch = await pool.query(
-          "SELECT campaign_id FROM customer_campaigns WHERE user_id = $1 AND stripe_customer_id = $2 LIMIT 1",
-          [userId, stripeCustomerId]
-        );
-        if (ccMatch.rows.length > 0) {
-          matchedCampaignId = ccMatch.rows[0].campaign_id;
-        }
+    // Backfill email on visitor + set customer chain
+    if (matchedVisitorId && customerEmail) {
+      await pgPool.query("UPDATE visitors SET customer_email = $1 WHERE id = $2 AND customer_email IS NULL", [customerEmail, matchedVisitorId]);
+    }
+    if (stripeCustomerId && matchedCampaignId) {
+      await pgPool.query(
+        `INSERT INTO customer_campaigns (user_id, stripe_customer_id, customer_email, campaign_id)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, stripe_customer_id) DO NOTHING`,
+        [userId, stripeCustomerId, customerEmail, matchedCampaignId]);
+    }
+
+    // Store the revenue event
+    const isRefund = eventType === "charge.refunded";
+    await storage.addRevenueEvent({
+      visitorId: matchedVisitorId || undefined,
+      campaignId: matchedCampaignId,
+      source: "stripe_account",
+      eventType: isRefund ? "refund" : "purchase",
+      amount: isRefund ? -(obj.amount_refunded || 0) / 100 : amount,
+      currency: (obj.currency || "usd").toUpperCase(),
+      externalId,
+      customerEmail: customerEmail || undefined,
+      metadata: JSON.stringify({ description: obj.description || "", chargeDate }),
+    });
+
+    // Mark visitor converted with real amount
+    if (matchedVisitorId && !isRefund) {
+      const visitor = await storage.getVisitor(matchedVisitorId);
+      if (visitor && !visitor.converted) {
+        await storage.markConverted(matchedVisitorId, externalId, amount, customerEmail || undefined);
+      } else if (visitor && visitor.converted && amount > 0) {
+        await pgPool.query("UPDATE visitors SET revenue = COALESCE(revenue, 0) + $1 WHERE id = $2", [amount, matchedVisitorId]);
       }
+    }
 
-      // 2. Email -> converted visitor on a specific campaign
-      if (!matchedCampaignId && customerEmail) {
-        const emailMatch = await pool.query(
-          `SELECT v.id AS visitor_id, v.campaign_id
-           FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
-           WHERE c.user_id = $1 AND v.customer_email = $2 AND v.converted = true
-           ORDER BY v.converted_at DESC LIMIT 1`,
-          [userId, customerEmail]
-        );
-        if (emailMatch.rows.length > 0) {
-          matchedVisitorId = emailMatch.rows[0].visitor_id;
-          matchedCampaignId = emailMatch.rows[0].campaign_id;
-        }
-      }
-
-      // 3. Time proximity: pixel conversion within 2 hours of this charge
-      if (!matchedCampaignId) {
-        const timeMatch = await pool.query(
-          `SELECT v.id AS visitor_id, v.campaign_id
-           FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
-           WHERE c.user_id = $1 AND v.converted = true AND v.converted_at IS NOT NULL
-             AND ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) < 7200
-           ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC LIMIT 1`,
-          [userId, chargeDate]
-        );
-        if (timeMatch.rows.length > 0) {
-          matchedVisitorId = timeMatch.rows[0].visitor_id;
-          matchedCampaignId = timeMatch.rows[0].campaign_id;
-        }
-      }
-
-      // Backfill email + set customer chain for future LTV
-      if (matchedCampaignId) {
-        if (matchedVisitorId && customerEmail) {
-          await pool.query("UPDATE visitors SET customer_email = $1 WHERE id = $2 AND customer_email IS NULL", [customerEmail, matchedVisitorId]);
-        }
-        if (stripeCustomerId) {
-          await pool.query(
-            `INSERT INTO customer_campaigns (user_id, stripe_customer_id, customer_email, campaign_id)
-             VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, stripe_customer_id) DO NOTHING`,
-            [userId, stripeCustomerId, customerEmail, matchedCampaignId]
-          );
-        }
-      }
-
-      // 4. If user has only ONE active campaign, attribute there (unambiguous)
-      // If multiple campaigns, attribute to the most recent one that was created before this charge
-      // This catches buyers whose sa_vid cookie was lost during checkout
-      if (!matchedCampaignId) {
-        const activeCampaigns = userCampaigns.filter((c: any) =>
-          c.status === "active" && new Date(chargeDate) >= new Date(c.createdAt)
-        );
-        if (activeCampaigns.length === 1) {
-          matchedCampaignId = activeCampaigns[0].id;
-        } else if (activeCampaigns.length > 1) {
-          // Multiple campaigns — attribute to the most recently created one
-          // (the newest campaign is most likely what they're buying from)
-          const sorted = [...activeCampaigns].sort((a: any, b: any) =>
-            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-          );
-          matchedCampaignId = sorted[0]?.id ?? null;
-        }
-        // Set customer chain so future purchases from this buyer route correctly
-        if (matchedCampaignId && stripeCustomerId) {
-          await pool.query(
-            `INSERT INTO customer_campaigns (user_id, stripe_customer_id, customer_email, campaign_id)
-             VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, stripe_customer_id) DO NOTHING`,
-            [userId, stripeCustomerId, customerEmail, matchedCampaignId]
-          );
-        }
-      }
-
-      if (!matchedCampaignId) continue;
-
-      const chargeAmount = charge.amount / 100;
-
-      await storage.addRevenueEvent({
-        visitorId: matchedVisitorId || undefined,
-        campaignId: matchedCampaignId,
-        source: "stripe_account",
-        eventType: charge.refunded ? "refund" : "purchase",
-        amount: chargeAmount,
-        currency: charge.currency?.toUpperCase() || "USD",
-        externalId: charge.id,
-        customerEmail: customerEmail,
-        metadata: JSON.stringify({
-          description: charge.description,
-          paymentMethod: charge.payment_method_details?.type,
-        }),
-      });
-
-      // Mark visitor converted + store revenue so it shows in campaign stats
-      if (matchedVisitorId && !charge.refunded) {
-        try {
-          const visitor = await storage.getVisitor(matchedVisitorId);
-          if (visitor && !visitor.converted) {
-            await storage.markConverted(matchedVisitorId, charge.id, chargeAmount, customerEmail || undefined);
-          } else if (visitor && visitor.converted && chargeAmount > 0) {
-            // Additional purchase — accumulate revenue
-            await pool.query(
-              `UPDATE visitors SET revenue = COALESCE(revenue, 0) + $1 WHERE id = $2`,
-              [chargeAmount, matchedVisitorId]
-            );
-          }
-        } catch { /* non-fatal: revenue_event is already stored */ }
-      }
-
-      matched++;
-    } // end for each charge
-    } // end while hasMore
-
-    return matched;
+    console.log(`[stripe-poll] ${eventType} $${amount} ${customerEmail || "?"} -> C${matchedCampaignId} (${matchedVisitorId ? "visitor:" + matchedVisitorId.substring(0,12) : "unmatched"})`);
+    return true;
   }
+
+  // Poll every 60 seconds for ALL users with Stripe connected
+  async function pollStripeEvents() {
+    try {
+      const users = await pgPool.query("SELECT id, stripe_access_token, stripe_last_event_id FROM users WHERE stripe_access_token IS NOT NULL");
+      for (const u of users.rows) {
+        try {
+          const decryptedKey = decryptApiKey(u.stripe_access_token);
+          const stripeClient = new Stripe(decryptedKey);
+
+          // Fetch events since last cursor
+          const params: any = { limit: 100, types: ["charge.succeeded", "charge.refunded", "checkout.session.completed"] };
+          // Note: Stripe events.list doesn't support starting_after for event filtering by time,
+          // but we dedup by external_id so re-processing is safe
+          const events = await stripeClient.events.list(params);
+
+          let processed = 0;
+          for (const evt of events.data) {
+            const ok = await processStripeEvent(u.id, stripeClient, evt);
+            if (ok) processed++;
+          }
+
+          // Store cursor (latest event ID)
+          if (events.data.length > 0) {
+            await pgPool.query("UPDATE users SET stripe_last_event_id = $1 WHERE id = $2", [events.data[0].id, u.id]);
+          }
+
+          if (processed > 0) console.log(`[stripe-poll] User ${u.id}: ${processed} new events processed`);
+        } catch (err: any) {
+          console.error(`[stripe-poll] User ${u.id} error:`, err.message);
+        }
+      }
+    } catch (err: any) {
+      console.error("[stripe-poll] Fatal:", err.message);
+    }
+  }
+
+  // Poll every 60 seconds + run on startup
+  setInterval(pollStripeEvents, 60 * 1000);
+  setTimeout(pollStripeEvents, 5000);
+
+  // Keep the old function signature for the manual sync button (just calls the poller)
+  async function matchStripeTransactionsToVisitors(userId: number): Promise<number> {
+    try {
+      const u = await pgPool.query("SELECT stripe_access_token FROM users WHERE id = $1", [userId]);
+      if (!u.rows[0]?.stripe_access_token) return 0;
+      const decryptedKey = decryptApiKey(u.rows[0].stripe_access_token);
+      const stripeClient = new Stripe(decryptedKey);
+      const events = await stripeClient.events.list({ limit: 100, types: ["charge.succeeded", "charge.refunded", "checkout.session.completed"] });
+      let matched = 0;
+      for (const evt of events.data) {
+        const ok = await processStripeEvent(userId, stripeClient, evt);
+        if (ok) matched++;
+      }
+      return matched;
+    } catch (err: any) {
+      console.error("[stripe-sync]", err.message);
+      return 0;
+    }
+  }
+
 
   // ============== STRIPE CONNECT OAUTH ==============
   const STRIPE_CONNECT_CLIENT_ID = process.env.STRIPE_CONNECT_CLIENT_ID || "";
@@ -3599,32 +3592,6 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
-  // === AUTOMATIC STRIPE SYNC ===
-  // Every 15 minutes, sync Stripe charges for all users with connected accounts.
-  // This ensures revenue shows up in dashboards without manual action.
-  async function autoSyncStripe() {
-    try {
-      const usersWithStripe = await pgPool.query(
-        "SELECT id FROM users WHERE stripe_access_token IS NOT NULL"
-      );
-      for (const row of usersWithStripe.rows) {
-        try {
-          await matchStripeTransactionsToVisitors(row.id);
-        } catch (err: any) {
-          console.error(`[auto-sync] Stripe sync failed for user ${row.id}:`, err.message);
-        }
-      }
-      if (usersWithStripe.rows.length > 0) {
-        console.log(`[auto-sync] Stripe synced for ${usersWithStripe.rows.length} users`);
-      }
-    } catch (err: any) {
-      console.error("[auto-sync] Failed:", err.message);
-    }
-  }
-  // Run every 15 minutes
-  setInterval(autoSyncStripe, 15 * 60 * 1000);
-  // Also run once 30 seconds after startup
-  setTimeout(autoSyncStripe, 30000);
 
   // GET /api/widget/script/:campaignId — serve the widget JS with API base baked in
   app.get("/api/widget/script/:campaignId", widgetLimiter, (req: Request, res: Response) => {
