@@ -198,6 +198,14 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 }
 
 export async function registerRoutes(server: Server, app: Express) {
+  // Shared Postgres pool for all route handlers and background functions
+  const PgPoolShared = (await import('pg')).default.Pool || (await import('pg')).Pool;
+  const pool = new PgPoolShared({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+    max: 5,
+  });
+
   // Health check — used by Railway and monitoring
   // Client-side error logging — no auth required, just store for admin review
   app.post("/api/client-errors", async (req: Request, res: Response) => {
@@ -920,12 +928,12 @@ export async function registerRoutes(server: Server, app: Express) {
 
     try {
       // Order matters due to foreign key-like relationships
-      await pgPool.query('DELETE FROM behavioral_events WHERE campaign_id = $1', [campaignId]);
-      await pgPool.query('DELETE FROM visitor_sessions WHERE campaign_id = $1', [campaignId]);
-      await pgPool.query('DELETE FROM impressions WHERE campaign_id = $1', [campaignId]);
-      await pgPool.query('DELETE FROM visitors WHERE campaign_id = $1', [campaignId]);
+      await pool.query('DELETE FROM behavioral_events WHERE campaign_id = $1', [campaignId]);
+      await pool.query('DELETE FROM visitor_sessions WHERE campaign_id = $1', [campaignId]);
+      await pool.query('DELETE FROM impressions WHERE campaign_id = $1', [campaignId]);
+      await pool.query('DELETE FROM visitors WHERE campaign_id = $1', [campaignId]);
       // Also clear daily observations so stale insights don't persist
-      await pgPool.query('DELETE FROM daily_observations WHERE campaign_id = $1', [campaignId]);
+      await pool.query('DELETE FROM daily_observations WHERE campaign_id = $1', [campaignId]);
       await pgPool.end();
 
       res.json({
@@ -1214,7 +1222,7 @@ export async function registerRoutes(server: Server, app: Express) {
     if (amount <= 0) return false;
 
     // Dedup
-    const existing = await pgPool.query("SELECT id FROM revenue_events WHERE external_id = $1 LIMIT 1", [externalId]);
+    const existing = await pool.query("SELECT id FROM revenue_events WHERE external_id = $1 LIMIT 1", [externalId]);
     if (existing.rows.length > 0) return false;
 
     // === ATTRIBUTION ===
@@ -1224,13 +1232,13 @@ export async function registerRoutes(server: Server, app: Express) {
 
     // 1. Customer chain (returning buyer)
     if (stripeCustomerId) {
-      const cc = await pgPool.query("SELECT campaign_id FROM customer_campaigns WHERE user_id = $1 AND stripe_customer_id = $2 LIMIT 1", [userId, stripeCustomerId]);
+      const cc = await pool.query("SELECT campaign_id FROM customer_campaigns WHERE user_id = $1 AND stripe_customer_id = $2 LIMIT 1", [userId, stripeCustomerId]);
       if (cc.rows.length > 0) matchedCampaignId = cc.rows[0].campaign_id;
     }
 
     // 2. Email matches a converted visitor (pixel tracked their conversion)
     if (!matchedCampaignId && customerEmail) {
-      const em = await pgPool.query(
+      const em = await pool.query(
         `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
          WHERE c.user_id = $1 AND v.customer_email = $2 AND v.converted = true
          ORDER BY v.converted_at DESC LIMIT 1`, [userId, customerEmail]);
@@ -1239,7 +1247,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
     // 3. Time proximity — pixel conversion within 2 hours of this charge
     if (!matchedCampaignId) {
-      const tm = await pgPool.query(
+      const tm = await pool.query(
         `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
          WHERE c.user_id = $1 AND v.converted = true AND v.converted_at IS NOT NULL
            AND ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) < 7200
@@ -1258,10 +1266,10 @@ export async function registerRoutes(server: Server, app: Express) {
 
     // Backfill email on visitor + set customer chain
     if (matchedVisitorId && customerEmail) {
-      await pgPool.query("UPDATE visitors SET customer_email = $1 WHERE id = $2 AND customer_email IS NULL", [customerEmail, matchedVisitorId]);
+      await pool.query("UPDATE visitors SET customer_email = $1 WHERE id = $2 AND customer_email IS NULL", [customerEmail, matchedVisitorId]);
     }
     if (stripeCustomerId && matchedCampaignId) {
-      await pgPool.query(
+      await pool.query(
         `INSERT INTO customer_campaigns (user_id, stripe_customer_id, customer_email, campaign_id)
          VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, stripe_customer_id) DO NOTHING`,
         [userId, stripeCustomerId, customerEmail, matchedCampaignId]);
@@ -1287,7 +1295,7 @@ export async function registerRoutes(server: Server, app: Express) {
       if (visitor && !visitor.converted) {
         await storage.markConverted(matchedVisitorId, externalId, amount, customerEmail || undefined);
       } else if (visitor && visitor.converted && amount > 0) {
-        await pgPool.query("UPDATE visitors SET revenue = COALESCE(revenue, 0) + $1 WHERE id = $2", [amount, matchedVisitorId]);
+        await pool.query("UPDATE visitors SET revenue = COALESCE(revenue, 0) + $1 WHERE id = $2", [amount, matchedVisitorId]);
       }
     }
 
@@ -1298,7 +1306,7 @@ export async function registerRoutes(server: Server, app: Express) {
   // Poll every 60 seconds for ALL users with Stripe connected
   async function pollStripeEvents() {
     try {
-      const users = await pgPool.query("SELECT id, stripe_access_token, stripe_last_event_id FROM users WHERE stripe_access_token IS NOT NULL");
+      const users = await pool.query("SELECT id, stripe_access_token, stripe_last_event_id FROM users WHERE stripe_access_token IS NOT NULL");
       for (const u of users.rows) {
         try {
           const decryptedKey = decryptApiKey(u.stripe_access_token);
@@ -1345,7 +1353,7 @@ export async function registerRoutes(server: Server, app: Express) {
   // Keep the old function signature for the manual sync button (just calls the poller)
   async function matchStripeTransactionsToVisitors(userId: number): Promise<number> {
     try {
-      const u = await pgPool.query("SELECT stripe_access_token FROM users WHERE id = $1", [userId]);
+      const u = await pool.query("SELECT stripe_access_token FROM users WHERE id = $1", [userId]);
       if (!u.rows[0]?.stripe_access_token) return 0;
       const decryptedKey = decryptApiKey(u.rows[0].stripe_access_token);
       const stripeClient = new Stripe(decryptedKey);
@@ -1502,7 +1510,7 @@ export async function registerRoutes(server: Server, app: Express) {
             enabled_events: ['charge.succeeded', 'charge.refunded', 'checkout.session.completed', 'payment_intent.succeeded'],
           });
           if (wh.secret) {
-            await pgPool.query('UPDATE users SET stripe_webhook_secret = $1 WHERE id = $2', [wh.secret, user.id]);
+            await pool.query('UPDATE users SET stripe_webhook_secret = $1 WHERE id = $2', [wh.secret, user.id]);
           }
           console.log(`[stripe-connect] Auto-registered webhook for user ${user.id}: ${whUrl}`);
         }
@@ -1571,7 +1579,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
       // Store webhook secret for signature verification
       if (wh.secret) {
-        await pgPool.query('UPDATE users SET stripe_webhook_secret = $1 WHERE id = $2', [wh.secret, user.id]);
+        await pool.query('UPDATE users SET stripe_webhook_secret = $1 WHERE id = $2', [wh.secret, user.id]);
       }
 
       return res.json({ ok: true, webhookId: wh.id, url: webhookUrl });
@@ -1665,7 +1673,7 @@ export async function registerRoutes(server: Server, app: Express) {
       }
 
       // Get existing mappings
-      const mappings = await pgPool.query(
+      const mappings = await pool.query(
         `SELECT pm.description_pattern, pm.campaign_id, c.name as campaign_name
          FROM product_map pm
          LEFT JOIN campaigns c ON c.id = pm.campaign_id
@@ -1707,7 +1715,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
     try {
       if (campaignId) {
-        await pgPool.query(
+        await pool.query(
           `INSERT INTO product_map (user_id, description_pattern, campaign_id)
            VALUES ($1, $2, $3)
            ON CONFLICT (user_id, description_pattern) DO UPDATE SET campaign_id = $3`,
@@ -1715,7 +1723,7 @@ export async function registerRoutes(server: Server, app: Express) {
         );
       } else {
         // Unmap — remove the mapping
-        await pgPool.query(
+        await pool.query(
           `DELETE FROM product_map WHERE user_id = $1 AND description_pattern = $2`,
           [req.userId, description]
         );
@@ -3750,7 +3758,7 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const result = await pgPool.query(
+    const result = await pool.query(
       `SELECT
         COUNT(DISTINCT v.id) as total_visitors,
         COUNT(DISTINCT v.id) FILTER (WHERE v.converted = true) as total_conversions,
@@ -3822,7 +3830,7 @@ export async function registerRoutes(server: Server, app: Express) {
   // Correlates page metrics + behavioral data against conversion rates across ALL campaigns
   app.get("/api/conversion-intelligence", requireAuth, async (req: Request, res: Response) => {
     // Pull per-campaign metrics with enough visitors to be meaningful
-    const result = await pgPool.query(
+    const result = await pool.query(
       `SELECT
         c.id, c.url, c.page_type, c.niche, c.price_point,
         c.page_word_count, c.page_char_count, c.page_heading_count,
@@ -3992,7 +4000,7 @@ export async function registerRoutes(server: Server, app: Express) {
     const { Pool: PgPool } = require("pg");
     const pgPool = new PgPool({ connectionString: process.env.DATABASE_URL, ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false });
     try {
-      const result = await pgPool.query(
+      const result = await pool.query(
         `SELECT id FROM visitors WHERE campaign_id = $1 AND converted = false ORDER BY first_seen DESC LIMIT 1`,
         [campaignId]
       );
@@ -5259,7 +5267,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
     try {
       // Query grouped by traffic_source
-      const sourceRows = await pgPool.query(
+      const sourceRows = await pool.query(
         `SELECT
           COALESCE(traffic_source, 'direct') AS source,
           COUNT(*) AS visitors,
@@ -5276,7 +5284,7 @@ export async function registerRoutes(server: Server, app: Express) {
       // Total revenue = ALL transactions (initial + upsells)
       // LTV = total revenue / unique buyers
       // AOV = total revenue / total transactions
-      const ltvRows = await pgPool.query(
+      const ltvRows = await pool.query(
         `SELECT
           COALESCE(v.traffic_source, 'direct') AS source,
           COALESCE(SUM(re.amount), 0) AS total_revenue,
@@ -5321,7 +5329,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
       // Query grouped into Mobile vs Desktop (the meaningful split for conversion analysis)
       // mobile = ios + android, desktop = desktop_mac + desktop_windows, tablet = tablet
-      const deviceRows = await pgPool.query(
+      const deviceRows = await pool.query(
         `SELECT
           CASE
             WHEN COALESCE(device_category, 'other') IN ('ios', 'android') THEN 'mobile'
@@ -5340,7 +5348,7 @@ export async function registerRoutes(server: Server, app: Express) {
       );
 
       // LTV by device from revenue_events
-      const deviceLtvRows = await pgPool.query(
+      const deviceLtvRows = await pool.query(
         `SELECT
           CASE
             WHEN COALESCE(v.device_category, 'other') IN ('ios', 'android') THEN 'mobile'
@@ -5425,7 +5433,7 @@ export async function registerRoutes(server: Server, app: Express) {
       }
 
       // Average time on page — time_on_page lives in visitor_sessions, joined via visitor_id
-      const timeRows = await pgPool.query(
+      const timeRows = await pool.query(
         `SELECT
           COALESCE(v.traffic_source, 'direct') AS source,
           ROUND(AVG(vs.time_on_page)) AS avg_time_on_page,
@@ -5448,7 +5456,7 @@ export async function registerRoutes(server: Server, app: Express) {
         };
       }
       // Compute overall average from visitor_sessions
-      const overallTimeRow = await pgPool.query(
+      const overallTimeRow = await pool.query(
         `SELECT
           ROUND(AVG(vs.time_on_page)) AS avg_time,
           ROUND(AVG(CASE WHEN v.converted = true THEN vs.time_on_page ELSE NULL END)) AS buyer_avg_time
