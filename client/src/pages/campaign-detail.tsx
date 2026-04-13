@@ -4506,6 +4506,7 @@ function CategoryBadge({ category }: { category: string }) {
 function DailyObservationCard({ campaignId, isPaidUser }: { campaignId: number; isPaidUser: boolean }) {
   const { toast } = useToast();
   const [historyExpanded, setHistoryExpanded] = useState(false);
+  const [applyingInsight, setApplyingInsight] = useState(false);
 
   const { data, isLoading, refetch } = useQuery<{
     observations: DailyObservation[];
@@ -4705,6 +4706,46 @@ function DailyObservationCard({ campaignId, isPaidUser }: { campaignId: number; 
                   <CheckCircle2 className="w-3.5 h-3.5" style={{ color: "hsl(142 71% 45%)" }} />
                   Today's insight generated
                 </span>
+              )}
+
+              {/* Apply Insight button — creates a variant from the suggestion */}
+              {latestObservation?.observation && (
+                <button
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-md transition-all disabled:opacity-60"
+                  style={{
+                    background: "hsl(160 84% 36% / 0.12)",
+                    color: "hsl(160 84% 39%)",
+                    border: "1px solid hsl(160 84% 36% / 0.25)",
+                  }}
+                  disabled={applyingInsight}
+                  onClick={async () => {
+                    setApplyingInsight(true);
+                    try {
+                      const res = await apiRequest("POST", `/api/campaigns/${campaignId}/apply-insight`, {
+                        observationText: latestObservation.observation,
+                      });
+                      const json = await res.json();
+                      if (!res.ok) throw new Error(json.error || "Failed to apply insight");
+                      toast({
+                        title: "Variant created from insight",
+                        description: `New ${json.variant.type} challenger: "${json.variant.text.slice(0, 60)}..."`,
+                      });
+                      // Refresh stats to show the new variant
+                      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] });
+                    } catch (err: any) {
+                      toast({ title: "Could not apply insight", description: err.message, variant: "destructive" });
+                    } finally {
+                      setApplyingInsight(false);
+                    }
+                  }}
+                  data-testid="button-apply-insight"
+                >
+                  {applyingInsight ? (
+                    <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Applying…</>
+                  ) : (
+                    <><Zap className="w-3.5 h-3.5" /> Test this suggestion</>
+                  )}
+                </button>
               )}
 
               {/* View history toggle */}

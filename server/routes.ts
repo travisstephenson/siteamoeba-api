@@ -5321,6 +5321,114 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // POST /api/campaigns/:id/apply-insight — extract a suggestion from an insight and create a variant
+  app.post("/api/campaigns/:id/apply-insight", aiLimiter, requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const { observationText } = req.body;
+    if (!observationText) return res.status(400).json({ error: "No observation text provided" });
+
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    const user = await storage.getUser(req.userId!);
+    if (!user) return res.status(401).json({ error: "Not found" });
+
+    // Resolve LLM config
+    const llmConfigResolved = resolveLLMConfig({
+      userProvider: user.llmProvider || undefined,
+      userModel: user.llmModel || undefined,
+      userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : undefined,
+      isPaid: user.plan !== "free",
+    });
+    if (!llmConfigResolved.config) {
+      return res.status(402).json({ error: "No AI provider configured" });
+    }
+
+    try {
+      // Use LLM to extract the specific suggestion from the insight
+      const extractionPrompt = `You are a copywriting assistant. Extract the specific A/B test suggestion from this insight.
+
+The insight may suggest testing a headline, subheadline, CTA, or other page element.
+Extract:
+1. The section type being suggested (headline, subheadline, cta)
+2. The exact suggested copy (clean it up if needed, remove quotes)
+3. A brief strategy label (e.g. "pattern_interrupt", "curiosity", "social_proof", "urgency", "transformation", "contrarian")
+
+Respond in this exact JSON format:
+{"sectionType": "headline", "variantText": "The exact suggested copy here", "strategy": "curiosity"}
+
+If the insight doesn't contain a specific testable suggestion, respond:
+{"error": "No specific test suggestion found in this insight"}
+
+Insight:
+${observationText}`;
+
+      const result = await callLLM(llmConfigResolved.config, [
+        { role: "user", content: extractionPrompt },
+      ], { maxTokens: 300, temperature: 0.2 });
+
+      // Parse the response
+      let parsed;
+      try {
+        const jsonMatch = result.match(/\{[^}]+\}/s);
+        parsed = JSON.parse(jsonMatch?.[0] || result);
+      } catch {
+        return res.status(400).json({ error: "Could not extract a testable suggestion from this insight" });
+      }
+
+      if (parsed.error) {
+        return res.status(400).json({ error: parsed.error });
+      }
+
+      const { sectionType, variantText, strategy } = parsed;
+      if (!sectionType || !variantText) {
+        return res.status(400).json({ error: "Could not extract section type and variant text" });
+      }
+
+      // Validate section type
+      const validTypes = ["headline", "subheadline", "cta"];
+      const normalizedType = sectionType.toLowerCase().replace(/[^a-z]/g, "");
+      const matchedType = validTypes.find(t => normalizedType.includes(t)) || "headline";
+
+      // Check if there's already an active test for this section type
+      const existingVariants = await storage.getVariantsByCampaign(campaignId);
+      const activeChallengers = existingVariants.filter(v => v.type === matchedType && !v.isControl && v.isActive);
+
+      if (activeChallengers.length >= 3) {
+        return res.status(400).json({ error: `Already have ${activeChallengers.length} active challengers for ${matchedType}. Declare a winner first.` });
+      }
+
+      // Create the variant
+      const variant = await storage.createVariant({
+        campaignId,
+        type: matchedType,
+        text: variantText,
+        isControl: false,
+        isActive: true,
+        strategy: strategy || "insight_suggested",
+      });
+
+      // Deduct 1 credit for the LLM call
+      await storage.incrementCredits(user.id);
+
+      res.json({
+        ok: true,
+        variant: {
+          id: variant.id,
+          type: matchedType,
+          text: variantText,
+          strategy: strategy || "insight_suggested",
+        },
+        message: `Created a new ${matchedType} challenger variant from the insight suggestion.`,
+      });
+    } catch (err: any) {
+      console.error("[apply-insight] error:", err);
+      res.status(500).json({ error: err.message || "Failed to apply insight" });
+    }
+  });
+
   // ============== DASHBOARD ==============
 
   // GET /api/dashboard/stats
