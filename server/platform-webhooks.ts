@@ -308,12 +308,13 @@ export async function processPlatformPurchase(
   } else {
     // Try matching by recent unconverted visitor on any active campaign
     // (within 24 hours — broader window since webhook may arrive later)
+    // first_seen is stored as text ISO string, so cast for comparison
     const recentResult = await pool.query(
       `SELECT v.id, v.campaign_id
        FROM visitors v
        JOIN campaigns c ON c.id = v.campaign_id AND c.user_id = $1
        WHERE v.converted = false
-         AND v.first_seen > NOW() - INTERVAL '24 hours'
+         AND v.first_seen::timestamptz > NOW() - INTERVAL '24 hours'
        ORDER BY v.first_seen DESC
        LIMIT 1`,
       [userId]
