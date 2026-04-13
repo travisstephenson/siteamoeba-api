@@ -1190,9 +1190,16 @@ export async function registerRoutes(server: Server, app: Express) {
 
     const amountRaw = obj.amount || obj.amount_total || obj.amount_received || 0;
     const amount = amountRaw / 100;
-    const customerEmail = obj.billing_details?.email || obj.customer_details?.email || obj.receipt_email || null;
     const externalId = obj.id || event.id;
     const stripeCustomerId = (typeof obj.customer === "string") ? obj.customer : null;
+    let customerEmail = obj.billing_details?.email || obj.customer_details?.email || obj.receipt_email || null;
+    // If no email on the charge, fetch from the Stripe Customer object
+    if (!customerEmail && stripeCustomerId) {
+      try {
+        const cust = await stripeClient.customers.retrieve(stripeCustomerId);
+        if (cust && !cust.deleted) customerEmail = (cust as any).email || null;
+      } catch { /* non-fatal */ }
+    }
     const chargeDesc = (obj.description || "").toLowerCase();
     const chargeDate = new Date((obj.created || event.created) * 1000).toISOString();
 
