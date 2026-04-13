@@ -1575,6 +1575,30 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // GET /api/settings/stripe-debug — temporary debug endpoint
+  app.get("/api/settings/stripe-debug", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user || !(user as any).stripeAccessToken) return res.json({ error: "no stripe" });
+    try {
+      const decryptedKey = decryptApiKey((user as any).stripeAccessToken);
+      const stripeClient = new Stripe(decryptedKey);
+      const charges = await stripeClient.charges.list({ limit: 5 });
+      const debug = charges.data.map((c: any) => ({
+        id: c.id,
+        status: c.status,
+        amount: c.amount / 100,
+        email: c.billing_details?.email || c.receipt_email,
+        desc: (c.description || "").substring(0, 50),
+        customer: c.customer,
+        created: new Date(c.created * 1000).toISOString(),
+        refunded: c.refunded,
+      }));
+      return res.json({ total: charges.data.length, hasMore: charges.has_more, charges: debug });
+    } catch (err: any) {
+      return res.json({ error: err.message });
+    }
+  });
+
   // POST /api/settings/stripe-sync — on-demand sync button in Settings
   app.post("/api/settings/stripe-sync", requireAuth, async (req: Request, res: Response) => {
     const user = await storage.getUserById(req.userId!);
