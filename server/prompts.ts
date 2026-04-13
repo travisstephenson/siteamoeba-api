@@ -1,4 +1,5 @@
 import type { LLMMessage } from "./llm";
+import { getCROKnowledge } from "./brain-cro-knowledge";
 import { getBrainKnowledgeForSection, getBrainPageAuditKnowledge } from "./brain-selector";
 import { getPageContextRules } from "./brain-rules";
 
@@ -189,6 +190,12 @@ Return ONLY the JSON array, no other text.`;
   const brainKnowledge = getBrainKnowledgeForSection("headline");
   const pageContextRules = getPageContextRules(context.pageType, context.pageGoal, context.pricePoint, context.niche);
   let systemWithBrain = COPYWRITING_SYSTEM_PROMPT + "\n\nBRAIN KNOWLEDGE BASE (use these frameworks):\n" + brainKnowledge + "\n\n" + pageContextRules;
+
+  // Inject CRO research knowledge base (research-backed, applies to all users)
+  const croKnowledge = getCROKnowledge();
+  if (croKnowledge) {
+    systemWithBrain += "\n\n" + croKnowledge.slice(0, 6000);
+  }
 
   // Inject dynamic brain knowledge from winning test patterns (paid users only)
   if (context.brainKnowledge) {
@@ -759,6 +766,10 @@ Your job is to figure out what's actually causing the problem and give advice th
 The following knowledge base contains copywriting and persuasion principles. Use the underlying insights, not the framework names. Never apply a framework just because it exists — only use it if it directly explains a specific problem on this page.
 
 ${context.brainKnowledge}
+
+## CRO RESEARCH KNOWLEDGE BASE
+${getCROKnowledge().slice(0, 6000)}
+
 ${testDataSection}
 ${campaignHistorySection}
 ${context.networkIntelligence ? `

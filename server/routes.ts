@@ -12,6 +12,7 @@ import { encryptApiKey, decryptApiKey } from "./encryption";
 import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildSectionGenerationPrompt, buildClassificationPrompt, buildPageScanPrompt, buildBrainChatPrompt, buildTestLessonPrompt, buildCROReportPrompt, type GenerationContext } from "./prompts";
 import { getBrainPageAuditKnowledge, getRelevantTestLessons } from "./brain-selector";
 import { getNetworkIntelligence, refreshNetworkIntelligence } from "./network-intelligence";
+import { getCROKnowledge } from "./brain-cro-knowledge";
 import { loginSchema, registerSchema, insertCampaignSchema, insertVariantSchema, insertTestSectionSchema, insertFeedbackSchema } from "@shared/schema";
 import { evaluateAutopilotTests, advanceAutopilot, generateAutopilotVariants, declareWinnerForSection } from "./autopilot-engine";
 import { getPlaybook } from "./autopilot-playbooks";
@@ -2957,6 +2958,7 @@ export async function registerRoutes(server: Server, app: Express) {
         chatContext.brainKnowledge ? `\n${chatContext.brainKnowledge.slice(0, 1500)}` : "",
         chatContext.campaignTestHistory || "",
         chatContext.networkIntelligence ? `\n${chatContext.networkIntelligence.slice(0, 4000)}` : "",
+        `\n${getCROKnowledge().slice(0, 4000)}`,
       ].filter(Boolean).join("\n");
 
       let counselResult;

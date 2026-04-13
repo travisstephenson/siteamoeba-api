@@ -2,6 +2,7 @@ import { storage, pool } from "./storage";
 import { callLLM, type LLMConfig } from "./llm";
 import { getBrainPageAuditKnowledge } from "./brain-selector";
 import { getNetworkIntelligence } from "./network-intelligence";
+import { getCROKnowledge } from "./brain-cro-knowledge";
 import type { LLMMessage } from "./llm";
 
 // Valid observation categories — rotated to avoid repetition
@@ -140,9 +141,16 @@ IMPORTANT: The overall CVR is the sum of all variant conversions divided by tota
 Generate an insight about the A/B test results — which variant angle is winning or losing, what this tells you about what the audience responds to, and what to test next.`,
   };
 
+  // Get CRO research knowledge (condensed)
+  const croSnippet = getCROKnowledge().slice(0, 2000);
+
   const systemPrompt = `You are a conversion rate optimization expert embedded in SiteAmoeba, an A/B testing platform. You analyze behavioral data and test results to generate actionable insights for marketers.
+${croSnippet ? `
+CRO RESEARCH KNOWLEDGE (use to make data-backed recommendations):
+${croSnippet}
+` : ""}
 ${params.networkIntelligence ? `
-You have access to REAL DATA from across the SiteAmoeba network:
+REAL DATA from the SiteAmoeba network:
 ${params.networkIntelligence}
 Use these real-world patterns to make your insights more specific and data-backed.
 ` : ""}
