@@ -2805,13 +2805,44 @@ export async function registerRoutes(server: Server, app: Express) {
       console.log("Could not fetch page for chat context:", (err as any)?.message);
     }
 
-    // Get relevant test lessons for context
+    // Get relevant test lessons for context (network-wide)
     const primarySectionType = activeTestSections[0]?.category || "headline";
     const testLessonsText = await getRelevantTestLessons(
       campaign.pageType || "sales_page",
       primarySectionType,
       campaign.niche || undefined
     );
+
+    // === CRITICAL: Get THIS campaign's own test history ===
+    // The Brain MUST know what has already been tested and proven on this specific campaign.
+    // Without this, the AI will suggest changes that directly contradict proven winners.
+    let campaignTestHistory = "";
+    try {
+      const historyResult = await pool.query(
+        `SELECT section_type, winner_text, loser_text, winner_strategy, loser_strategy,
+                lift_percent, winner_conversion_rate, loser_conversion_rate,
+                sample_size, confidence, lesson, created_at
+         FROM test_lessons WHERE campaign_id = $1
+         ORDER BY created_at DESC LIMIT 10`,
+        [campaign.id]
+      );
+      if (historyResult.rows.length > 0) {
+        const lines = historyResult.rows.map((r: any) => {
+          const winSnip = (r.winner_text || "").replace(/<[^>]*>/g, "").slice(0, 100);
+          const loseSnip = (r.loser_text || "").replace(/<[^>]*>/g, "").slice(0, 100);
+          const date = (r.created_at || "").slice(0, 10);
+          return [
+            `  [${r.section_type}] Winner (${r.winner_strategy || "unknown"}): "${winSnip}"`,
+            `    Beat (${r.loser_strategy || "unknown"}): "${loseSnip}"`,
+            `    Result: +${(r.lift_percent || 0).toFixed(1)}% lift | ${((r.winner_conversion_rate || 0) * 100).toFixed(2)}% vs ${((r.loser_conversion_rate || 0) * 100).toFixed(2)}% CVR | ${(r.confidence || 0).toFixed(0)}% confidence | ${r.sample_size || 0} visitors | ${date}`,
+            r.lesson ? `    Lesson: ${r.lesson.slice(0, 200)}` : "",
+          ].filter(Boolean).join("\n");
+        });
+        campaignTestHistory = "\n\nTHIS CAMPAIGN'S PROVEN TEST RESULTS (NEVER contradict these — the data is real):\n" + lines.join("\n\n");
+      }
+    } catch (err) {
+      console.warn("Failed to fetch campaign test history:", err);
+    }
 
     const chatContext = {
       campaignUrl: campaign.url,
@@ -2850,6 +2881,7 @@ export async function registerRoutes(server: Server, app: Express) {
       pricePoint: campaign.pricePoint || undefined,
       niche: campaign.niche || undefined,
       testLessons: testLessonsText || undefined,
+      campaignTestHistory,
     };
 
     const llmConfig = llmConfigResolved.config;
@@ -2878,6 +2910,7 @@ export async function registerRoutes(server: Server, app: Express) {
           : "",
         chatContext.pageContent ? `\nPage content excerpt:\n${chatContext.pageContent.slice(0, 2000)}` : "",
         chatContext.brainKnowledge ? `\n${chatContext.brainKnowledge.slice(0, 1500)}` : "",
+        chatContext.campaignTestHistory || "",
       ].filter(Boolean).join("\n");
 
       let counselResult;

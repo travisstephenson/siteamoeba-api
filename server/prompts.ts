@@ -624,6 +624,8 @@ export interface BrainChatContext {
   niche?: string;
   // Real test data from past tests
   testLessons?: string;
+  // THIS campaign's own proven test results — Brain must NEVER contradict these
+  campaignTestHistory?: string;
 }
 
 export function buildBrainChatPrompt(
@@ -662,6 +664,17 @@ export function buildBrainChatPrompt(
   const testDataSection = context.testLessons
     ? `\n## REAL TEST DATA (lessons from past A/B tests on this platform)
 ${context.testLessons}
+`
+    : "";
+
+  // THIS campaign's own proven test history — highest priority context
+  const campaignHistorySection = context.campaignTestHistory
+    ? `\n## ⚠️ THIS CAMPAIGN'S PROVEN A/B TEST RESULTS — DO NOT CONTRADICT
+The following are REAL test results from THIS specific campaign. These are not theories — they are measured outcomes with real visitors.
+You MUST respect these results. NEVER suggest reverting to a losing strategy or approach that was already tested and beaten.
+If the user's current headline WON an A/B test, do NOT suggest changing it to something similar to the LOSER.
+Instead, suggest testing a DIFFERENT section of the page, or a completely new angle that hasn't been tested yet.
+${context.campaignTestHistory}
 `
     : "";
 
@@ -731,6 +744,7 @@ The following knowledge base contains copywriting and persuasion principles. Use
 
 ${context.brainKnowledge}
 ${testDataSection}
+${campaignHistorySection}
 ${pageContextRules}`;
 
   const messages: LLMMessage[] = [
