@@ -613,6 +613,16 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({ token });
   });
 
+  // POST /api/admin/refresh-intelligence — manually refresh network intelligence
+  app.post("/api/admin/refresh-intelligence", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      await refreshNetworkIntelligence();
+      res.json({ ok: true, message: "Network intelligence refreshed" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // GET /api/admin/stats — overview numbers
   app.get("/api/admin/stats", requireAdmin, async (req: Request, res: Response) => {
     const allUsers = await storage.getAllUsers();
@@ -5405,16 +5415,6 @@ export async function registerRoutes(server: Server, app: Express) {
       ...stats,
       referrals: enrichedReferrals,
     });
-  });
-
-  // POST /api/admin/refresh-intelligence — manually refresh network intelligence
-  app.post("/api/admin/refresh-intelligence", requireAdmin, async (_req: Request, res: Response) => {
-    try {
-      await refreshNetworkIntelligence();
-      res.json({ ok: true, message: "Network intelligence refreshed" });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
   });
 
   // GET /api/wins — all declared winners for this user (for Wins Library)
