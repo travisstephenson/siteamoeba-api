@@ -1257,12 +1257,18 @@ export async function registerRoutes(server: Server, app: Express) {
 
     // 4. Fallback: most recent active campaign
     if (!matchedCampaignId) {
-      const active = userCampaigns.filter((c: any) => c.status === "active" && new Date(chargeDate) >= new Date(c.createdAt))
-        .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      console.log(`[stripe-poll] Step 4 fallback: ${userCampaigns.length} total campaigns, chargeDate=${chargeDate}`);
+      const active = userCampaigns.filter((c: any) => {
+        const isActive = c.status === "active";
+        const dateOk = new Date(chargeDate) >= new Date(c.createdAt);
+        if (!isActive || !dateOk) console.log(`[stripe-poll]   C${c.id} status=${c.status} created=${c.createdAt} dateOk=${dateOk}`);
+        return isActive && dateOk;
+      }).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      console.log(`[stripe-poll] Step 4: ${active.length} active campaigns match`);
       if (active.length > 0) matchedCampaignId = active[0].id;
     }
 
-    if (!matchedCampaignId) return false;
+    if (!matchedCampaignId) { console.log(`[stripe-poll] SKIPPED: no campaign match for ${customerEmail || 'no-email'} $${amount}`); return false; }
 
     // Backfill email on visitor + set customer chain
     if (matchedVisitorId && customerEmail) {
@@ -3764,20 +3770,20 @@ export async function registerRoutes(server: Server, app: Express) {
         COUNT(DISTINCT v.id) FILTER (WHERE v.converted = true) as total_conversions,
 
         -- Mobile vs Desktop split
-        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type IN ('ios','android')) as mobile_visitors,
-        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type IN ('desktop_mac','desktop_windows','desktop')) as desktop_visitors,
-        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type IN ('ios','android')) as mobile_conversions,
-        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type IN ('desktop_mac','desktop_windows','desktop')) as desktop_conversions,
+        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type = 'mobile') as mobile_visitors,
+        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type = 'desktop') as desktop_visitors,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type = 'mobile') as mobile_conversions,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type = 'desktop') as desktop_conversions,
 
         -- Avg metrics by device
-        ROUND(AVG(vs.time_on_page) FILTER (WHERE vs.device_type IN ('ios','android') AND vs.time_on_page > 0)) as mobile_avg_time,
-        ROUND(AVG(vs.time_on_page) FILTER (WHERE vs.device_type IN ('desktop_mac','desktop_windows','desktop') AND vs.time_on_page > 0)) as desktop_avg_time,
-        ROUND(AVG(vs.max_scroll_depth) FILTER (WHERE vs.device_type IN ('ios','android'))) as mobile_avg_scroll,
-        ROUND(AVG(vs.max_scroll_depth) FILTER (WHERE vs.device_type IN ('desktop_mac','desktop_windows','desktop'))) as desktop_avg_scroll,
+        ROUND(AVG(vs.time_on_page) FILTER (WHERE vs.device_type = 'mobile' AND vs.time_on_page > 0)) as mobile_avg_time,
+        ROUND(AVG(vs.time_on_page) FILTER (WHERE vs.device_type = 'desktop' AND vs.time_on_page > 0)) as desktop_avg_time,
+        ROUND(AVG(vs.max_scroll_depth) FILTER (WHERE vs.device_type = 'mobile')) as mobile_avg_scroll,
+        ROUND(AVG(vs.max_scroll_depth) FILTER (WHERE vs.device_type = 'desktop')) as desktop_avg_scroll,
 
         -- Page dimensions (median approximation via avg)
-        ROUND(AVG(vs.page_height) FILTER (WHERE vs.device_type IN ('ios','android') AND vs.page_height > 0)) as mobile_avg_page_height,
-        ROUND(AVG(vs.page_height) FILTER (WHERE vs.device_type IN ('desktop_mac','desktop_windows','desktop') AND vs.page_height > 0)) as desktop_avg_page_height,
+        ROUND(AVG(vs.page_height) FILTER (WHERE vs.device_type = 'mobile' AND vs.page_height > 0)) as mobile_avg_page_height,
+        ROUND(AVG(vs.page_height) FILTER (WHERE vs.device_type = 'desktop' AND vs.page_height > 0)) as desktop_avg_page_height,
         ROUND(AVG(vs.screen_width) FILTER (WHERE vs.screen_width > 0)) as avg_screen_width,
 
         -- Overall
@@ -3846,10 +3852,10 @@ export async function registerRoutes(server: Server, app: Express) {
         ROUND(AVG(vs.page_height) FILTER (WHERE vs.page_height > 0)) as avg_page_height,
 
         -- Mobile vs desktop conversion rates
-        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type IN ('ios','android')) as mobile_visitors,
-        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type IN ('ios','android')) as mobile_conversions,
-        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type IN ('desktop_mac','desktop_windows','desktop')) as desktop_visitors,
-        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type IN ('desktop_mac','desktop_windows','desktop')) as desktop_conversions,
+        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type = 'mobile') as mobile_visitors,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type = 'mobile') as mobile_conversions,
+        COUNT(DISTINCT v.id) FILTER (WHERE vs.device_type = 'desktop') as desktop_visitors,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.converted AND vs.device_type = 'desktop') as desktop_conversions,
 
         -- Converter vs non-converter behavior
         ROUND(AVG(vs.time_on_page) FILTER (WHERE v.converted AND vs.time_on_page > 0)) as buyer_avg_time,
