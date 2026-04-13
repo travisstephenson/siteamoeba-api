@@ -475,7 +475,7 @@ export function AppSidebar() {
             <SidebarMenuButton asChild isActive={location === "/referrals"}>
               <Link href="/referrals" data-testid="link-referrals">
                 <Gift className="w-4 h-4" />
-                <span className="text-sm">Referrals</span>
+                <span className="text-sm">Referrals & Wins</span>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>

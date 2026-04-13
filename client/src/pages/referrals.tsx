@@ -1,10 +1,11 @@
-import { useState } from "react";
-import { Gift, Copy, Check, Users, DollarSign, TrendingUp, ExternalLink, Share2 } from "lucide-react";
+import { useState, useCallback } from "react";
+import { Gift, Copy, Check, Users, DollarSign, TrendingUp, ExternalLink, Share2, Trophy, Download, ArrowUpRight, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -131,6 +132,358 @@ function StatCard({
   );
 }
 
+// ---- Win types ----
+interface Win {
+  id: number;
+  campaignId: number;
+  campaignName: string;
+  pageUrl: string;
+  sectionType: string;
+  winnerText: string;
+  loserText: string;
+  winnerConversionRate: number;
+  loserConversionRate: number;
+  liftPercent: number;
+  winnerStrategy: string | null;
+  loserStrategy: string | null;
+  sampleSize: number;
+  confidence: number;
+  lesson: string | null;
+  createdAt: string;
+}
+
+const SECTION_LABELS: Record<string, string> = {
+  headline: "Headline",
+  subheadline: "Subheadline",
+  cta: "CTA",
+  body_copy: "Body Copy",
+  hero_journey: "Hero Journey",
+  social_proof: "Social Proof",
+  testimonials: "Testimonials",
+  pricing: "Pricing",
+  guarantee: "Guarantee",
+  faq: "FAQ",
+};
+
+const STRATEGY_LABELS: Record<string, string> = {
+  transformation: "Transformation",
+  how_to: "How-To",
+  social_proof: "Social Proof",
+  urgency: "Urgency",
+  loss_aversion: "Loss Aversion",
+  contrarian: "Contrarian",
+  feature_benefit: "Feature/Benefit",
+  curiosity: "Curiosity",
+  problem_agitation: "Problem Agitation",
+  authority: "Authority",
+};
+
+// Generate shareable winner image
+async function generateWinImage(win: Win): Promise<string> {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1080;
+  canvas.height = 1080;
+  const ctx = canvas.getContext('2d')!;
+
+  // Background
+  const grad = ctx.createLinearGradient(0, 0, 1080, 1080);
+  grad.addColorStop(0, '#0d1117');
+  grad.addColorStop(0.5, '#0f1a2e');
+  grad.addColorStop(1, '#0a1628');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 1080, 1080);
+
+  // Glow
+  const glowGrad = ctx.createRadialGradient(540, 300, 0, 540, 300, 400);
+  glowGrad.addColorStop(0, 'rgba(16, 185, 129, 0.15)');
+  glowGrad.addColorStop(1, 'rgba(16, 185, 129, 0)');
+  ctx.fillStyle = glowGrad;
+  ctx.fillRect(0, 0, 1080, 1080);
+
+  // Trophy
+  ctx.font = '72px serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('\uD83C\uDFC6', 540, 160);
+
+  // Lift
+  ctx.font = 'bold 120px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#10b981';
+  ctx.fillText(`+${win.liftPercent.toFixed(1)}%`, 540, 310);
+
+  ctx.font = '600 28px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillText('CONVERSION LIFT', 540, 360);
+
+  // Divider
+  ctx.strokeStyle = 'rgba(16, 185, 129, 0.3)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(200, 400); ctx.lineTo(880, 400); ctx.stroke();
+
+  // Stats labels
+  ctx.font = '600 22px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillText('VISITORS', 320, 460);
+  ctx.fillText('WINNER CVR', 540, 460);
+  ctx.fillText('CONFIDENCE', 760, 460);
+
+  // Stats values
+  ctx.font = 'bold 36px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`${win.sampleSize.toLocaleString()}`, 320, 510);
+  ctx.fillStyle = '#10b981';
+  ctx.fillText(`${(win.winnerConversionRate * 100).toFixed(1)}%`, 540, 510);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(`${win.confidence.toFixed(0)}%`, 760, 510);
+
+  // Winning copy label
+  ctx.font = '600 20px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillText('WINNING VARIANT', 540, 590);
+
+  // Word-wrap winning text
+  const cleanText = win.winnerText.replace(/<[^>]*>/g, '');
+  const winText = '"' + (cleanText.slice(0, 100) + (cleanText.length > 100 ? '...' : '')) + '"';
+  ctx.font = 'italic 24px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  const words = winText.split(' ');
+  let line = '';
+  let y = 640;
+  for (const word of words) {
+    const test = line + word + ' ';
+    if (ctx.measureText(test).width > 780 && line) {
+      ctx.fillText(line.trim(), 540, y);
+      line = word + ' ';
+      y += 34;
+      if (y > 730) break;
+    } else {
+      line = test;
+    }
+  }
+  if (line && y <= 730) ctx.fillText(line.trim(), 540, y);
+
+  // Campaign name
+  ctx.font = '500 20px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.4)';
+  const campName = win.campaignName.length > 50 ? win.campaignName.slice(0, 50) + '...' : win.campaignName;
+  ctx.fillText(campName, 540, 820);
+
+  // Branding
+  ctx.font = 'bold 28px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = '#10b981';
+  ctx.fillText('SiteAmoeba', 540, 920);
+  ctx.font = '500 18px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillText('AI-Powered A/B Testing', 540, 955);
+  ctx.font = '500 16px system-ui, -apple-system, sans-serif';
+  ctx.fillStyle = 'rgba(16, 185, 129, 0.7)';
+  ctx.fillText('siteamoeba.com', 540, 1000);
+
+  return canvas.toDataURL('image/png');
+}
+
+// ---- Win Card ----
+function WinCard({ win }: { win: Win }) {
+  const { toast } = useToast();
+  const [downloading, setDownloading] = useState(false);
+  const cleanWinner = win.winnerText.replace(/<[^>]*>/g, '');
+  const cleanLoser = win.loserText.replace(/<[^>]*>/g, '');
+  const date = new Date(win.createdAt);
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    try {
+      const dataUrl = await generateWinImage(win);
+      const link = document.createElement('a');
+      link.download = `siteamoeba-win-${win.liftPercent.toFixed(0)}pct-lift.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch {
+      toast({ title: "Error generating image", variant: "destructive" });
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <Card className="overflow-hidden" data-testid={`card-win-${win.id}`}>
+      {/* Green accent top bar */}
+      <div className="h-1" style={{ background: 'linear-gradient(90deg, hsl(160 84% 36%), hsl(160 84% 50%))' }} />
+      <CardContent className="pt-4 pb-4 space-y-4">
+        {/* Header row */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="p-1.5 rounded-lg" style={{ background: 'hsl(160 84% 36% / 0.12)' }}>
+              <Trophy className="w-4 h-4" style={{ color: 'hsl(45 90% 55%)' }} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold truncate" data-testid={`text-win-campaign-${win.id}`}>
+                {win.campaignName}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {SECTION_LABELS[win.sectionType] || win.sectionType} &middot; {date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+              </p>
+            </div>
+          </div>
+          <div className="text-right shrink-0">
+            <p className="text-xl font-bold tabular-nums" style={{ color: 'hsl(160 84% 36%)' }}>
+              +{win.liftPercent.toFixed(1)}%
+            </p>
+            <p className="text-[10px] text-muted-foreground">lift</p>
+          </div>
+        </div>
+
+        {/* Stats row */}
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="rounded-lg border p-2">
+            <p className="text-sm font-bold tabular-nums">{win.sampleSize.toLocaleString()}</p>
+            <p className="text-[10px] text-muted-foreground">Visitors</p>
+          </div>
+          <div className="rounded-lg border p-2" style={{ borderColor: 'hsl(160 84% 36% / 0.3)', background: 'hsl(160 84% 36% / 0.05)' }}>
+            <p className="text-sm font-bold tabular-nums" style={{ color: 'hsl(160 84% 36%)' }}>
+              {(win.winnerConversionRate * 100).toFixed(1)}%
+            </p>
+            <p className="text-[10px] text-muted-foreground">Winner CVR</p>
+          </div>
+          <div className="rounded-lg border p-2">
+            <p className="text-sm font-bold tabular-nums">{win.confidence.toFixed(0)}%</p>
+            <p className="text-[10px] text-muted-foreground">Confidence</p>
+          </div>
+        </div>
+
+        {/* Winner vs Loser */}
+        <div className="space-y-2">
+          <div className="rounded-lg border bg-muted/30 p-3">
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <Trophy className="w-3 h-3" style={{ color: 'hsl(160 84% 36%)' }} />
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Winner</span>
+              {win.winnerStrategy && (
+                <Badge variant="secondary" className="text-[9px] px-1.5 py-0 h-4 ml-auto">
+                  {STRATEGY_LABELS[win.winnerStrategy] || win.winnerStrategy}
+                </Badge>
+              )}
+            </div>
+            <p className="text-xs leading-relaxed italic text-foreground">
+              &ldquo;{cleanWinner.slice(0, 150)}{cleanWinner.length > 150 ? '...' : ''}&rdquo;
+            </p>
+          </div>
+          <div className="rounded-lg border px-3 py-2 opacity-60">
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Control</span>
+              {win.loserStrategy && (
+                <Badge variant="secondary" className="text-[9px] px-1.5 py-0 h-4 ml-auto">
+                  {STRATEGY_LABELS[win.loserStrategy] || win.loserStrategy}
+                </Badge>
+              )}
+            </div>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              &ldquo;{cleanLoser.slice(0, 120)}{cleanLoser.length > 120 ? '...' : ''}&rdquo;
+            </p>
+          </div>
+        </div>
+
+        {/* Lesson (if available) */}
+        {win.lesson && (
+          <details className="group">
+            <summary className="flex items-center gap-1.5 cursor-pointer text-xs text-muted-foreground hover:text-foreground transition-colors">
+              <Sparkles className="w-3 h-3" />
+              <span>AI Insight</span>
+            </summary>
+            <p className="text-xs text-muted-foreground leading-relaxed mt-2 pl-5">
+              {win.lesson}
+            </p>
+          </details>
+        )}
+
+        {/* Actions */}
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="flex-1 gap-1.5 text-xs"
+            onClick={handleDownload}
+            disabled={downloading}
+            data-testid={`button-download-win-${win.id}`}
+          >
+            <Download className="w-3.5 h-3.5" />
+            {downloading ? 'Generating...' : 'Download Image'}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---- Wins Library ----
+function WinsLibrary() {
+  const { data: wins, isLoading } = useQuery<Win[]>({
+    queryKey: ["/api/wins"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/wins");
+      if (!res.ok) throw new Error("Failed to load wins");
+      return res.json();
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        {[0, 1, 2].map(i => <Skeleton key={i} className="h-48 w-full rounded-xl" />)}
+      </div>
+    );
+  }
+
+  if (!wins || wins.length === 0) {
+    return (
+      <div className="text-center py-16 rounded-xl border border-dashed" data-testid="empty-wins">
+        <Trophy className="w-10 h-10 mx-auto mb-3 opacity-20" style={{ color: 'hsl(45 90% 55%)' }} />
+        <p className="text-sm font-medium text-muted-foreground">No wins yet</p>
+        <p className="text-xs text-muted-foreground mt-1 max-w-xs mx-auto">
+          When you declare a winning variant on any campaign, it'll appear here with a shareable results image.
+        </p>
+      </div>
+    );
+  }
+
+  // Aggregate stats
+  const totalLifts = wins.length;
+  const avgLift = wins.reduce((sum, w) => sum + w.liftPercent, 0) / wins.length;
+  const totalVisitorsTested = wins.reduce((sum, w) => sum + w.sampleSize, 0);
+
+  return (
+    <div className="space-y-6">
+      {/* Aggregate stats */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <StatCard
+          icon={Trophy}
+          label="Tests Won"
+          value={totalLifts}
+          iconColor="hsl(45 90% 55%)"
+          subtext="Declared winners with positive lift"
+        />
+        <StatCard
+          icon={TrendingUp}
+          label="Avg. Lift"
+          value={`+${avgLift.toFixed(1)}%`}
+          iconColor="hsl(160 84% 36%)"
+          subtext="Average conversion lift across wins"
+        />
+        <StatCard
+          icon={Users}
+          label="Visitors Tested"
+          value={totalVisitorsTested.toLocaleString()}
+          iconColor="hsl(220 80% 55%)"
+          subtext="Total sample size across all tests"
+        />
+      </div>
+
+      {/* Win cards */}
+      <div className="space-y-4">
+        {wins.map(win => <WinCard key={win.id} win={win} />)}
+      </div>
+    </div>
+  );
+}
+
 export default function ReferralsPage() {
   const { data, isLoading } = useQuery<ReferralStats>({
     queryKey: ["/api/referral/stats"],
@@ -149,7 +502,7 @@ export default function ReferralsPage() {
 
   return (
     <div className="flex flex-col h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto w-full px-6 py-8 space-y-8">
+      <div className="max-w-3xl mx-auto w-full px-6 py-8 space-y-6">
         {/* Header */}
         <div className="flex items-center gap-3">
           <div
@@ -162,12 +515,30 @@ export default function ReferralsPage() {
             <Gift className="w-5 h-5" style={{ color: "hsl(160 84% 36%)" }} />
           </div>
           <div>
-            <h1 className="text-lg font-semibold">Referral Program</h1>
+            <h1 className="text-lg font-semibold">Referrals & Wins</h1>
             <p className="text-sm text-muted-foreground">
-              Earn 20% of every subscription payment for 1 year, per referral.
+              Share your wins and earn from referrals.
             </p>
           </div>
         </div>
+
+        <Tabs defaultValue="wins" className="w-full">
+          <TabsList className="w-full grid grid-cols-2">
+            <TabsTrigger value="wins" className="gap-1.5" data-testid="tab-wins">
+              <Trophy className="w-3.5 h-3.5" />
+              Wins Library
+            </TabsTrigger>
+            <TabsTrigger value="referrals" className="gap-1.5" data-testid="tab-referrals">
+              <Gift className="w-3.5 h-3.5" />
+              Referral Program
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="wins" className="mt-6">
+            <WinsLibrary />
+          </TabsContent>
+
+          <TabsContent value="referrals" className="mt-6 space-y-8">
 
         {/* Referral link gradient card */}
         <div
@@ -431,6 +802,8 @@ export default function ReferralsPage() {
           tracked now and will be paid out via Stripe Connect once it becomes
           available. Enterprise plan referrals are excluded.
         </div>
+          </TabsContent>
+        </Tabs>
       </div>
     </div>
   );

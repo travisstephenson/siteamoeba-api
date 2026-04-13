@@ -5201,6 +5201,49 @@ export async function registerRoutes(server: Server, app: Express) {
     });
   });
 
+  // GET /api/wins — all declared winners for this user (for Wins Library)
+  app.get("/api/wins", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userCampaigns = await storage.getCampaignsByUser(req.userId!);
+      const campaignIds = userCampaigns.map(c => c.id);
+      if (campaignIds.length === 0) return res.json([]);
+
+      // Fetch test_lessons for user's campaigns
+      const allLessons = await pool.query(
+        `SELECT tl.*, c.name as campaign_name, c.url as page_url
+         FROM test_lessons tl
+         JOIN campaigns c ON c.id = tl.campaign_id
+         WHERE tl.campaign_id = ANY($1) AND tl.lift_percent > 0
+         ORDER BY tl.created_at DESC`,
+        [campaignIds]
+      );
+
+      const wins = allLessons.rows.map((row: any) => ({
+        id: row.id,
+        campaignId: row.campaign_id,
+        campaignName: row.campaign_name,
+        pageUrl: row.page_url,
+        sectionType: row.section_type,
+        winnerText: row.winner_text,
+        loserText: row.loser_text,
+        winnerConversionRate: row.winner_conversion_rate,
+        loserConversionRate: row.loser_conversion_rate,
+        liftPercent: row.lift_percent,
+        winnerStrategy: row.winner_strategy,
+        loserStrategy: row.loser_strategy,
+        sampleSize: row.sample_size,
+        confidence: row.confidence,
+        lesson: row.lesson,
+        createdAt: row.created_at,
+      }));
+
+      res.json(wins);
+    } catch (err: any) {
+      console.error("[wins]", err.message);
+      res.status(500).json({ error: "Failed to load wins" });
+    }
+  });
+
   // GET /api/campaigns/:id/visitor-feed — live visitor feed for campaign dashboard
   app.get("/api/campaigns/:id/visitor-feed", requireAuth, async (req: Request, res: Response) => {
     const campaignId = paramId(req.params.id);
