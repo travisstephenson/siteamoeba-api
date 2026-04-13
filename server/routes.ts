@@ -1181,10 +1181,20 @@ export async function registerRoutes(server: Server, app: Express) {
     const decryptedKey = decryptApiKey((user as any).stripeAccessToken);
     const stripeClient = new Stripe(decryptedKey);
 
-    // Fetch up to 100 recent charges
-    const charges = await stripeClient.charges.list({ limit: 100 });
+    // Paginate through ALL recent charges (not just 100)
     const userCampaigns = await storage.getCampaignsByUser(userId);
     let matched = 0;
+    let hasMore = true;
+    let startingAfter: string | undefined = undefined;
+    let totalProcessed = 0;
+
+    while (hasMore && totalProcessed < 500) {
+    const chargeParams: any = { limit: 100 };
+    if (startingAfter) chargeParams.starting_after = startingAfter;
+    const charges = await stripeClient.charges.list(chargeParams);
+    hasMore = charges.has_more;
+    if (charges.data.length > 0) startingAfter = charges.data[charges.data.length - 1].id;
+    totalProcessed += charges.data.length;
 
     for (const charge of charges.data) {
       if (charge.status !== "succeeded") continue;
@@ -1270,7 +1280,33 @@ export async function registerRoutes(server: Server, app: Express) {
         }
       }
 
-      // No match = skip. Pixel didn't fire for this purchase.
+      // 4. If user has only ONE active campaign, attribute there (unambiguous)
+      // If multiple campaigns, attribute to the most recent one that was created before this charge
+      // This catches buyers whose sa_vid cookie was lost during checkout
+      if (!matchedCampaignId) {
+        const activeCampaigns = userCampaigns.filter((c: any) =>
+          c.status === "active" && new Date(chargeDate) >= new Date(c.createdAt)
+        );
+        if (activeCampaigns.length === 1) {
+          matchedCampaignId = activeCampaigns[0].id;
+        } else if (activeCampaigns.length > 1) {
+          // Multiple campaigns — attribute to the most recently created one
+          // (the newest campaign is most likely what they're buying from)
+          const sorted = [...activeCampaigns].sort((a: any, b: any) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          matchedCampaignId = sorted[0]?.id ?? null;
+        }
+        // Set customer chain so future purchases from this buyer route correctly
+        if (matchedCampaignId && stripeCustomerId) {
+          await pool.query(
+            `INSERT INTO customer_campaigns (user_id, stripe_customer_id, customer_email, campaign_id)
+             VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, stripe_customer_id) DO NOTHING`,
+            [userId, stripeCustomerId, customerEmail, matchedCampaignId]
+          );
+        }
+      }
+
       if (!matchedCampaignId) continue;
 
       const chargeAmount = charge.amount / 100;
@@ -1307,7 +1343,8 @@ export async function registerRoutes(server: Server, app: Express) {
       }
 
       matched++;
-    }
+    } // end for each charge
+    } // end while hasMore
 
     return matched;
   }
