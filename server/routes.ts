@@ -1291,20 +1291,31 @@ export async function registerRoutes(server: Server, app: Express) {
           const stripeClient = new Stripe(decryptedKey);
 
           // Fetch events since last cursor
-          const params: any = { limit: 100, types: ["charge.succeeded", "charge.refunded", "checkout.session.completed"] };
-          // Note: Stripe events.list doesn't support starting_after for event filtering by time,
-          // but we dedup by external_id so re-processing is safe
-          const events = await stripeClient.events.list(params);
-
+          // Poll charges directly (restricted keys may not have events permission)
+          let hasMore = true;
+          let startingAfter: string | undefined = undefined;
           let processed = 0;
-          for (const evt of events.data) {
-            const ok = await processStripeEvent(u.id, stripeClient, evt);
-            if (ok) processed++;
-          }
+          let pageCount = 0;
 
-          // Store cursor (latest event ID)
-          if (events.data.length > 0) {
-            await pgPool.query("UPDATE users SET stripe_last_event_id = $1 WHERE id = $2", [events.data[0].id, u.id]);
+          while (hasMore && pageCount < 5) {
+            const params: any = { limit: 100 };
+            if (startingAfter) params.starting_after = startingAfter;
+            const charges = await stripeClient.charges.list(params);
+            hasMore = charges.has_more;
+            if (charges.data.length > 0) startingAfter = charges.data[charges.data.length - 1].id;
+            pageCount++;
+
+            let allExisting = true; // Track if all charges on this page already exist
+            for (const charge of charges.data) {
+              if (charge.status !== "succeeded" && charge.status !== "refunded") continue;
+              // Wrap charge as a fake event for processStripeEvent
+              const fakeEvent = { type: charge.refunded ? "charge.refunded" : "charge.succeeded", data: { object: charge }, created: charge.created };
+              const ok = await processStripeEvent(u.id, stripeClient, fakeEvent);
+              if (ok) { processed++; allExisting = false; }
+            }
+
+            // If every charge on this page was already processed, stop paginating
+            if (allExisting && charges.data.length > 0) break;
           }
 
           if (processed > 0) console.log(`[stripe-poll] User ${u.id}: ${processed} new events processed`);
@@ -1328,11 +1339,25 @@ export async function registerRoutes(server: Server, app: Express) {
       if (!u.rows[0]?.stripe_access_token) return 0;
       const decryptedKey = decryptApiKey(u.rows[0].stripe_access_token);
       const stripeClient = new Stripe(decryptedKey);
-      const events = await stripeClient.events.list({ limit: 100, types: ["charge.succeeded", "charge.refunded", "checkout.session.completed"] });
+      // Paginate through charges
+      let hasMore2 = true;
+      let sa2: string | undefined = undefined;
       let matched = 0;
-      for (const evt of events.data) {
-        const ok = await processStripeEvent(userId, stripeClient, evt);
-        if (ok) matched++;
+      let pages2 = 0;
+      while (hasMore2 && pages2 < 5) {
+        const p2: any = { limit: 100 };
+        if (sa2) p2.starting_after = sa2;
+        const charges = await stripeClient.charges.list(p2);
+        hasMore2 = charges.has_more;
+        if (charges.data.length > 0) sa2 = charges.data[charges.data.length - 1].id;
+        pages2++;
+        let allExist = true;
+        for (const ch of charges.data) {
+          if (ch.status !== "succeeded" && ch.status !== "refunded") continue;
+          const ok = await processStripeEvent(userId, stripeClient, { type: ch.refunded ? "charge.refunded" : "charge.succeeded", data: { object: ch }, created: ch.created });
+          if (ok) { matched++; allExist = false; }
+        }
+        if (allExist && charges.data.length > 0) break;
       }
       return matched;
     } catch (err: any) {
