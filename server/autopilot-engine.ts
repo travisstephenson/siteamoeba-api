@@ -6,8 +6,8 @@
  * to the next section in the playbook.
  */
 
-import { storage } from "./storage";
-import { callLLM, type LLMConfig } from "./llm";
+import { storage, pool } from "./storage";
+import { callLLM, resolveLLMConfig, type LLMConfig } from "./llm";
 import {
   buildHeadlineGenerationPrompt,
   buildSubheadlineGenerationPrompt,
@@ -16,6 +16,9 @@ import {
   type GenerationContext,
 } from "./prompts";
 import { getPlaybook, type PlaybookStep } from "./autopilot-playbooks";
+import { getNetworkIntelligence, refreshNetworkIntelligence } from "./network-intelligence";
+import { getCROKnowledge } from "./brain-cro-knowledge";
+import { encryptApiKey, decryptApiKey } from "./encryption";
 import type { Campaign, User, Variant } from "@shared/schema";
 
 // ============================================================
@@ -260,6 +263,9 @@ export async function evaluateAutopilotTests(
       user
     );
 
+    // Refresh network intelligence with new test result
+    refreshNetworkIntelligence().catch(() => {});
+
     // Advance the autopilot step
     const nextStep = currentStepIndex + 1;
     const isCompleted = nextStep >= playbook.length;
@@ -369,11 +375,19 @@ export async function generateAutopilotVariants(
   const user = await storage.getUserById(userId);
   if (!user) throw new Error("User not found");
 
-  if (!user.llmProvider || !user.llmApiKey) {
-    // No LLM configured — cannot generate variants
+  // Resolve LLM config — uses platform key for paid users, user's BYOK key if set
+  const llmConfigResolved = resolveLLMConfig({
+    userProvider: user.llmProvider || undefined,
+    userModel: user.llmModel || undefined,
+    userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : undefined,
+    isPaid: user.plan !== "free",
+  });
+  if (!llmConfigResolved.config) {
+    console.warn(`[autopilot] No LLM config available for user ${userId}`);
     await storage.updateCampaign(campaignId, { autopilotStatus: "testing" } as any);
     return;
   }
+  const llmConfig = llmConfigResolved.config;
 
   const playbook = getPlaybook(campaign.pageType || "landing_page");
   const currentStepIndex = campaign.autopilotStep ?? 0;
@@ -430,11 +444,41 @@ export async function generateAutopilotVariants(
     context.sectionPurpose = matchingSection.purpose || undefined;
   }
 
-  const llmConfig: LLMConfig = {
-    provider: user.llmProvider as any,
-    apiKey: user.llmApiKey,
-    model: user.llmModel || undefined,
-  };
+  // === Inject intelligence layers ===
+  // 1. Network intelligence (data from ALL campaigns/tests)
+  try {
+    const networkIntel = await getNetworkIntelligence();
+    if (networkIntel) context.networkIntelligence = networkIntel;
+  } catch { /* non-fatal */ }
+
+  // 2. Campaign test history (don't repeat strategies that already lost)
+  try {
+    const historyResult = await pool.query(
+      `SELECT section_type, winner_strategy, loser_strategy, lift_percent
+       FROM test_lessons WHERE campaign_id = $1 AND section_type = $2
+       ORDER BY created_at DESC LIMIT 5`,
+      [campaign.id, type]
+    );
+    if (historyResult.rows.length > 0) {
+      context.campaignTestHistory = historyResult.rows.map((r: any) =>
+        `${r.winner_strategy || 'unknown'} beat ${r.loser_strategy || 'unknown'} by +${(r.lift_percent || 0).toFixed(1)}%`
+      ).join('; ');
+    }
+  } catch { /* non-fatal */ }
+
+  // 3. Brain knowledge from past winning patterns
+  try {
+    const knowledge = await storage.getBrainKnowledge({
+      pageType: campaign.pageType || undefined,
+      sectionType: type,
+      limit: 5,
+    });
+    if (knowledge.length > 0) {
+      context.brainKnowledge = knowledge.map((k: any) =>
+        `- ${k.section_type} test: "${(k.winning_text || '').slice(0, 80)}" beat "${(k.original_text || '').slice(0, 80)}" with +${(k.lift_percent || 0).toFixed(0)}% lift`
+      ).join('\n');
+    }
+  } catch { /* non-fatal */ }
 
   let messages;
   if (type === "headline") {

@@ -566,6 +566,8 @@ function HeroPreview({
 
 // ---- Strategy display labels ----
 const STRATEGY_LABELS: Record<string, string> = {
+  insight_suggested: "From Insight",
+  pattern_interrupt: "Pattern Interrupt",
   curiosity_gap: "Curiosity Gap",
   problem_agitation: "Problem Agitation",
   social_proof: "Social Proof",

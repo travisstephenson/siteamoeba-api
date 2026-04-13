@@ -1402,6 +1402,30 @@ export async function registerRoutes(server: Server, app: Express) {
   setInterval(pollStripeEvents, 60 * 1000);
   setTimeout(pollStripeEvents, 5000);
 
+  // ============== AUTOPILOT EVALUATION LOOP ==============
+  // Check all active autopilot campaigns every 5 minutes for tests that should be declared
+  async function pollAutopilotCampaigns() {
+    try {
+      const result = await pool.query(
+        `SELECT id FROM campaigns WHERE autopilot_enabled = true AND autopilot_status = 'testing'`
+      );
+      for (const row of result.rows) {
+        try {
+          const action = await evaluateAutopilotTests(row.id);
+          if (action && action.action !== "no_action") {
+            console.log(`[autopilot] Campaign ${row.id}: ${action.action} — ${action.message}`);
+          }
+        } catch (err: any) {
+          console.error(`[autopilot] Evaluation failed for campaign ${row.id}:`, err.message);
+        }
+      }
+    } catch (err: any) {
+      console.error("[autopilot] Poll failed:", err.message);
+    }
+  }
+  setInterval(pollAutopilotCampaigns, 5 * 60 * 1000); // Every 5 minutes
+  setTimeout(pollAutopilotCampaigns, 30000); // First run after 30s startup delay
+
   // Keep the old function signature for the manual sync button (just calls the poller)
   async function matchStripeTransactionsToVisitors(userId: number): Promise<number> {
     try {
@@ -5407,7 +5431,7 @@ ${observationText}`;
         text: variantText,
         isControl: false,
         isActive: true,
-        strategy: strategy || "insight_suggested",
+        persuasionTags: JSON.stringify([strategy || "insight_suggested"]),
       });
 
       // Deduct 1 credit for the LLM call
