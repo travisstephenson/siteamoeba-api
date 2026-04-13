@@ -183,6 +183,8 @@ export const visitors = pgTable("visitors", {
   // JSON map of section test assignments: {"sectionId": variantId, ...}
   // Tracks which variant was shown for each active test section beyond headline/subheadline
   sectionVariantAssignments: text("section_variant_assignments"),
+  fingerprint: text("fingerprint"),
+  customerEmail: text("customer_email"),
   firstSeen: text("first_seen").notNull().$defaultFn(() => new Date().toISOString()),
 });
 

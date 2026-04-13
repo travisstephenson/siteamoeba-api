@@ -1270,7 +1270,26 @@ export async function registerRoutes(server: Server, app: Express) {
 
     if (!matchedCampaignId) { console.log(`[stripe-poll] SKIPPED: no campaign match for ${customerEmail || 'no-email'} $${amount}`); return false; }
 
-    // Backfill email on visitor + set customer chain
+    // 5. If we have a campaign but no visitor, find the most recent visitor on this campaign
+    // who arrived within 4 hours before the charge. They visited, saw a variant, then bought.
+    // This connects the Stripe buyer to their variant assignment.
+    if (!matchedVisitorId && matchedCampaignId) {
+      const recentVisitor = await pool.query(
+        `SELECT id FROM visitors
+         WHERE campaign_id = $1
+           AND first_seen::timestamptz BETWEEN ($2::timestamptz - INTERVAL '4 hours') AND ($2::timestamptz + INTERVAL '10 minutes')
+           AND converted = false
+           AND headline_variant_id IS NOT NULL
+         ORDER BY first_seen::timestamptz DESC LIMIT 1`,
+        [matchedCampaignId, chargeDate]
+      );
+      if (recentVisitor.rows.length > 0) {
+        matchedVisitorId = recentVisitor.rows[0].id;
+        console.log(`[stripe-poll] Matched charge to recent visitor ${matchedVisitorId} on C${matchedCampaignId}`);
+      }
+    }
+
+    // Backfill email on visitor + set customer chain + mark converted
     if (matchedVisitorId && customerEmail) {
       await pool.query("UPDATE visitors SET customer_email = $1 WHERE id = $2 AND customer_email IS NULL", [customerEmail, matchedVisitorId]);
     }
