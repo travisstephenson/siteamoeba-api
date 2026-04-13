@@ -1463,8 +1463,26 @@ export async function registerRoutes(server: Server, app: Express) {
       stripeAccessToken: encryptApiKey(stripeKey),
       stripeConnectedAt: new Date().toISOString(),
     } as any);
-    // Backfill transactions (fire-and-forget)
-    matchStripeTransactionsToVisitors(req.userId!).catch((e) => console.error("Stripe backfill error:", e));
+    // Auto-register webhook + backfill transactions (fire-and-forget)
+    (async () => {
+      try {
+        const testClient2 = new Stripe(stripeKey);
+        const PUBLIC_API = process.env.PUBLIC_API_URL || "https://app.siteamoeba.com";
+        const whUrl = `${PUBLIC_API}/api/webhooks/stripe/account/${user.id}`;
+        const existingWh = await testClient2.webhookEndpoints.list({ limit: 20 });
+        if (!existingWh.data.some((w: any) => w.url === whUrl)) {
+          const wh = await testClient2.webhookEndpoints.create({
+            url: whUrl,
+            enabled_events: ['charge.succeeded', 'charge.refunded', 'checkout.session.completed', 'payment_intent.succeeded'],
+          });
+          if (wh.secret) {
+            await pgPool.query('UPDATE users SET stripe_webhook_secret = $1 WHERE id = $2', [wh.secret, user.id]);
+          }
+          console.log(`[stripe-connect] Auto-registered webhook for user ${user.id}: ${whUrl}`);
+        }
+      } catch (e: any) { console.error('[stripe-connect] Auto webhook registration failed:', e.message); }
+      matchStripeTransactionsToVisitors(req.userId!).catch((e) => console.error("Stripe backfill error:", e));
+    })();
     res.json({ connected: true });
   });
 
@@ -1499,6 +1517,40 @@ export async function registerRoutes(server: Server, app: Express) {
         stripeConnectedAt: null,
       } as any);
       res.json({ connected: false, connectAvailable: !!STRIPE_CONNECT_CLIENT_ID });
+    }
+  });
+
+  // POST /api/settings/register-stripe-webhook — auto-register webhook on Stripe account
+  app.post("/api/settings/register-stripe-webhook", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user || !(user as any).stripeAccessToken) return res.status(400).json({ error: "Stripe not connected" });
+    try {
+      const decryptedKey = decryptApiKey((user as any).stripeAccessToken);
+      const stripeClient = new Stripe(decryptedKey);
+      const PUBLIC_API = process.env.PUBLIC_API_URL || "https://app.siteamoeba.com";
+      const webhookUrl = `${PUBLIC_API}/api/webhooks/stripe/account/${user.id}`;
+
+      // Check if already registered
+      const existing = await stripeClient.webhookEndpoints.list({ limit: 20 });
+      const alreadyExists = existing.data.find((wh: any) => wh.url === webhookUrl);
+      if (alreadyExists) {
+        return res.json({ ok: true, already: true, webhookId: alreadyExists.id });
+      }
+
+      // Register
+      const wh = await stripeClient.webhookEndpoints.create({
+        url: webhookUrl,
+        enabled_events: ['charge.succeeded', 'charge.refunded', 'checkout.session.completed', 'payment_intent.succeeded'],
+      });
+
+      // Store webhook secret for signature verification
+      if (wh.secret) {
+        await pgPool.query('UPDATE users SET stripe_webhook_secret = $1 WHERE id = $2', [wh.secret, user.id]);
+      }
+
+      return res.json({ ok: true, webhookId: wh.id, url: webhookUrl });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
     }
   });
 
