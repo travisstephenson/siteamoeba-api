@@ -3862,13 +3862,13 @@ export async function registerRoutes(server: Server, app: Express) {
     // Get scroll depth distribution from all visitor sessions
     const scrollResult = await pool.query(
       `SELECT
-        max_scroll_depth,
-        converted,
+        vs.max_scroll_depth,
+        v.converted,
         COUNT(*) as cnt
        FROM visitor_sessions vs
        JOIN visitors v ON v.id = vs.visitor_id AND v.campaign_id = vs.campaign_id
        WHERE vs.campaign_id = $1 AND vs.max_scroll_depth > 0
-       GROUP BY max_scroll_depth, converted`,
+       GROUP BY vs.max_scroll_depth, v.converted`,
       [campaignId]
     );
 
