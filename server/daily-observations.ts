@@ -1,4 +1,4 @@
-import { storage } from "./storage";
+import { storage, pool } from "./storage";
 import { callLLM, type LLMConfig } from "./llm";
 import { getBrainPageAuditKnowledge } from "./brain-selector";
 import type { LLMMessage } from "./llm";
@@ -109,11 +109,12 @@ function buildObservationPrompt(params: {
 Generate an insight about what the scroll data reveals — e.g. where visitors drop off, whether key content is being seen, whether the guarantee/CTA is being reached.`,
 
     conversion_pattern: `Focus on CONVERSION PATTERN data:
-- Overall conversion rate: ${conversionRate.toFixed(2)}%
+- Overall conversion rate: ${conversionRate.toFixed(2)}% (visitor-based — conversions divided by total visitors across all variants)
 - Total visitors: ${totalVisitors.toLocaleString()}
 - Total conversions: ${totalConversions.toLocaleString()}
 - Converters avg scroll: ${convertedScrollPct}% | Non-converters avg scroll: ${nonConvertedScrollPct}%
 - Time on page: ${avgTimeSec}s average
+IMPORTANT: Every conversion is attributed to exactly one variant. The overall CVR is the weighted average of variant-level CVRs. Do NOT suggest conversions are coming from outside the variant tracking system.
 Generate an insight about conversion patterns — what behaviors correlate with conversion, what the rate suggests about the offer/page, or what the data implies about optimization priority.`,
 
     section_engagement: `Focus on SECTION ENGAGEMENT data:
@@ -132,7 +133,8 @@ Generate an insight about traffic quality and engagement — whether visitors ar
 
     test_performance: `Focus on TEST PERFORMANCE data:
 ${variantSummary}
-- Overall conversion rate: ${conversionRate.toFixed(2)}%
+- Overall conversion rate: ${conversionRate.toFixed(2)}% (this is the weighted average of ALL variants above — every conversion is attributed to exactly one variant)
+IMPORTANT: The overall CVR is the sum of all variant conversions divided by total visitors. Do NOT claim that "something else" is driving conversions outside the variants — every sale is tracked to a specific variant. If the overall CVR differs from a single variant's CVR, it's because other variants are performing differently, not because of an unexplained source.
 Generate an insight about the A/B test results — which variant angle is winning or losing, what this tells you about what the audience responds to, and what to test next.`,
   };
 
@@ -207,13 +209,18 @@ export async function generateDailyObservation(
   // 3. Get variant stats (for test performance)
   const variantStats = await storage.getVariantStats(campaignId);
 
-  // 4. Get overall campaign stats
-  const [campaignsWithStats] = (await storage.getCampaignsWithStats(userId)).filter(
-    c => c.campaign.id === campaignId
+  // 4. Get overall campaign stats — use VISITOR-BASED counts only.
+  // getCampaignsWithStats adds orphaned revenue_events (Stripe charges with no visitor),
+  // which inflates the conversion rate above what any individual variant can explain.
+  // For insight generation, we need the conversion rate to be consistent with variant stats
+  // (both derived from the visitors table) so the LLM doesn't hallucinate phantom attribution.
+  const visitorCountResult = await pool.query(
+    "SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE converted = true) as converted FROM visitors WHERE campaign_id = $1",
+    [campaignId]
   );
-  const totalVisitors = campaignsWithStats?.totalVisitors ?? 0;
-  const totalConversions = campaignsWithStats?.totalConversions ?? 0;
-  const conversionRate = campaignsWithStats?.conversionRate ?? 0;
+  const totalVisitors = parseInt(visitorCountResult.rows[0]?.total) || 0;
+  const totalConversions = parseInt(visitorCountResult.rows[0]?.converted) || 0;
+  const conversionRate = totalVisitors > 0 ? (totalConversions / totalVisitors) * 100 : 0;
 
   // 5. Get recent observations to avoid repetition
   const recentObs = await storage.getObservationsByCampaign(campaignId, 7);
