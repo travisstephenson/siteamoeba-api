@@ -564,6 +564,26 @@ class StorageImpl implements IStorage {
     await pool.query(`
       ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS section_map JSONB;
     `);
+    // Network intelligence (Brain learning system)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS network_intelligence (
+        id SERIAL PRIMARY KEY,
+        knowledge_text TEXT NOT NULL,
+        stats JSONB,
+        generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+    // Conversion counter for triggering intelligence refresh
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS system_counters (
+        key TEXT PRIMARY KEY,
+        value INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    await pool.query(`
+      INSERT INTO system_counters (key, value) VALUES ('conversions_since_refresh', 0)
+      ON CONFLICT (key) DO NOTHING;
+    `);
     // Traffic anomalies for lightbulb intelligence alerts
     await pool.query(`
       CREATE TABLE IF NOT EXISTS traffic_anomalies (

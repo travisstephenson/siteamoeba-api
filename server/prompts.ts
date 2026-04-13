@@ -21,6 +21,10 @@ export interface GenerationContext {
   // Verified facts about this page — AI must ONLY use these for social proof claims
   // If not provided, AI must avoid fabricating specific numbers/testimonials
   pageFacts?: string;
+  // Network intelligence — data-driven patterns from ALL campaigns/tests/visitors
+  networkIntelligence?: string;
+  // THIS campaign's test history — don't generate variants using strategies that already lost
+  campaignTestHistory?: string;
 }
 
 // ============================================================
@@ -189,6 +193,16 @@ Return ONLY the JSON array, no other text.`;
   // Inject dynamic brain knowledge from winning test patterns (paid users only)
   if (context.brainKnowledge) {
     systemWithBrain += "\n\nREAL TEST RESULTS FROM THE SITEAMOEBA NETWORK (learn from these actual A/B test winners):\n" + context.brainKnowledge + "\n\nUse these real results to inform your variant strategy. Patterns that won in similar tests are more likely to win again.";
+  }
+
+  // Inject network intelligence (data-driven patterns from ALL data)
+  if (context.networkIntelligence) {
+    systemWithBrain += "\n\nNETWORK INTELLIGENCE (learned from real visitor behavior and conversion data):\n" + context.networkIntelligence.slice(0, 3000) + "\n\nUse these data-driven patterns to generate variants that align with proven conversion behavior. Favor strategies that have won in real tests.";
+  }
+
+  // Inject campaign test history — avoid repeating losing strategies
+  if (context.campaignTestHistory) {
+    systemWithBrain += "\n\nTHIS CAMPAIGN'S PAST TEST RESULTS (DO NOT use strategies that already lost):\n" + context.campaignTestHistory + "\nGenerate variants using DIFFERENT strategies than those that have already been tested and lost on this specific campaign.";
   }
 
   return [
@@ -626,6 +640,8 @@ export interface BrainChatContext {
   testLessons?: string;
   // THIS campaign's own proven test results — Brain must NEVER contradict these
   campaignTestHistory?: string;
+  // Network-wide intelligence learned from ALL campaigns, conversions, and tests
+  networkIntelligence?: string;
 }
 
 export function buildBrainChatPrompt(
@@ -745,6 +761,13 @@ The following knowledge base contains copywriting and persuasion principles. Use
 ${context.brainKnowledge}
 ${testDataSection}
 ${campaignHistorySection}
+${context.networkIntelligence ? `
+## NETWORK INTELLIGENCE — LEARNED FROM REAL DATA ACROSS ALL CAMPAIGNS
+The following patterns were measured from real visitor behavior and A/B test results.
+Use these data-driven insights to inform your recommendations. When this data
+contradicts a theoretical framework, the DATA wins.
+${context.networkIntelligence.slice(0, 5000)}
+` : ""}
 ${pageContextRules}`;
 
   const messages: LLMMessage[] = [

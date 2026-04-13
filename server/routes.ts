@@ -11,6 +11,7 @@ import { runCounsel, runPostMortem } from "./counsel";
 import { encryptApiKey, decryptApiKey } from "./encryption";
 import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildSectionGenerationPrompt, buildClassificationPrompt, buildPageScanPrompt, buildBrainChatPrompt, buildTestLessonPrompt, buildCROReportPrompt, type GenerationContext } from "./prompts";
 import { getBrainPageAuditKnowledge, getRelevantTestLessons } from "./brain-selector";
+import { getNetworkIntelligence, refreshNetworkIntelligence } from "./network-intelligence";
 import { loginSchema, registerSchema, insertCampaignSchema, insertVariantSchema, insertTestSectionSchema, insertFeedbackSchema } from "@shared/schema";
 import { evaluateAutopilotTests, advanceAutopilot, generateAutopilotVariants, declareWinnerForSection } from "./autopilot-engine";
 import { getPlaybook } from "./autopilot-playbooks";
@@ -2323,7 +2324,7 @@ export async function registerRoutes(server: Server, app: Express) {
       context.sectionPurpose = matchingSection.purpose || undefined;
     }
 
-    // Inject brain knowledge for paid users
+    // Inject brain knowledge and network intelligence for paid users
     const isPaid = user.plan !== 'free';
     if (isPaid) {
       try {
@@ -2340,6 +2341,31 @@ export async function registerRoutes(server: Server, app: Express) {
         }
       } catch (err) {
         console.warn('Failed to fetch brain knowledge:', err);
+      }
+
+      // Network intelligence — data-driven patterns from ALL campaigns
+      try {
+        const networkIntel = await getNetworkIntelligence();
+        if (networkIntel) context.networkIntelligence = networkIntel;
+      } catch (err) {
+        console.warn('Failed to fetch network intelligence:', err);
+      }
+
+      // THIS campaign's test history — so variants don't repeat losing strategies
+      try {
+        const historyResult = await pool.query(
+          `SELECT section_type, winner_strategy, loser_strategy, lift_percent
+           FROM test_lessons WHERE campaign_id = $1 AND section_type = $2
+           ORDER BY created_at DESC LIMIT 5`,
+          [campaign.id, type]
+        );
+        if (historyResult.rows.length > 0) {
+          context.campaignTestHistory = historyResult.rows.map((r: any) =>
+            `${r.winner_strategy || 'unknown'} beat ${r.loser_strategy || 'unknown'} by +${(r.lift_percent || 0).toFixed(1)}%`
+          ).join('; ');
+        }
+      } catch (err) {
+        console.warn('Failed to fetch campaign test history:', err);
       }
     }
 
@@ -2586,6 +2612,11 @@ export async function registerRoutes(server: Server, app: Express) {
         pageUrl: campaign.url,
       },
     });
+
+    // Refresh network intelligence — new test result should feed the Brain immediately
+    refreshNetworkIntelligence().catch(err => 
+      console.warn("[declare-winner] Network intelligence refresh failed:", err.message)
+    );
   });
 
   // ============== AUTOPILOT ==============
@@ -2805,6 +2836,9 @@ export async function registerRoutes(server: Server, app: Express) {
       console.log("Could not fetch page for chat context:", (err as any)?.message);
     }
 
+    // Get network intelligence (learned from ALL data across ALL campaigns)
+    const networkIntel = await getNetworkIntelligence();
+
     // Get relevant test lessons for context (network-wide)
     const primarySectionType = activeTestSections[0]?.category || "headline";
     const testLessonsText = await getRelevantTestLessons(
@@ -2882,6 +2916,7 @@ export async function registerRoutes(server: Server, app: Express) {
       niche: campaign.niche || undefined,
       testLessons: testLessonsText || undefined,
       campaignTestHistory,
+      networkIntelligence: networkIntel || undefined,
     };
 
     const llmConfig = llmConfigResolved.config;
@@ -2911,6 +2946,7 @@ export async function registerRoutes(server: Server, app: Express) {
         chatContext.pageContent ? `\nPage content excerpt:\n${chatContext.pageContent.slice(0, 2000)}` : "",
         chatContext.brainKnowledge ? `\n${chatContext.brainKnowledge.slice(0, 1500)}` : "",
         chatContext.campaignTestHistory || "",
+        chatContext.networkIntelligence ? `\n${chatContext.networkIntelligence.slice(0, 4000)}` : "",
       ].filter(Boolean).join("\n");
 
       let counselResult;
@@ -5369,6 +5405,16 @@ export async function registerRoutes(server: Server, app: Express) {
       ...stats,
       referrals: enrichedReferrals,
     });
+  });
+
+  // POST /api/admin/refresh-intelligence — manually refresh network intelligence
+  app.post("/api/admin/refresh-intelligence", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      await refreshNetworkIntelligence();
+      res.json({ ok: true, message: "Network intelligence refreshed" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // GET /api/wins — all declared winners for this user (for Wins Library)

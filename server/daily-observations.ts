@@ -1,6 +1,7 @@
 import { storage, pool } from "./storage";
 import { callLLM, type LLMConfig } from "./llm";
 import { getBrainPageAuditKnowledge } from "./brain-selector";
+import { getNetworkIntelligence } from "./network-intelligence";
 import type { LLMMessage } from "./llm";
 
 // Valid observation categories — rotated to avoid repetition
@@ -44,6 +45,7 @@ function buildObservationPrompt(params: {
   niche?: string | null;
   pageType?: string | null;
   pricePoint?: string | null;
+  networkIntelligence?: string;
   sessionStats: {
     avgScrollDepth: number;
     avgTimeOnPage: number;
@@ -139,6 +141,11 @@ Generate an insight about the A/B test results — which variant angle is winnin
   };
 
   const systemPrompt = `You are a conversion rate optimization expert embedded in SiteAmoeba, an A/B testing platform. You analyze behavioral data and test results to generate actionable insights for marketers.
+${params.networkIntelligence ? `
+You have access to REAL DATA from across the SiteAmoeba network:
+${params.networkIntelligence}
+Use these real-world patterns to make your insights more specific and data-backed.
+` : ""}
 
 Your task is to generate ONE specific, data-backed, actionable observation about a user's campaign.
 
@@ -231,13 +238,20 @@ export async function generateDailyObservation(
   // 7. Get Brain knowledge context
   const brainKnowledge = getBrainPageAuditKnowledge();
 
-  // 8. Build prompt
+  // 8. Get network intelligence
+  let networkIntel = "";
+  try {
+    networkIntel = await getNetworkIntelligence();
+  } catch { /* non-fatal */ }
+
+  // 9. Build prompt
   const messages = buildObservationPrompt({
     campaignName: campaign.name,
     campaignUrl: campaign.url,
     niche: campaign.niche,
     pageType: campaign.pageType,
     pricePoint: campaign.pricePoint,
+    networkIntelligence: networkIntel ? networkIntel.slice(0, 2000) : undefined,
     sessionStats,
     variantStats,
     totalVisitors,
