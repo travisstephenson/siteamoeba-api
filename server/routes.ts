@@ -1334,6 +1334,21 @@ export async function registerRoutes(server: Server, app: Express) {
       } else if (visitor && visitor.converted && amount > 0) {
         await pool.query("UPDATE visitors SET revenue = COALESCE(revenue, 0) + $1 WHERE id = $2", [amount, matchedVisitorId]);
       }
+
+      // Backfill: update any existing $0 revenue_events for this visitor with the actual email
+      // (pixel-fired events don't have email; Stripe charges do)
+      if (customerEmail) {
+        await pool.query(
+          `UPDATE revenue_events SET customer_email = $1
+           WHERE visitor_id = $2 AND campaign_id = $3 AND (customer_email IS NULL OR customer_email = '')`,
+          [customerEmail, matchedVisitorId, matchedCampaignId]
+        ).catch(() => {});
+        // Also backfill the visitor's customer_email for future lookups
+        await pool.query(
+          `UPDATE visitors SET customer_email = $1 WHERE id = $2 AND (customer_email IS NULL OR customer_email = '')`,
+          [customerEmail, matchedVisitorId]
+        ).catch(() => {});
+      }
     }
 
     console.log(`[stripe-poll] ${eventType} $${amount} ${customerEmail || "?"} -> C${matchedCampaignId} (${matchedVisitorId ? "visitor:" + matchedVisitorId.substring(0,12) : "unmatched"})`);
