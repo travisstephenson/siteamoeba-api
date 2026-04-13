@@ -3564,7 +3564,7 @@ export async function registerRoutes(server: Server, app: Express) {
         if (typeof timeOnPage === "number" && timeOnPage > 0) sessionUpdates.timeOnPage = Math.min(timeOnPage, 1800);
         if (device) sessionUpdates.deviceType = device;
         // Passive learning: page dimensions
-        const { pageHeight, screenWidth } = body;
+        const { pageHeight, screenWidth } = req.body;
         if (typeof pageHeight === "number" && pageHeight > 0) (sessionUpdates as any).pageHeight = pageHeight;
         if (typeof screenWidth === "number" && screenWidth > 0) (sessionUpdates as any).screenWidth = screenWidth;
 
