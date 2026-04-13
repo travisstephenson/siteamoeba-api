@@ -1183,6 +1183,8 @@ export async function registerRoutes(server: Server, app: Express) {
     const obj = event.data?.object || {};
     const eventType = event.type;
 
+    console.log(`[stripe-debug] processStripeEvent called: type=${eventType} amount=${obj.amount} email=${obj.billing_details?.email || obj.receipt_email || 'none'} desc=${(obj.description || '').substring(0,40)}`);
+
     // Only process payment events
     if (eventType !== "charge.succeeded" && eventType !== "checkout.session.completed" && eventType !== "charge.refunded") return false;
 
@@ -1296,6 +1298,7 @@ export async function registerRoutes(server: Server, app: Express) {
           let startingAfter: string | undefined = undefined;
           let processed = 0;
           let pageCount = 0;
+          console.log(`[stripe-poll] Starting poll for user ${u.id}`);
 
           while (hasMore && pageCount < 5) {
             const params: any = { limit: 100 };
