@@ -1611,8 +1611,26 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(400).json({ error: "Stripe not connected" });
     }
     try {
-      const matched = await matchStripeTransactionsToVisitors(req.userId!);
-      res.json({ ok: true, matched });
+      // Inline sync with debug output
+      const decryptedKey = decryptApiKey((user as any).stripeAccessToken);
+      const stripeClient = new Stripe(decryptedKey);
+      const charges = await stripeClient.charges.list({ limit: 10 });
+      const debug: any[] = [];
+      let matched = 0;
+
+      for (const ch of charges.data) {
+        if (ch.status !== "succeeded") { debug.push({ id: ch.id, skip: "status=" + ch.status }); continue; }
+        const fakeEvent = { type: "charge.succeeded", data: { object: ch }, created: ch.created };
+        try {
+          const ok = await processStripeEvent(req.userId!, stripeClient, fakeEvent);
+          debug.push({ id: ch.id, amount: ch.amount/100, email: ch.billing_details?.email, customer: ch.customer, processed: ok, desc: (ch.description || "").substring(0, 40) });
+          if (ok) matched++;
+        } catch (err: any) {
+          debug.push({ id: ch.id, error: err.message?.substring(0, 100) });
+        }
+      }
+
+      res.json({ ok: true, matched, total: charges.data.length, debug });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
