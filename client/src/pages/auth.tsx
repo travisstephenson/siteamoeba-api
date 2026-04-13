@@ -133,8 +133,24 @@ function RegisterForm({ onSuccess }: { onSuccess: () => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // Capture referral code from URL: ?ref=xxxx or hash: #/?ref=xxxx
+  const referralCode = (() => {
+    try {
+      // Check main URL params
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("ref")) return params.get("ref");
+      // Check hash params (for hash-based routing)
+      const hashSearch = window.location.hash.split("?")[1];
+      if (hashSearch) {
+        const hashParams = new URLSearchParams(hashSearch);
+        if (hashParams.get("ref")) return hashParams.get("ref");
+      }
+      return null;
+    } catch { return null; }
+  })();
+
   const mutation = useMutation({
-    mutationFn: async (data: { name: string; email: string; password: string }) => {
+    mutationFn: async (data: { name: string; email: string; password: string; referralCode?: string }) => {
       setError(null);
       const res = await apiRequest("POST", "/api/auth/register", data);
       return res.json();
@@ -171,7 +187,7 @@ function RegisterForm({ onSuccess }: { onSuccess: () => void }) {
       setError("Password must be at least 8 characters");
       return;
     }
-    mutation.mutate({ name, email, password });
+    mutation.mutate({ name, email, password, ...(referralCode ? { referralCode } : {}) });
   };
 
   return (
