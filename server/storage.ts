@@ -564,6 +564,20 @@ class StorageImpl implements IStorage {
     await pool.query(`
       ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS section_map JSONB;
     `);
+    // Platform integrations (Teachable, Kajabi, Thinkific, Stan Store webhooks)
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS platform_integrations (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        webhook_secret TEXT NOT NULL,
+        is_active BOOLEAN NOT NULL DEFAULT true,
+        events_received INTEGER NOT NULL DEFAULT 0,
+        last_event_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(user_id, platform)
+      );
+    `);
     // Network intelligence (Brain learning system)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS network_intelligence (

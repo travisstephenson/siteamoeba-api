@@ -13,6 +13,7 @@ import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildS
 import { getBrainPageAuditKnowledge, getRelevantTestLessons } from "./brain-selector";
 import { getNetworkIntelligence, refreshNetworkIntelligence } from "./network-intelligence";
 import { getCROKnowledge } from "./brain-cro-knowledge";
+import { normalizePayload, processPlatformPurchase, generateWebhookSecret, PLATFORM_LABELS, type SupportedPlatform } from "./platform-webhooks";
 import { loginSchema, registerSchema, insertCampaignSchema, insertVariantSchema, insertTestSectionSchema, insertFeedbackSchema } from "@shared/schema";
 import { evaluateAutopilotTests, advanceAutopilot, generateAutopilotVariants, declareWinnerForSection } from "./autopilot-engine";
 import { getPlaybook } from "./autopilot-playbooks";
@@ -3647,6 +3648,140 @@ export async function registerRoutes(server: Server, app: Express) {
       });
     } catch { /* silent — pixel must never break */ }
   });
+
+  // ============== PLATFORM WEBHOOKS (Teachable, Kajabi, Thinkific, Stan Store) ==============
+
+  // POST /api/webhooks/:platform/:userId/:secret — receive purchase webhooks from course platforms
+  // This endpoint is PUBLIC (no auth) — it's called by external platforms.
+  // Security: validated by the secret token unique to each user+platform.
+  app.post("/api/webhooks/:platform/:userId/:secret", async (req: Request, res: Response) => {
+    const { platform, userId, secret } = req.params;
+    const numericUserId = parseInt(userId);
+
+    if (!numericUserId || !secret) {
+      return res.status(400).json({ error: "Invalid webhook URL" });
+    }
+
+    const validPlatforms: SupportedPlatform[] = ["teachable", "kajabi", "thinkific", "stan", "generic"];
+    if (!validPlatforms.includes(platform as SupportedPlatform)) {
+      return res.status(400).json({ error: `Unsupported platform: ${platform}` });
+    }
+
+    // Validate the webhook secret
+    const integration = await pool.query(
+      "SELECT * FROM platform_integrations WHERE user_id = $1 AND platform = $2 AND webhook_secret = $3 AND is_active = true",
+      [numericUserId, platform, secret]
+    );
+    if (integration.rows.length === 0) {
+      return res.status(401).json({ error: "Invalid webhook secret" });
+    }
+
+    // Normalize the payload
+    const purchase = normalizePayload(platform as SupportedPlatform, req.body);
+    if (!purchase) {
+      console.warn(`[webhook:${platform}] Could not normalize payload from user ${userId}`);
+      // Return 200 to prevent the platform from retrying
+      return res.json({ ok: true, matched: false, reason: "Could not parse payload" });
+    }
+
+    // Process the purchase
+    const result = await processPlatformPurchase(numericUserId, purchase);
+
+    // Update integration stats
+    await pool.query(
+      `UPDATE platform_integrations
+       SET events_received = events_received + 1, last_event_at = NOW()
+       WHERE user_id = $1 AND platform = $2`,
+      [numericUserId, platform]
+    ).catch(() => {});
+
+    res.json({ ok: true, ...result });
+  });
+
+  // GET /api/settings/integrations — list all platform integrations for the user
+  app.get("/api/settings/integrations", requireAuth, async (req: Request, res: Response) => {
+    const result = await pool.query(
+      "SELECT * FROM platform_integrations WHERE user_id = $1 ORDER BY platform",
+      [req.userId!]
+    );
+
+    const apiBase = process.env.API_BASE_URL || `https://api.siteamoeba.com`;
+
+    const integrations = result.rows.map((row: any) => ({
+      id: row.id,
+      platform: row.platform,
+      platformLabel: PLATFORM_LABELS[row.platform as SupportedPlatform] || row.platform,
+      webhookUrl: `${apiBase}/api/webhooks/${row.platform}/${req.userId}/${row.webhook_secret}`,
+      isActive: row.is_active,
+      eventsReceived: parseInt(row.events_received) || 0,
+      lastEventAt: row.last_event_at,
+      createdAt: row.created_at,
+    }));
+
+    res.json({
+      integrations,
+      availablePlatforms: Object.entries(PLATFORM_LABELS).map(([key, label]) => ({
+        key,
+        label,
+        connected: integrations.some((i: any) => i.platform === key),
+      })),
+    });
+  });
+
+  // POST /api/settings/integrations/:platform — connect a platform (generates webhook URL)
+  app.post("/api/settings/integrations/:platform", requireAuth, async (req: Request, res: Response) => {
+    const { platform } = req.params;
+    const validPlatforms: SupportedPlatform[] = ["teachable", "kajabi", "thinkific", "stan", "generic"];
+    if (!validPlatforms.includes(platform as SupportedPlatform)) {
+      return res.status(400).json({ error: `Unsupported platform: ${platform}` });
+    }
+
+    const secret = generateWebhookSecret();
+    const apiBase = process.env.API_BASE_URL || `https://api.siteamoeba.com`;
+
+    await pool.query(
+      `INSERT INTO platform_integrations (user_id, platform, webhook_secret)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id, platform) DO UPDATE SET webhook_secret = $3, is_active = true`,
+      [req.userId!, platform, secret]
+    );
+
+    const webhookUrl = `${apiBase}/api/webhooks/${platform}/${req.userId}/${secret}`;
+
+    res.json({
+      ok: true,
+      platform,
+      platformLabel: PLATFORM_LABELS[platform as SupportedPlatform],
+      webhookUrl,
+      instructions: getSetupInstructions(platform as SupportedPlatform),
+    });
+  });
+
+  // DELETE /api/settings/integrations/:platform — disconnect a platform
+  app.delete("/api/settings/integrations/:platform", requireAuth, async (req: Request, res: Response) => {
+    await pool.query(
+      "UPDATE platform_integrations SET is_active = false WHERE user_id = $1 AND platform = $2",
+      [req.userId!, req.params.platform]
+    );
+    res.json({ ok: true });
+  });
+
+  function getSetupInstructions(platform: SupportedPlatform): string {
+    switch (platform) {
+      case "teachable":
+        return "In Teachable, go to Settings > Webhooks > New Webhook. Paste the webhook URL and select 'New Transaction' as the event type.";
+      case "kajabi":
+        return "In Kajabi, go to Settings > Third Party Integrations > Webhooks > Create Webhook. Select 'Payment Succeeded' event and paste the webhook URL.";
+      case "thinkific":
+        return "In Thinkific, go to Settings > Webhooks (or use the Webhooks API). Create a webhook for 'ORDER_TRANSACTION.SUCCEEDED' and paste the URL.";
+      case "stan":
+        return "Stan Store doesn't have native webhooks. Use Zapier: trigger on 'New Sale' in Stan, action 'Custom Request' to POST to this webhook URL with the buyer email and amount.";
+      case "generic":
+        return "Send a POST request to this URL with JSON body containing at minimum: {\"email\": \"buyer@example.com\", \"amount\": 97}. Optional: product_name, currency.";
+      default:
+        return "Paste this webhook URL in your platform's webhook settings.";
+    }
+  }
 
   // ============== BEHAVIORAL EVENTS (public, CORS via widget middleware) ==============
 
