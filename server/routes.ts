@@ -3649,6 +3649,92 @@ export async function registerRoutes(server: Server, app: Express) {
     } catch { /* silent — pixel must never break */ }
   });
 
+  // ============== PUBLIC WINS FEED (no auth — for marketing site embed) ==============
+
+  app.get("/api/public/wins-feed", async (_req: Request, res: Response) => {
+    try {
+      // Set generous CORS for embedding on any domain
+      res.header("Access-Control-Allow-Origin", "*");
+      res.header("Cache-Control", "public, max-age=300"); // 5 min cache
+
+      const result = await pool.query(
+        `SELECT tl.section_type, tl.winner_strategy, tl.lift_percent,
+                tl.sample_size, tl.confidence, tl.created_at,
+                c.niche, c.page_type
+         FROM test_lessons tl
+         JOIN campaigns c ON c.id = tl.campaign_id
+         WHERE tl.lift_percent > 0
+         ORDER BY tl.created_at DESC
+         LIMIT 50`
+      );
+
+      const SECTION_LABELS: Record<string, string> = {
+        headline: "Headline", subheadline: "Subheadline", cta: "CTA",
+        body_copy: "Body Copy", social_proof: "Social Proof",
+        testimonials: "Testimonials", pricing: "Pricing",
+        guarantee: "Guarantee", faq: "FAQ", hero: "Hero",
+      };
+
+      const STRATEGY_LABELS: Record<string, string> = {
+        transformation: "Transformation", how_to: "How-To",
+        social_proof: "Social Proof", urgency: "Urgency",
+        loss_aversion: "Loss Aversion", contrarian: "Contrarian",
+        feature_benefit: "Feature/Benefit", curiosity: "Curiosity",
+        problem_agitation: "Problem Agitation", authority: "Authority",
+        pattern_interrupt: "Pattern Interrupt", scarcity: "Scarcity",
+        insight_suggested: "AI-Suggested",
+      };
+
+      const NICHE_LABELS: Record<string, string> = {
+        digital_products: "Digital Products", saas: "SaaS",
+        ecommerce: "E-commerce", education: "Education",
+        coaching: "Coaching", agency: "Agency",
+        health_wellness: "Health & Wellness", finance: "Finance",
+        real_estate: "Real Estate",
+      };
+
+      const wins = result.rows.map((r: any) => {
+        const createdAt = new Date(r.created_at);
+        const hoursAgo = Math.floor((Date.now() - createdAt.getTime()) / (1000 * 60 * 60));
+        let timeAgo = "";
+        if (hoursAgo < 1) timeAgo = "just now";
+        else if (hoursAgo < 24) timeAgo = `${hoursAgo}h ago`;
+        else if (hoursAgo < 48) timeAgo = "yesterday";
+        else if (hoursAgo < 168) timeAgo = `${Math.floor(hoursAgo / 24)}d ago`;
+        else timeAgo = `${Math.floor(hoursAgo / 168)}w ago`;
+
+        return {
+          sectionType: SECTION_LABELS[r.section_type] || r.section_type,
+          strategy: STRATEGY_LABELS[r.winner_strategy] || r.winner_strategy || "Optimized",
+          liftPercent: parseFloat(r.lift_percent).toFixed(1),
+          sampleSize: parseInt(r.sample_size),
+          confidence: Math.round(parseFloat(r.confidence)),
+          niche: NICHE_LABELS[r.niche] || r.niche || r.page_type || "Online Business",
+          timeAgo,
+        };
+      });
+
+      // Aggregate stats
+      const totalWins = wins.length;
+      const avgLift = totalWins > 0
+        ? (wins.reduce((sum: number, w: any) => sum + parseFloat(w.liftPercent), 0) / totalWins).toFixed(1)
+        : "0";
+      const totalVisitors = wins.reduce((sum: number, w: any) => sum + w.sampleSize, 0);
+
+      res.json({
+        wins,
+        stats: {
+          totalWins,
+          avgLift,
+          totalVisitors,
+        },
+      });
+    } catch (err: any) {
+      console.error("[public/wins-feed]", err.message);
+      res.status(500).json({ error: "Failed to load wins feed" });
+    }
+  });
+
   // ============== PLATFORM WEBHOOKS (Teachable, Kajabi, Thinkific, Stan Store) ==============
 
   // POST /api/webhooks/:platform/:userId/:secret — receive purchase webhooks from course platforms
