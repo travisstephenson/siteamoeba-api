@@ -1193,15 +1193,20 @@ export async function registerRoutes(server: Server, app: Express) {
     const externalId = obj.id || event.id;
     const stripeCustomerId = (typeof obj.customer === "string") ? obj.customer : null;
     let customerEmail = obj.billing_details?.email || obj.customer_details?.email || obj.receipt_email || null;
-    // If no email on the charge, fetch from the Stripe Customer object
+    // If no email on the charge, try fetching from the Stripe Customer object
     if (!customerEmail && stripeCustomerId) {
       try {
         const cust = await stripeClient.customers.retrieve(stripeCustomerId);
-        if (cust && !cust.deleted) customerEmail = (cust as any).email || null;
-      } catch { /* non-fatal */ }
+        if (cust && !(cust as any).deleted) customerEmail = (cust as any).email || null;
+      } catch (custErr: any) {
+        // Restricted keys may not have customer read permission — not fatal
+        console.log(`[stripe-poll] Cannot read customer ${stripeCustomerId}: ${custErr.message?.substring(0, 50)}`);
+      }
     }
     const chargeDesc = (obj.description || "").toLowerCase();
     const chargeDate = new Date((obj.created || event.created) * 1000).toISOString();
+    // Log what we're processing
+    console.log(`[stripe-poll] Processing: ${eventType} $${amount} email=${customerEmail || 'NONE'} cust=${stripeCustomerId || 'NONE'} desc=${chargeDesc.substring(0,40)}`);
 
     // Skip non-product charges
     if (chargeDesc.includes("subscription creation") || chargeDesc.includes("subscription update")) return false;
