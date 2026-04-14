@@ -1053,10 +1053,18 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(404).json({ error: "Campaign not found" });
     }
     const variantStats = await storage.getVariantStats(campaign.id);
-    // Calculate totals from headline variants only (primary split dimension)
-    const headlineStats = variantStats.filter(v => v.type === "headline");
-    const totalVisitors = headlineStats.reduce((sum, v) => sum + v.impressions, 0);
-    const visitorConversions = headlineStats.reduce((sum, v) => sum + v.conversions, 0);
+
+    // Total visitors and conversions = actual counts from the visitors table (NOT scoped to test start)
+    // The variant stats are scoped to test start for fair A/B comparison,
+    // but the top-level campaign KPIs should show ALL-TIME data.
+    const campaignTotals = await pool.query(
+      `SELECT COUNT(*) as total_visitors,
+              COUNT(*) FILTER (WHERE converted = true) as total_conversions
+       FROM visitors WHERE campaign_id = $1`,
+      [campaign.id]
+    );
+    const totalVisitors = parseInt(campaignTotals.rows[0]?.total_visitors) || 0;
+    const visitorConversions = parseInt(campaignTotals.rows[0]?.total_conversions) || 0;
 
     // Total revenue = ALL revenue_events (includes upsells for all matched + unmatched)
     const reRow = await pool.query(
