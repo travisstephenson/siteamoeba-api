@@ -749,7 +749,7 @@ export async function registerRoutes(server: Server, app: Express) {
       const pu = u as any;
       planCounts[pu.plan] = (planCounts[pu.plan] || 0) + 1;
       if (pu.plan === 'free') freeCount++;
-      else paidCount++;
+      else if (pu.id !== 1) paidCount++; // exclude test account from paid count
       if (pu.trialEndsAt && new Date(pu.trialEndsAt) > now) trialCount++;
       if (new Date(pu.createdAt) > sevenDaysAgo) newThisWeek++;
       if (new Date(pu.createdAt) > thirtyDaysAgo) newThisMonth++;
@@ -771,10 +771,11 @@ export async function registerRoutes(server: Server, app: Express) {
     const totalTestsEver = await pool.query(
       `SELECT COUNT(*) as cnt FROM test_sections`
     );
-    // Tests won = inactive sections that had at least 2 variants (i.e. a real test ran)
+    // Tests won = actual declared winners recorded in test_lessons
     const testsWon = await pool.query(
-      `SELECT COUNT(*) as cnt FROM test_sections WHERE is_active = false`
+      `SELECT COUNT(*) as cnt FROM test_lessons`
     );
+    // Tests completed = sections that ran a real test (inactive + had variants assigned)
     const testsCompleted = await pool.query(
       `SELECT COUNT(DISTINCT ts.id) as cnt FROM test_sections ts JOIN variants v ON v.test_section_id = ts.id WHERE ts.is_active = false`
     );
@@ -785,17 +786,40 @@ export async function registerRoutes(server: Server, app: Express) {
       `SELECT COUNT(*) as cnt FROM visitors WHERE converted = true`
     );
 
-    // MRR calculation based on active paid subscriptions
-    const planMRR: Record<string, number> = {
-      pro: 47,
-      business: 97,
-      autopilot: 299,
-    };
+    // MRR calculation based on actual Stripe subscription amounts
+    // Uses real beta pricing from Stripe, not list prices
     let totalMRR = 0;
-    for (const u of allUsers) {
-      const pu = u as any;
-      if (pu.accountStatus === 'cancelled' || pu.accountStatus === 'suspended') continue;
-      if (planMRR[pu.plan]) totalMRR += planMRR[pu.plan];
+    let verifiedPaidCount = 0;
+    if (stripe) {
+      try {
+        // Fetch all active subscriptions from Stripe for accuracy
+        const activeSubs = await stripe.subscriptions.list({ status: 'active', limit: 100 });
+        const processedCustomers = new Set<string>(); // avoid double-counting duplicate subs
+        for (const sub of activeSubs.data) {
+          const custId = typeof sub.customer === 'string' ? sub.customer : sub.customer?.id || '';
+          // Only count SiteAmoeba subscriptions (match known price IDs)
+          const priceId = sub.items.data[0]?.price?.id || '';
+          const isSAPlan = Object.values(PLANS).some(p => (p as any).priceId === priceId);
+          if (!isSAPlan) continue;
+          // Skip if we already counted a sub for this customer (e.g. Alison's duplicates)
+          if (processedCustomers.has(custId)) continue;
+          processedCustomers.add(custId);
+          // Use actual amount charged, not list price
+          const monthlyAmount = (sub.items.data[0]?.price?.unit_amount || 0) / 100;
+          totalMRR += monthlyAmount;
+          verifiedPaidCount++;
+        }
+      } catch (e: any) {
+        console.error('[admin-stats] Stripe MRR fetch failed:', e.message);
+        // Fallback to plan-based estimate using beta prices
+        const betaPlanMRR: Record<string, number> = { pro: 23.50, business: 48.50, autopilot: 149.50 };
+        for (const u of allUsers) {
+          const pu = u as any;
+          if (pu.id === 1) continue; // skip test account
+          if (pu.accountStatus === 'cancelled' || pu.accountStatus === 'suspended') continue;
+          if (betaPlanMRR[pu.plan]) totalMRR += betaPlanMRR[pu.plan];
+        }
+      }
     }
     const totalARR = totalMRR * 12;
 
