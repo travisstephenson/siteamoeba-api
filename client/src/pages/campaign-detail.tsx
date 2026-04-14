@@ -1033,6 +1033,8 @@ function AIVariantGenerator({
   onAdded,
   userPlan,
   isByok,
+  canRunTests = true,
+  onNoAIConfig,
 }: {
   campaignId: number;
   type: string;
@@ -1040,6 +1042,8 @@ function AIVariantGenerator({
   onAdded: () => void;
   userPlan: string;
   isByok?: boolean;
+  canRunTests?: boolean;
+  onNoAIConfig?: () => void;
 }) {
   const [variants, setVariants] = useState<AIVariant[]>([]);
   const [addingVariantIndex, setAddingVariantIndex] = useState<number | null>(null);
@@ -1137,6 +1141,7 @@ function AIVariantGenerator({
           variant="outline"
           size="sm"
           onClick={() => {
+            if (!canRunTests) { onNoAIConfig?.(); return; }
             if (isByok && !showByokWarning) { setShowByokWarning(true); return; }
             generateMutation.mutate();
           }}
@@ -3824,6 +3829,8 @@ function TestSectionCard({
   statsLoading,
   userPlan,
   campaignType,
+  canRunTests = true,
+  onNoAIConfig,
 }: {
   section: TestSection;
   campaignId: number;
@@ -3833,6 +3840,8 @@ function TestSectionCard({
   statsLoading: boolean;
   userPlan: string;
   campaignType?: string;
+  canRunTests?: boolean;
+  onNoAIConfig?: () => void;
 }) {
   const [expanded, setExpanded] = useState(section.isActive);
   const [showFullControlText, setShowFullControlText] = useState(false);
@@ -4217,6 +4226,8 @@ function TestSectionCard({
               sectionId={section.id}
               userPlan={userPlan}
               isByok={userPlan === "free" && !!user?.llmProvider}
+              canRunTests={canRunTests}
+              onNoAIConfig={() => setShowNoAIModal(true)}
               onAdded={() =>
                 queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] })
               }
@@ -4230,7 +4241,10 @@ function TestSectionCard({
                 </p>
                 <Button
                   size="sm"
-                  onClick={() => toggleMutation.mutate(true)}
+                  onClick={() => {
+                    if (!canRunTests) { onNoAIConfig?.(); return; }
+                    toggleMutation.mutate(true);
+                  }}
                   disabled={toggleMutation.isPending}
                   data-testid={`button-activate-section-${section.id}`}
                 >
@@ -5331,7 +5345,9 @@ export default function CampaignDetailPage() {
     },
   });
   const [showAnomalyPanel, setShowAnomalyPanel] = useState(false);
+  const [showNoAIModal, setShowNoAIModal] = useState(false);
   const userPlan = user?.plan ?? "free";
+  const canRunTests = userPlan !== "free" || !!user?.llmProvider;
   const { toast } = useToast();
 
   const archiveMutation = useMutation({
@@ -5689,6 +5705,51 @@ export default function CampaignDetailPage() {
         </DialogContent>
       </Dialog>
 
+      {/* No AI Config Modal — shown when free users without API keys try to run tests */}
+      <Dialog open={showNoAIModal} onOpenChange={setShowNoAIModal}>
+        <DialogContent className="max-w-md" data-testid="dialog-no-ai-config">
+          <div className="text-center space-y-4 py-2">
+            <div className="mx-auto w-12 h-12 rounded-full flex items-center justify-center" style={{ background: "hsl(25 95% 53% / 0.1)" }}>
+              <AlertTriangle className="w-6 h-6" style={{ color: "hsl(25 95% 53%)" }} />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold">Your Test Won't Run Yet</h3>
+              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
+                To generate variants and run A/B tests, you need either a <strong>paid plan</strong> (which includes AI credits and the Brain) or your own <strong>AI API key</strong> (BYOK).
+              </p>
+              <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
+                Without one of these, your test will not be active and no variants will be shown to visitors.
+              </p>
+            </div>
+            <div className="flex gap-2 pt-2">
+              <Button
+                variant="outline"
+                className="flex-1 text-xs"
+                onClick={() => { setShowNoAIModal(false); navigate("/settings"); }}
+                data-testid="button-add-api-key"
+              >
+                Add API Key (Free)
+              </Button>
+              <Button
+                className="flex-1 text-xs gap-1.5"
+                style={{ background: "linear-gradient(135deg, #10b981 0%, #0ea5e9 100%)", color: "#fff", border: "none" }}
+                onClick={() => { setShowNoAIModal(false); navigate("/billing"); }}
+                data-testid="button-upgrade-no-ai"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                Upgrade Plan
+              </Button>
+            </div>
+            <button
+              className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+              onClick={() => setShowNoAIModal(false)}
+            >
+              I'll do this later
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Page content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
 
@@ -5820,6 +5881,8 @@ export default function CampaignDetailPage() {
                 statsLoading={statsLoading}
                 userPlan={userPlan}
                 campaignType={stats?.campaignType}
+                canRunTests={canRunTests}
+                onNoAIConfig={() => setShowNoAIModal(true)}
               />
             ))}
           </div>

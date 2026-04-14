@@ -128,10 +128,34 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       target.textContent = text;
       return;
     }
-    // Headlines, subheadlines, body copy, social proof, etc.:
-    // Replace the entire element's content directly. Loses inner span styling (e.g. colored words)
-    // but the text is CORRECT. This is the right tradeoff for A/B testing.
+    // === PRESERVE TEXT COLOR ===
+    // Many page builders (GHL, Wix, WordPress Elementor) put text inside
+    // <span style="color: white"> or similar. When we set textContent, the span
+    // is destroyed and the text falls back to black (browser default).
+    // Solution: capture the computed color BEFORE the swap, then apply it
+    // directly to the parent element after replacement.
+    var computedColor = "";
+    try {
+      // Check the first text-bearing child for its color
+      var colorSource = el.querySelector("span, strong, em, b, i") || el;
+      var cs = window.getComputedStyle(colorSource);
+      computedColor = cs.color || "";
+      // Also capture font-family if it's set on the inner span (not inherited from body)
+      var computedFont = cs.fontFamily || "";
+      var bodyFont = window.getComputedStyle(document.body).fontFamily || "";
+    } catch(e) {}
+
+    // Replace the entire element's content
     el.textContent = text;
+
+    // Restore the color if it was set (and isn't just black/default)
+    if (computedColor && computedColor !== "rgb(0, 0, 0)" && computedColor !== "rgba(0, 0, 0, 0)") {
+      el.style.color = computedColor;
+    }
+    // Restore font-family if the inner span had a custom one
+    if (computedFont && computedFont !== bodyFont) {
+      el.style.fontFamily = computedFont;
+    }
   }
 
   // === HELPER: Apply variant text to a section ===
