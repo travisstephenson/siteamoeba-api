@@ -3735,6 +3735,167 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // GET /api/public/brain-graph — data for the public Brain visualization
+  app.get("/api/public/brain-graph", async (_req: Request, res: Response) => {
+    try {
+      res.header("Access-Control-Allow-Origin", "*");
+      res.header("Cache-Control", "public, max-age=120"); // 2 min cache
+
+      // Core stats
+      const stats = await pool.query(`
+        SELECT 
+          (SELECT COUNT(*) FROM campaigns) as pages_scanned,
+          (SELECT COUNT(*) FROM test_lessons WHERE lift_percent > 0) as tests_won,
+          (SELECT COUNT(*) FROM test_lessons) as total_tests,
+          (SELECT COUNT(*) FROM visitors) as visitors_analyzed,
+          (SELECT COUNT(*) FROM visitors WHERE converted = true) as conversions_tracked,
+          (SELECT COUNT(*) FROM behavioral_events) as behavioral_signals,
+          (SELECT COUNT(*) FROM revenue_events WHERE amount > 0) as revenue_events,
+          (SELECT COUNT(*) FROM visitor_sessions) as sessions_analyzed,
+          (SELECT COUNT(DISTINCT unnest) FROM (SELECT unnest(ARRAY[winner_strategy, loser_strategy]) FROM test_lessons WHERE winner_strategy IS NOT NULL) sub) as strategies_tested
+      `);
+      const s = stats.rows[0];
+
+      // Test result nodes (for the graph)
+      const tests = await pool.query(`
+        SELECT section_type, winner_strategy, loser_strategy,
+          ROUND(lift_percent::numeric, 1) as lift_percent,
+          sample_size, ROUND(confidence::numeric, 0) as confidence,
+          created_at
+        FROM test_lessons
+        WHERE winner_strategy IS NOT NULL
+        ORDER BY created_at DESC
+        LIMIT 50
+      `);
+
+      // Strategy win/loss record
+      const strategyStats = await pool.query(`
+        SELECT s.strategy,
+          COUNT(*) FILTER (WHERE s.role = 'winner') as wins,
+          COUNT(*) FILTER (WHERE s.role = 'loser') as losses,
+          ROUND(AVG(CASE WHEN s.role = 'winner' THEN s.lift END)::numeric, 1) as avg_win_lift
+        FROM (
+          SELECT winner_strategy as strategy, 'winner' as role, lift_percent as lift FROM test_lessons WHERE winner_strategy IS NOT NULL AND lift_percent > 0
+          UNION ALL
+          SELECT loser_strategy as strategy, 'loser' as role, lift_percent as lift FROM test_lessons WHERE loser_strategy IS NOT NULL AND lift_percent > 0
+        ) s
+        GROUP BY s.strategy
+        ORDER BY COUNT(*) FILTER (WHERE s.role = 'winner') DESC
+      `);
+
+      // Section types tested
+      const sectionStats = await pool.query(`
+        SELECT section_type, COUNT(*) as tests,
+          COUNT(*) FILTER (WHERE lift_percent > 0) as wins,
+          ROUND(AVG(lift_percent) FILTER (WHERE lift_percent > 0)::numeric, 1) as avg_lift
+        FROM test_lessons
+        GROUP BY section_type
+        ORDER BY COUNT(*) DESC
+      `);
+
+      // Recent learning events (timeline)
+      const recentLearnings = await pool.query(`
+        (
+          SELECT 'test_complete' as event_type,
+            json_build_object(
+              'sectionType', section_type,
+              'winnerStrategy', winner_strategy,
+              'loserStrategy', loser_strategy,
+              'liftPercent', ROUND(lift_percent::numeric, 1),
+              'sampleSize', sample_size
+            ) as data,
+            created_at
+          FROM test_lessons
+          ORDER BY created_at DESC LIMIT 10
+        )
+        UNION ALL
+        (
+          SELECT 'page_scanned' as event_type,
+            json_build_object('campaignCount', COUNT(*)) as data,
+            MAX(created_at) as created_at
+          FROM campaigns
+        )
+        ORDER BY created_at DESC
+        LIMIT 20
+      `);
+
+      // Behavioral insight nodes
+      const behavioralInsights = await pool.query(`
+        SELECT
+          ROUND(AVG(max_scroll_depth) FILTER (WHERE v.converted = true)::numeric, 1) as converter_scroll,
+          ROUND(AVG(max_scroll_depth) FILTER (WHERE v.converted = false)::numeric, 1) as nonconverter_scroll,
+          ROUND(AVG(time_on_page) FILTER (WHERE v.converted = true)::numeric, 0) as converter_time,
+          ROUND(AVG(time_on_page) FILTER (WHERE v.converted = false)::numeric, 0) as nonconverter_time,
+          ROUND(AVG(click_count) FILTER (WHERE v.converted = true)::numeric, 1) as converter_clicks,
+          ROUND(AVG(click_count) FILTER (WHERE v.converted = false)::numeric, 1) as nonconverter_clicks
+        FROM visitor_sessions vs
+        JOIN visitors v ON v.id = vs.visitor_id AND v.campaign_id = vs.campaign_id
+        WHERE vs.max_scroll_depth > 0
+      `);
+
+      const STRATEGY_LABELS: Record<string, string> = {
+        transformation: "Transformation", how_to: "How-To",
+        social_proof: "Social Proof", urgency: "Urgency",
+        loss_aversion: "Loss Aversion", contrarian: "Contrarian",
+        feature_benefit: "Feature/Benefit", curiosity: "Curiosity",
+        problem_agitation: "Problem Agitation", authority: "Authority",
+        pattern_interrupt: "Pattern Interrupt", scarcity: "Scarcity",
+      };
+
+      res.json({
+        stats: {
+          pagesScanned: parseInt(s.pages_scanned),
+          testsWon: parseInt(s.tests_won),
+          totalTests: parseInt(s.total_tests),
+          visitorsAnalyzed: parseInt(s.visitors_analyzed),
+          conversionsTracked: parseInt(s.conversions_tracked),
+          behavioralSignals: parseInt(s.behavioral_signals),
+          revenueEvents: parseInt(s.revenue_events),
+          sessionsAnalyzed: parseInt(s.sessions_analyzed),
+          strategiesTested: parseInt(s.strategies_tested),
+        },
+        tests: tests.rows.map((t: any) => ({
+          sectionType: t.section_type,
+          winnerStrategy: STRATEGY_LABELS[t.winner_strategy] || t.winner_strategy,
+          loserStrategy: STRATEGY_LABELS[t.loser_strategy] || t.loser_strategy,
+          liftPercent: parseFloat(t.lift_percent),
+          sampleSize: parseInt(t.sample_size),
+          confidence: parseInt(t.confidence),
+          createdAt: t.created_at,
+        })),
+        strategies: strategyStats.rows.map((s: any) => ({
+          name: STRATEGY_LABELS[s.strategy] || s.strategy,
+          key: s.strategy,
+          wins: parseInt(s.wins) || 0,
+          losses: parseInt(s.losses) || 0,
+          avgWinLift: parseFloat(s.avg_win_lift) || 0,
+        })),
+        sections: sectionStats.rows.map((s: any) => ({
+          type: s.section_type,
+          tests: parseInt(s.tests),
+          wins: parseInt(s.wins),
+          avgLift: parseFloat(s.avg_lift) || 0,
+        })),
+        behavioral: behavioralInsights.rows[0] ? {
+          converterScroll: parseFloat(behavioralInsights.rows[0].converter_scroll) || 0,
+          nonconverterScroll: parseFloat(behavioralInsights.rows[0].nonconverter_scroll) || 0,
+          converterTime: parseInt(behavioralInsights.rows[0].converter_time) || 0,
+          nonconverterTime: parseInt(behavioralInsights.rows[0].nonconverter_time) || 0,
+          converterClicks: parseFloat(behavioralInsights.rows[0].converter_clicks) || 0,
+          nonconverterClicks: parseFloat(behavioralInsights.rows[0].nonconverter_clicks) || 0,
+        } : null,
+        learnings: recentLearnings.rows.map((l: any) => ({
+          type: l.event_type,
+          data: l.data,
+          createdAt: l.created_at,
+        })),
+      });
+    } catch (err: any) {
+      console.error("[public/brain-graph]", err.message);
+      res.status(500).json({ error: "Failed to load brain data" });
+    }
+  });
+
   // ============== PLATFORM WEBHOOKS (Teachable, Kajabi, Thinkific, Stan Store) ==============
 
   // POST /api/webhooks/:platform/:userId/:secret — receive purchase webhooks from course platforms
