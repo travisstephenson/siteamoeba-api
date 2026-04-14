@@ -350,12 +350,13 @@ export async function registerRoutes(server: Server, app: Express) {
       await storage.updateUser(user.id, { stripeCustomerId: customerId });
     }
 
+    const origin = req.headers.origin || req.headers.referer?.replace(/\/$/, "") || "https://app.siteamoeba.com";
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: "subscription",
       line_items: [{ price: planConfig.priceId, quantity: 1 }],
-      success_url: `${req.headers.origin}/#/billing?success=true`,
-      cancel_url: `${req.headers.origin}/#/billing?canceled=true`,
+      success_url: `${origin}/#/billing?success=true`,
+      cancel_url: `${origin}/#/billing?canceled=true`,
       metadata: { userId: String(user.id), plan },
     });
 
