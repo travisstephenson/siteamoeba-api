@@ -93,20 +93,50 @@ export default function BillingPage() {
   const [, navigate] = useLocation();
   const { toast } = useToast();
   const [checkoutSuccess, setCheckoutSuccess] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   // After Stripe checkout redirect: detect success param, sync subscription, refresh user
+  // Retries up to 4 times with increasing delays — Stripe sometimes takes a moment to
+  // finalize the subscription after checkout completes.
   useEffect(() => {
     const hash = window.location.hash || "";
     const isSuccess = hash.includes("success=true");
     const isCanceled = hash.includes("canceled=true");
     if (isSuccess) {
       setCheckoutSuccess(true);
-      // Call sync endpoint to verify Stripe subscription and upgrade plan
-      apiRequest("POST", "/api/billing/sync").then(() => {
-        queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      }).catch(() => {});
-      // Clean URL
+      setSyncing(true);
+      // Clean URL immediately
       window.history.replaceState(null, "", "/#/billing");
+
+      // Retry sync with increasing delays until plan is confirmed upgraded
+      const delays = [0, 1500, 3000, 6000];
+      let synced = false;
+      const attemptSync = async (attempt: number) => {
+        if (synced || attempt >= delays.length) {
+          setSyncing(false);
+          if (!synced) {
+            // All retries failed — still show success (webhook will catch it)
+            toast({ title: "Payment received", description: "Your plan is being activated. It may take a moment to reflect." });
+          }
+          return;
+        }
+        try {
+          const res = await apiRequest("POST", "/api/billing/sync");
+          const data = await res.json();
+          if (data.synced && data.plan) {
+            synced = true;
+            setSyncing(false);
+            queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+            toast({ title: "Plan upgraded", description: `You're now on the ${data.plan.charAt(0).toUpperCase() + data.plan.slice(1)} plan. Welcome aboard!` });
+            return;
+          }
+        } catch (e) {
+          // Will retry
+        }
+        // Schedule next retry
+        setTimeout(() => attemptSync(attempt + 1), delays[attempt + 1] || 3000);
+      };
+      attemptSync(0);
     }
     if (isCanceled) {
       toast({ title: "Checkout canceled", description: "No charges were made." });
@@ -171,8 +201,17 @@ export default function BillingPage() {
       {/* Success banner after checkout */}
       {checkoutSuccess && (
         <div className="bg-green-50 dark:bg-green-950/20 border-b border-green-200 dark:border-green-800 px-6 py-3 flex items-center gap-2">
-          <CircleCheck className="w-4 h-4 text-green-600" />
-          <p className="text-sm text-green-800 dark:text-green-200 font-medium">Payment successful. Your plan has been upgraded.</p>
+          {syncing ? (
+            <>
+              <svg className="w-4 h-4 text-green-600 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 2a10 10 0 0 1 10 10" strokeLinecap="round"/></svg>
+              <p className="text-sm text-green-800 dark:text-green-200 font-medium">Payment received — activating your plan...</p>
+            </>
+          ) : (
+            <>
+              <CircleCheck className="w-4 h-4 text-green-600" />
+              <p className="text-sm text-green-800 dark:text-green-200 font-medium">Payment successful. Your plan has been upgraded.</p>
+            </>
+          )}
         </div>
       )}
 

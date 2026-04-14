@@ -128,34 +128,52 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       target.textContent = text;
       return;
     }
-    // === PRESERVE TEXT COLOR ===
-    // Many page builders (GHL, Wix, WordPress Elementor) put text inside
-    // <span style="color: white"> or similar. When we set textContent, the span
-    // is destroyed and the text falls back to black (browser default).
-    // Solution: capture the computed color BEFORE the swap, then apply it
-    // directly to the parent element after replacement.
-    var computedColor = "";
+    // === PRESERVE ALL VISUAL STYLES ===
+    // Page builders (GHL, Wix, WordPress Elementor, ClickFunnels) put text inside
+    // <span style="color: white; font-family: ..."> or similar styled children.
+    // When we set textContent, ALL child nodes (spans, strongs) are destroyed,
+    // and the text falls back to whatever CSS applies to the bare parent element.
+    // On GHL pages, the parent H1 might get its font from CSS classes, but font-size,
+    // color, font-family are often on the INNER span — which we're about to destroy.
+    // Solution: capture ALL key visual properties BEFORE the swap from both the element
+    // itself AND its styled children, then explicitly re-apply them after replacement.
+    var savedStyles = {};
+    var STYLE_PROPS = ["color", "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textTransform", "textAlign"];
     try {
-      // Check the first text-bearing child for its color
-      var colorSource = el.querySelector("span, strong, em, b, i") || el;
-      var cs = window.getComputedStyle(colorSource);
-      computedColor = cs.color || "";
-      // Also capture font-family if it's set on the inner span (not inherited from body)
-      var computedFont = cs.fontFamily || "";
-      var bodyFont = window.getComputedStyle(document.body).fontFamily || "";
+      // Capture from the inner styled child (most specific source of truth)
+      var styledChild = el.querySelector("span[style], strong[style], em[style], b[style], span, strong, em, b, i") || el;
+      var childCS = window.getComputedStyle(styledChild);
+      // Capture from the element itself (CSS class-based styling)
+      var elCS = window.getComputedStyle(el);
+      for (var p = 0; p < STYLE_PROPS.length; p++) {
+        var prop = STYLE_PROPS[p];
+        // Use the child's value if it differs from the element's (inner span override)
+        // Otherwise use the element's own computed value (CSS class-based)
+        var childVal = childCS[prop] || "";
+        var elVal = elCS[prop] || "";
+        savedStyles[prop] = childVal || elVal;
+      }
     } catch(e) {}
 
     // Replace the entire element's content
     el.textContent = text;
 
-    // Restore the color if it was set (and isn't just black/default)
-    if (computedColor && computedColor !== "rgb(0, 0, 0)" && computedColor !== "rgba(0, 0, 0, 0)") {
-      el.style.color = computedColor;
-    }
-    // Restore font-family if the inner span had a custom one
-    if (computedFont && computedFont !== bodyFont) {
-      el.style.fontFamily = computedFont;
-    }
+    // Re-apply all saved styles to the element itself
+    try {
+      var afterCS = window.getComputedStyle(el);
+      for (var r = 0; r < STYLE_PROPS.length; r++) {
+        var rProp = STYLE_PROPS[r];
+        var saved = savedStyles[rProp];
+        if (!saved) continue;
+        // Only apply if the value actually changed after the textContent replacement
+        // (avoids unnecessary inline styles that could conflict with responsive CSS)
+        var afterVal = afterCS[rProp] || "";
+        if (saved !== afterVal) {
+          var cssProp = rProp.replace(/([A-Z])/g, '-$1').toLowerCase();
+          el.style.setProperty(cssProp, saved);
+        }
+      }
+    } catch(e) {}
   }
 
   // === HELPER: Apply variant text to a section ===

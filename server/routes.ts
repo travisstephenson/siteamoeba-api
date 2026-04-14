@@ -378,7 +378,8 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   // Sync subscription status from Stripe — called after checkout redirect
-  // Ensures plan is upgraded even if webhook didn't fire
+  // Ensures plan is upgraded even if webhook didn't fire.
+  // Uses the shared upgradePlanFromSubscription helper for consistency.
   app.post("/api/billing/sync", requireAuth, async (req: Request, res: Response) => {
     if (!stripe) return res.status(500).json({ error: "Stripe not configured" });
     const user = await storage.getUserById(req.userId!);
@@ -389,67 +390,162 @@ export async function registerRoutes(server: Server, app: Express) {
       const subs = await stripe.subscriptions.list({
         customer: user.stripeCustomerId,
         status: "active",
-        limit: 1,
+        limit: 5,
       });
       if (subs.data.length > 0) {
+        // Use the most recent active subscription
         const sub = subs.data[0];
-        const priceId = sub.items.data[0]?.price?.id;
-        // Find which plan this price belongs to
-        let matchedPlan: string | null = null;
-        for (const [planId, config] of Object.entries(PLANS)) {
-          if ((config as any).priceId === priceId) { matchedPlan = planId; break; }
-        }
-        if (matchedPlan && user.plan === "free") {
-          const planConfig = PLANS[matchedPlan] as any;
-          await storage.updateUser(user.id, {
-            plan: matchedPlan,
-            creditsLimit: planConfig.credits || 1000,
-            campaignsLimit: planConfig.campaigns || 999,
-            stripeSubscriptionId: sub.id,
-          });
-          return res.json({ synced: true, plan: matchedPlan });
+        const result = await upgradePlanFromSubscription(sub, user);
+        if (result.upgraded) {
+          console.log(`[billing-sync] Synced user ${user.id} (${user.email}) to ${result.plan}`);
+          return res.json({ synced: true, plan: result.plan });
         }
       }
-      return res.json({ synced: false, reason: "no active subscription found" });
+      return res.json({ synced: false, reason: "no active subscription found or plan unchanged" });
     } catch (err: any) {
       console.error("[billing-sync]", err.message);
       return res.status(500).json({ error: "Failed to sync" });
     }
   });
 
+  // === SHARED HELPER: Upgrade a user's plan from a Stripe subscription ===
+  // Used by both the webhook and the sync endpoint — single source of truth.
+  async function upgradePlanFromSubscription(sub: any, user?: any): Promise<{ upgraded: boolean; plan?: string; userId?: number }> {
+    const priceId = sub.items?.data?.[0]?.price?.id;
+    if (!priceId) return { upgraded: false };
+
+    // Find which plan this price belongs to
+    let matchedPlan: string | null = null;
+    for (const [planId, config] of Object.entries(PLANS)) {
+      if ((config as any).priceId === priceId) { matchedPlan = planId; break; }
+    }
+    if (!matchedPlan) return { upgraded: false };
+
+    const planConfig = PLANS[matchedPlan];
+    const planLimits = PLAN_LIMITS[matchedPlan] || { concurrentTests: 1 };
+
+    // If we don't have the user, find by customer ID
+    if (!user) {
+      const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id;
+      if (customerId) user = await storage.getUserByStripeCustomerId(customerId);
+    }
+    if (!user) return { upgraded: false };
+
+    // Always sync — even if plan already matches (catches limit mismatches)
+    await storage.updateUser(user.id, {
+      plan: matchedPlan,
+      creditsLimit: planConfig.credits,
+      campaignsLimit: planConfig.campaigns,
+      concurrentTestLimit: planLimits.concurrentTests,
+      stripeSubscriptionId: sub.id,
+    });
+    console.log(`[billing] Upgraded user ${user.id} (${user.email}) to ${matchedPlan} — sub ${sub.id}`);
+    return { upgraded: true, plan: matchedPlan, userId: user.id };
+  }
+
   // Stripe webhook for subscription events
   app.post("/api/webhook/stripe-billing", async (req: Request, res: Response) => {
     const event = req.body;
+    console.log(`[billing-webhook] Received: ${event.type}`);
 
-    if (event.type === "checkout.session.completed") {
-      const meta = event.data?.object?.metadata;
-      if (meta?.userId && meta?.plan) {
-        const userId = parseInt(meta.userId);
-        const planConfig = PLANS[meta.plan];
-        if (planConfig) {
-          await storage.updateUser(userId, {
-            plan: meta.plan,
-            creditsLimit: planConfig.credits,
-            campaignsLimit: planConfig.campaigns,
-            stripeSubscriptionId: event.data?.object?.subscription || null,
-          });
+    try {
+      // 1) checkout.session.completed — primary upgrade path
+      if (event.type === "checkout.session.completed") {
+        const session = event.data?.object;
+        const meta = session?.metadata;
+        // Try metadata first (we set userId + plan on checkout creation)
+        if (meta?.userId && meta?.plan) {
+          const userId = parseInt(meta.userId);
+          const user = await storage.getUserById(userId);
+          const planConfig = PLANS[meta.plan];
+          const planLimits = PLAN_LIMITS[meta.plan] || { concurrentTests: 1 };
+          if (planConfig && user) {
+            await storage.updateUser(userId, {
+              plan: meta.plan,
+              creditsLimit: planConfig.credits,
+              campaignsLimit: planConfig.campaigns,
+              concurrentTestLimit: planLimits.concurrentTests,
+              stripeSubscriptionId: session.subscription || null,
+            });
+            console.log(`[billing-webhook] checkout.session.completed: upgraded user ${userId} to ${meta.plan}`);
+          }
+        } else if (session?.subscription && stripe) {
+          // Fallback: if no metadata, resolve subscription and match by price
+          const sub = await stripe.subscriptions.retrieve(session.subscription);
+          const customerId = session.customer;
+          const user = customerId ? await storage.getUserByStripeCustomerId(customerId) : null;
+          if (sub && user) await upgradePlanFromSubscription(sub, user);
         }
       }
-    }
 
-    if (event.type === "customer.subscription.deleted") {
-      const customerId = event.data?.object?.customer;
-      if (customerId) {
-        // Find user by stripe customer ID and downgrade to free
-        const user = await storage.getUserByStripeCustomerId(customerId);
-        if (user) {
-          await storage.updateUser(user.id, {
-            plan: "free",
-            creditsLimit: 0,
-            stripeSubscriptionId: null,
-          });
+      // 2) invoice.payment_succeeded — catches renewals AND first payments
+      // This is the most reliable event: Stripe sends it on every successful charge.
+      if (event.type === "invoice.payment_succeeded") {
+        const invoice = event.data?.object;
+        const subId = invoice?.subscription;
+        const customerId = invoice?.customer;
+        if (subId && customerId && stripe) {
+          const user = await storage.getUserByStripeCustomerId(customerId);
+          if (user) {
+            const sub = await stripe.subscriptions.retrieve(subId);
+            if (sub.status === "active") {
+              await upgradePlanFromSubscription(sub, user);
+            }
+          }
         }
       }
+
+      // 3) customer.subscription.updated — catches plan changes, reactivations
+      if (event.type === "customer.subscription.updated") {
+        const sub = event.data?.object;
+        if (sub?.status === "active") {
+          await upgradePlanFromSubscription(sub);
+        } else if (sub?.status === "canceled" || sub?.status === "unpaid" || sub?.status === "past_due") {
+          const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer?.id;
+          if (customerId) {
+            const user = await storage.getUserByStripeCustomerId(customerId);
+            if (user && user.plan !== "free") {
+              await storage.updateUser(user.id, {
+                plan: "free",
+                creditsLimit: 0,
+                stripeSubscriptionId: null,
+                concurrentTestLimit: 1,
+              });
+              console.log(`[billing-webhook] Downgraded user ${user.id} to free (sub status: ${sub.status})`);
+            }
+          }
+        }
+      }
+
+      // 4) customer.subscription.deleted — subscription fully canceled
+      if (event.type === "customer.subscription.deleted") {
+        const customerId = event.data?.object?.customer;
+        if (customerId) {
+          const user = await storage.getUserByStripeCustomerId(customerId);
+          if (user) {
+            await storage.updateUser(user.id, {
+              plan: "free",
+              creditsLimit: 0,
+              stripeSubscriptionId: null,
+              concurrentTestLimit: 1,
+            });
+            console.log(`[billing-webhook] Subscription deleted: downgraded user ${user.id} to free`);
+          }
+        }
+      }
+
+      // 5) invoice.payment_failed — alert but don't downgrade immediately (Stripe retries)
+      if (event.type === "invoice.payment_failed") {
+        const customerId = event.data?.object?.customer;
+        if (customerId) {
+          const user = await storage.getUserByStripeCustomerId(customerId);
+          if (user) {
+            console.warn(`[billing-webhook] Payment failed for user ${user.id} (${user.email}) — Stripe will retry`);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error(`[billing-webhook] Error handling ${event.type}:`, err.message);
     }
 
     res.json({ received: true });
