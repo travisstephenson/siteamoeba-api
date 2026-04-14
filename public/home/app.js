@@ -166,3 +166,20 @@
   }
 
 })();
+
+  /* ── Referral Link Passthrough ── */
+  // If the landing page is loaded with ?ref=xxx, append it to all app links
+  // so the signup form can capture the referral code
+  (function() {
+    var params = new URLSearchParams(window.location.search);
+    var ref = params.get('ref');
+    if (!ref) return;
+    
+    // Find all links pointing to app.siteamoeba.com and append ?ref=
+    var links = document.querySelectorAll('a[href*="app.siteamoeba.com"]');
+    links.forEach(function(link) {
+      var href = link.getAttribute('href');
+      var separator = href.indexOf('?') === -1 ? '?' : '&';
+      link.setAttribute('href', href + separator + 'ref=' + encodeURIComponent(ref));
+    });
+  })();

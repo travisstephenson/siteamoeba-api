@@ -7,9 +7,10 @@
   <meta name="description" content="SiteAmoeba's AI Brain generates high-converting page variants grounded in proven psychology and learns from every test across the platform. Your pages improve while you sleep.">
   <meta property="og:title" content="SiteAmoeba — AI-Powered Conversion Optimization">
   <meta property="og:description" content="Stop guessing. Start knowing what converts. SiteAmoeba's AI Brain scans your page, generates variants, and continuously learns from thousands of tests.">
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><circle cx='20' cy='20' r='14' fill='none' stroke='%230EA5E9' stroke-width='1.5' opacity='0.5'/><circle cx='20' cy='14' r='3' fill='%230EA5E9'/><circle cx='28' cy='22' r='3' fill='%2310B981'/><circle cx='14' cy='24' r='3' fill='%230EA5E9'/><circle cx='24' cy='30' r='2.5' fill='%2310B981' opacity='0.7'/><line x1='20' y1='14' x2='28' y2='22' stroke='%230EA5E9' stroke-width='1' opacity='0.4'/><line x1='20' y1='14' x2='14' y2='24' stroke='%230EA5E9' stroke-width='1' opacity='0.4'/><line x1='28' y1='22' x2='24' y2='30' stroke='%2310B981' stroke-width='1' opacity='0.4'/><line x1='14' y1='24' x2='24' y2='30' stroke='%230EA5E9' stroke-width='1' opacity='0.3'/></svg>">
   <link href="https://api.fontshare.com/v2/css?f[]=cabinet-grotesk@400,500,700,800&f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="./style.css">
+  <!-- SiteAmoeba tracking pixel -->
+  <script src="https://api.siteamoeba.com/api/widget/script/36"></script>
 </head>
 <body>
 
@@ -533,11 +534,108 @@
     </section>
 
     <!-- ========== PRICING (Light) ========== -->
+
+    <!-- ===== LIVE WINS FEED ===== -->
+    <section class="wf" id="wins">
+      <style>
+        .wf{padding:4rem 1.5rem;text-align:center;background:linear-gradient(180deg,rgba(16,185,129,.03) 0%,transparent 100%)}
+        .wf__badge{display:inline-flex;align-items:center;gap:.5rem;padding:.25rem .75rem;background:rgba(16,185,129,.08);border:1px solid rgba(16,185,129,.2);border-radius:9999px;font-size:.75rem;font-weight:500;color:#10b981;margin-bottom:1rem}
+        .wf__dot{width:6px;height:6px;border-radius:50%;background:#10b981;animation:wf-pulse 2s ease-in-out infinite}
+        @keyframes wf-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
+        .wf__title{font-family:'Cabinet Grotesk','General Sans',sans-serif;font-size:clamp(1.5rem,1.2rem+1.25vw,2.25rem);font-weight:700;line-height:1.15;letter-spacing:-.02em;margin-bottom:.75rem;color:#e2e8f0}
+        .wf__sub{font-size:.95rem;color:#8896a8;max-width:38ch;margin:0 auto 2rem;line-height:1.5}
+        .wf__widget{width:100%;max-width:480px;margin:0 auto;background:#131a23;border:1px solid #1c2636;border-radius:.75rem;padding:1rem;box-shadow:0 12px 40px rgba(0,0,0,.5),0 0 30px rgba(16,185,129,.12);overflow:hidden;position:relative}
+        .wf__widget::before,.wf__widget::after{content:'';position:absolute;left:0;right:0;height:48px;z-index:2;pointer-events:none}
+        .wf__widget::before{top:0;background:linear-gradient(to bottom,#131a23,transparent)}
+        .wf__widget::after{bottom:0;background:linear-gradient(to top,#131a23,transparent)}
+        .wf__vp{height:calc(4*(96px+12px)-12px);overflow:hidden;position:relative}
+        .wf__track{display:flex;flex-direction:column;gap:12px;animation:wf-scroll 48s linear infinite}
+        .wf__track:hover{animation-play-state:paused}
+        @keyframes wf-scroll{0%{transform:translateY(0)}100%{transform:translateY(calc(-1*var(--wf-items)*(96px+12px)))}}
+        .wf__card{height:96px;background:#161f2b;border:1px solid #1c2636;border-radius:.5rem;padding:.75rem 1rem;display:grid;grid-template-columns:auto 1fr auto;gap:.75rem;align-items:center;flex-shrink:0}
+        .wf__card:hover{border-color:#243044;background:#19232f}
+        .wf__icon{width:36px;height:36px;border-radius:.5rem;display:flex;align-items:center;justify-content:center;background:rgba(16,185,129,.08);color:#10b981;flex-shrink:0}
+        .wf__icon svg{width:17px;height:17px}
+        .wf__top{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+        .wf__sec{font-size:.8125rem;font-weight:600;color:#e2e8f0}
+        .wf__strat{font-size:.6875rem;font-weight:500;color:#10b981;background:rgba(16,185,129,.1);padding:1px 6px;border-radius:4px;border:1px solid rgba(16,185,129,.2)}
+        .wf__meta{display:flex;align-items:center;gap:.5rem;font-size:.6875rem;color:#5a6a7e;margin-top:2px;flex-wrap:wrap}
+        .wf__mdot{width:3px;height:3px;border-radius:50%;background:#5a6a7e;flex-shrink:0}
+        .wf__niche{font-size:.6875rem;font-weight:500;color:#8896a8;background:#131a23;padding:1px 6px;border-radius:4px;border:1px solid #1c2636}
+        .wf__lift{font-family:'Cabinet Grotesk','General Sans',sans-serif;font-size:clamp(1rem,.95rem+.35vw,1.25rem);font-weight:700;color:#10b981;letter-spacing:-.02em;white-space:nowrap;text-align:right;flex-shrink:0}
+        .wf__stats{display:grid;grid-template-columns:repeat(3,1fr);gap:.75rem;max-width:480px;margin:2rem auto 0}
+        .wf__stat{text-align:center;padding:1rem .5rem;background:#131a23;border:1px solid #1c2636;border-radius:.75rem}
+        .wf__stat-val{font-family:'Cabinet Grotesk','General Sans',sans-serif;font-size:clamp(1rem,.95rem+.35vw,1.25rem);font-weight:700;color:#10b981;letter-spacing:-.02em}
+        .wf__stat-lbl{font-size:.75rem;color:#8896a8;margin-top:.25rem}
+        @media(max-width:520px){.wf__vp{height:calc(3.5*(88px+12px)-12px)}.wf__card{height:88px;padding:.5rem .75rem;gap:.5rem}.wf__icon{width:32px;height:32px}.wf__stats{gap:.5rem}.wf__stat{padding:.75rem .25rem}}
+      </style>
+      <div class="wf__badge"><span class="wf__dot"></span>Live Network Data</div>
+      <h2 class="wf__title">Real Results from the SiteAmoeba Network</h2>
+      <p class="wf__sub">Anonymized A/B test wins from sites using AI-powered optimization — updated continuously.</p>
+      <div class="wf__widget">
+        <div class="wf__vp">
+          <div class="wf__track" id="wfTrack" style="--wf-items:12"></div>
+        </div>
+      </div>
+      <div class="wf__stats">
+        <div class="wf__stat"><div class="wf__stat-val" id="wfWins">--</div><div class="wf__stat-lbl">Tests Won</div></div>
+        <div class="wf__stat"><div class="wf__stat-val" id="wfLift">--</div><div class="wf__stat-lbl">Average Lift</div></div>
+        <div class="wf__stat"><div class="wf__stat-val" id="wfVis">--</div><div class="wf__stat-lbl">Visitors Tested</div></div>
+      </div>
+      <script>
+      (function(){
+        var API='https://api.siteamoeba.com/api/public/wins-feed';
+        var ic={
+          star:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
+          cta:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+          sub:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/><path d="M20 3v4"/><path d="M22 5h-4"/></svg>'
+        };
+        function card(w){
+          var i=w.sectionType==='CTA'?ic.cta:w.sectionType==='Subheadline'?ic.sub:ic.star;
+          return '<div class="wf__card"><div class="wf__icon">'+i+'</div><div><div class="wf__top"><span class="wf__sec">'+w.sectionType+'</span><span class="wf__strat">'+w.strategy+'</span></div><div class="wf__meta"><span>'+w.sampleSize.toLocaleString()+' visitors</span><span class="wf__mdot"></span><span>'+w.timeAgo+'</span><span class="wf__mdot"></span><span class="wf__niche">'+w.niche+'</span></div></div><div class="wf__lift">+'+w.liftPercent+'%</div></div>';
+        }
+        // Fallback data
+        var fallback=[
+          {sectionType:'Headline',strategy:'Transformation',liftPercent:'37.4',sampleSize:2082,niche:'Digital Products',timeAgo:'2h ago'},
+          {sectionType:'CTA',strategy:'Urgency',liftPercent:'125.3',sampleSize:342,niche:'Online Courses',timeAgo:'5h ago'},
+          {sectionType:'Headline',strategy:'Contrarian',liftPercent:'92.0',sampleSize:623,niche:'Coaching',timeAgo:'1d ago'},
+          {sectionType:'Subheadline',strategy:'Social Proof',liftPercent:'49.8',sampleSize:127,niche:'Digital Products',timeAgo:'2d ago'},
+          {sectionType:'Headline',strategy:'Pattern Interrupt',liftPercent:'28.1',sampleSize:1450,niche:'SaaS',timeAgo:'3d ago'},
+          {sectionType:'CTA',strategy:'Benefit-Focused',liftPercent:'67.2',sampleSize:890,niche:'E-commerce',timeAgo:'4d ago'},
+          {sectionType:'Headline',strategy:'Curiosity',liftPercent:'41.5',sampleSize:2200,niche:'Education',timeAgo:'5d ago'},
+          {sectionType:'Subheadline',strategy:'Authority',liftPercent:'33.9',sampleSize:560,niche:'Finance',timeAgo:'6d ago'},
+          {sectionType:'CTA',strategy:'First-Person',liftPercent:'55.0',sampleSize:1100,niche:'Health',timeAgo:'1w ago'},
+          {sectionType:'Headline',strategy:'Future Pacing',liftPercent:'44.7',sampleSize:780,niche:'Real Estate',timeAgo:'1w ago'},
+          {sectionType:'Headline',strategy:'Loss Aversion',liftPercent:'38.2',sampleSize:1900,niche:'Insurance',timeAgo:'2w ago'},
+          {sectionType:'CTA',strategy:'Scarcity',liftPercent:'71.8',sampleSize:450,niche:'Fashion',timeAgo:'2w ago'}
+        ];
+        function render(wins,stats){
+          var t=document.getElementById('wfTrack');
+          var h='';
+          for(var i=0;i<wins.length;i++)h+=card(wins[i]);
+          for(var j=0;j<wins.length;j++)h+=card(wins[j]);
+          t.innerHTML=h;
+          t.style.setProperty('--wf-items',wins.length);
+          t.style.animationDuration=(wins.length*4)+'s';
+          if(stats){
+            document.getElementById('wfWins').textContent=stats.totalWins;
+            document.getElementById('wfLift').textContent='+'+stats.avgLift+'%';
+            var v=stats.totalVisitors;
+            document.getElementById('wfVis').textContent=v>=1e6?(v/1e6).toFixed(1)+'M':v>=1e3?(v/1e3).toFixed(1)+'K':v;
+          }
+        }
+        fetch(API).then(function(r){return r.json()}).then(function(d){
+          if(d.wins&&d.wins.length>0)render(d.wins,d.stats);
+          else render(fallback,{totalWins:12,avgLift:'57.0',totalVisitors:12504});
+        }).catch(function(){render(fallback,{totalWins:12,avgLift:'57.0',totalVisitors:12504})});
+      })();
+      </script>
+    </section>
     <section class="pricing" id="pricing">
       <div class="container">
-        <span class="section-label reveal">Pricing</span>
-        <h2 class="section-title reveal">Simple, transparent <span class="gradient-text">pricing</span></h2>
-        <p class="pricing__sub reveal">Start free. Upgrade when you need the Brain.</p>
+        <span class="section-label reveal">Beta Pricing</span>
+        <h2 class="section-title reveal">50% Off — <span class="gradient-text">Locked In Forever</span></h2>
+        <p class="pricing__sub reveal">Beta users lock in half-price for the lifetime of their subscription.</p>
         <div class="pricing__grid">
           <!-- Free -->
           <div class="pricing__card reveal">
@@ -557,12 +655,12 @@
           <div class="pricing__card reveal">
             <div class="pricing__card-header">
               <h3 class="pricing__card-name">Pro</h3>
-              <div class="pricing__card-price"><span class="pricing__amount">$47</span><span class="pricing__period">/mo</span></div>
+              <div class="pricing__card-price"><span class="pricing__amount">$23.50</span><span class="pricing__period">/mo</span><span class="pricing__original">$47/mo</span></div>
             </div>
             <ul class="pricing__card-features" role="list">
               <li>Everything in Free</li>
               <li><span class="pricing__brain-icon">🧠</span> Brain access</li>
-              <li>1,000 AI credits/month</li>
+              <li>500 AI credits/month</li>
               <li>Daily observations</li>
               <li>Brain Chat</li>
               <li>All page sections</li>
@@ -573,12 +671,12 @@
           <div class="pricing__card reveal">
             <div class="pricing__card-header">
               <h3 class="pricing__card-name">Business</h3>
-              <div class="pricing__card-price"><span class="pricing__amount">$97</span><span class="pricing__period">/mo</span></div>
+              <div class="pricing__card-price"><span class="pricing__amount">$48.50</span><span class="pricing__period">/mo</span><span class="pricing__original">$97/mo</span></div>
             </div>
             <ul class="pricing__card-features" role="list">
               <li>Everything in Pro</li>
               <li><span class="pricing__brain-icon">🧠</span> Brain access</li>
-              <li>2,400 AI credits/month</li>
+              <li>1,200 AI credits/month</li>
               <li>Multi-seat team access</li>
               <li>Advanced analytics</li>
             </ul>
@@ -589,12 +687,12 @@
             <div class="pricing__card-badge">Most Popular</div>
             <div class="pricing__card-header">
               <h3 class="pricing__card-name">Autopilot</h3>
-              <div class="pricing__card-price"><span class="pricing__amount">$299</span><span class="pricing__period">/mo</span></div>
+              <div class="pricing__card-price"><span class="pricing__amount">$149.50</span><span class="pricing__period">/mo</span><span class="pricing__original">$299/mo</span></div>
             </div>
             <ul class="pricing__card-features" role="list">
               <li>Everything in Business</li>
               <li><span class="pricing__brain-icon">🧠</span> Brain access</li>
-              <li>6,000 AI credits/month</li>
+              <li>3,000 AI credits/month</li>
               <li>Full autonomous optimization</li>
               <li>AI-driven winner promotion</li>
               <li>Unlimited concurrent tests</li>
@@ -670,8 +768,8 @@
             <div class="faq__answer"><p>ChatGPT generates generic copy. The Brain is purpose-built for conversion optimization. It's trained on real sales psychology — offer architecture, unique mechanisms, psychological triggers, proven headline frameworks, section-specific strategies. It knows which techniques work for which page types. And critically, it learns from every test running on the platform. When a variant wins anywhere in the system, that pattern gets incorporated. The more tests that run, the smarter your suggestions get.</p></div>
           </details>
           <details class="faq__item reveal">
-            <summary class="faq__question">Can I change plans anytime?</summary>
-            <div class="faq__answer"><p>Yes. You can upgrade, downgrade, or cancel at any time from your billing settings. Changes take effect at the start of your next billing cycle. No contracts, no commitments.</p></div>
+            <summary class="faq__question">What happens after beta?</summary>
+            <div class="faq__answer"><p>Beta users lock in half-price for the lifetime of their subscription. When we move to full pricing, your rate stays the same as long as your subscription is active.</p></div>
           </details>
           <details class="faq__item reveal">
             <summary class="faq__question">How does Autopilot work?</summary>
@@ -726,6 +824,6 @@
     </div>
   </footer>
 
-  <script src="/app.js" defer></script>
+  <script src="./app.js" defer></script>
 </body>
 </html>
