@@ -5984,7 +5984,7 @@ ${observationText}`;
       user = (await storage.updateUser(user.id, { referralCode: code })) || user;
     }
 
-    const referralLink = `https://app.siteamoeba.com/?ref=${user.referralCode}`;
+    const referralLink = `https://siteamoeba.com/?ref=${user.referralCode}`;
     res.json({ referralCode: user.referralCode, referralLink });
   });
 
@@ -6031,7 +6031,7 @@ ${observationText}`;
       })
     );
 
-    const referralLink = `https://app.siteamoeba.com/?ref=${user.referralCode}`;
+    const referralLink = `https://siteamoeba.com/?ref=${user.referralCode}`;
     res.json({
       referralCode: user.referralCode,
       referralLink,
