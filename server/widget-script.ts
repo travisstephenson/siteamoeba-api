@@ -393,6 +393,11 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       return;
     }
 
+    // Skip if already applied (prevents retry loops from double-swapping)
+    if (allElements[0] && allElements[0].getAttribute("data-sa-swapped") === "true") {
+      return;
+    }
+
     // Save originals for safe revert if validation fails
     var originals = [];
     for (var oi = 0; oi < allElements.length; oi++) {
@@ -407,6 +412,8 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         allElements[0].textContent = originals[0]; // revert to control — safe state
         reportDisplayIssue(variantId, "single_element_mismatch");
         console.warn("SiteAmoeba: variant display check failed, reverted to control", selector);
+      } else {
+        allElements[0].setAttribute("data-sa-swapped", "true");
       }
       return;
     }
@@ -574,16 +581,23 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           setTimeout(function() {
             if (applied) return;
             handleAssignData(data);
-            // Check if it actually landed — if yes, stop retrying
+            // Check if the variant text is now visible on the page
+            // (searching for the VARIANT text, not the control text — control was already replaced)
             var checks = [];
-            if (data.headline) checks.push(data.headline);
-            if (data.subheadline) checks.push(data.subheadline);
-            if (data.sections) data.sections.forEach(function(s) { checks.push(s); });
+            if (data.headline && !data.headline.isControl) checks.push(data.headline);
+            if (data.subheadline && !data.subheadline.isControl) checks.push(data.subheadline);
+            if (data.sections) data.sections.forEach(function(s) { if (!s.isControl) checks.push(s); });
             for (var i = 0; i < checks.length; i++) {
               var v = checks[i];
-              if (!v || !v.text || v.isControl) continue;
-              var found = findElements(v.selector, v.currentText, v.controlText, v.category);
-              if (found.length > 0) { applied = true; break; }
+              if (!v || !v.text) continue;
+              // Search for the variant text on the page (not the control text)
+              var variantWords = v.text.toLowerCase().split(/ +/).filter(function(w) { return w.length > 4; }).slice(0, 5);
+              var pageText = document.body.textContent.toLowerCase();
+              var matchCount = 0;
+              for (var w = 0; w < variantWords.length; w++) {
+                if (pageText.indexOf(variantWords[w]) !== -1) matchCount++;
+              }
+              if (matchCount >= Math.ceil(variantWords.length * 0.6)) { applied = true; break; }
             }
           }, delay);
         });
