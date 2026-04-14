@@ -575,14 +575,13 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         }
         // Retry with delays for dynamic pages (GHL, Webflow etc. render content after load)
         // In preview mode: attempt to apply on every retry until it succeeds
-        var retries = [0, 300, 800, 1500, 2500, 4000, 6000];
+        // Retry with delays for dynamic pages — but only apply ONCE
+        var retries = [0, 400, 1200, 2500, 5000];
         var applied = false;
         retries.forEach(function(delay) {
           setTimeout(function() {
             if (applied) return;
-            handleAssignData(data);
-            // Check if the variant text is now visible on the page
-            // (searching for the VARIANT text, not the control text — control was already replaced)
+            // Check if the variant text is already on the page (from a prior retry)
             var checks = [];
             if (data.headline && !data.headline.isControl) checks.push(data.headline);
             if (data.subheadline && !data.subheadline.isControl) checks.push(data.subheadline);
@@ -590,15 +589,18 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
             for (var i = 0; i < checks.length; i++) {
               var v = checks[i];
               if (!v || !v.text) continue;
-              // Search for the variant text on the page (not the control text)
               var variantWords = v.text.toLowerCase().split(/ +/).filter(function(w) { return w.length > 4; }).slice(0, 5);
               var pageText = document.body.textContent.toLowerCase();
-              var matchCount = 0;
+              var hits = 0;
               for (var w = 0; w < variantWords.length; w++) {
-                if (pageText.indexOf(variantWords[w]) !== -1) matchCount++;
+                if (pageText.indexOf(variantWords[w]) !== -1) hits++;
               }
-              if (matchCount >= Math.ceil(variantWords.length * 0.6)) { applied = true; break; }
+              if (hits >= Math.ceil(variantWords.length * 0.5)) { applied = true; return; }
             }
+            // Not yet applied — try now
+            handleAssignData(data);
+            // Mark as applied optimistically (the safety checks inside will revert if it failed)
+            applied = true;
           }, delay);
         });
       })
