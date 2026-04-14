@@ -616,6 +616,20 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({ token });
   });
 
+  // GET /api/spa-html — returns the current SPA index.html (for CF Worker to proxy instead of FIXED_HTML)
+  app.get("/api/spa-html", (_req: Request, res: Response) => {
+    const fs = require("fs");
+    const path = require("path");
+    const htmlPath = path.resolve(__dirname, "public", "index.html");
+    if (fs.existsSync(htmlPath)) {
+      res.header("Cache-Control", "public, max-age=60");
+      res.header("Content-Type", "text/html; charset=utf-8");
+      res.sendFile(htmlPath);
+    } else {
+      res.status(404).json({ error: "SPA not found" });
+    }
+  });
+
   // POST /api/admin/refresh-intelligence — manually refresh network intelligence
   app.post("/api/admin/refresh-intelligence", requireAdmin, async (_req: Request, res: Response) => {
     try {
