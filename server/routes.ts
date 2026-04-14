@@ -3842,6 +3842,91 @@ export async function registerRoutes(server: Server, app: Express) {
         pattern_interrupt: "Pattern Interrupt", scarcity: "Scarcity",
       };
 
+      // Pre-taught knowledge sources
+      const knowledgeSources = {
+        croResearch: {
+          label: "CRO Research",
+          description: "Data-backed conversion optimization intelligence from CXL, Baymard, NNGroup",
+          categories: [
+            { name: "General CRO Principles", dataPoints: 12 },
+            { name: "Headline Optimization", dataPoints: 14 },
+            { name: "Subheadline", dataPoints: 5 },
+            { name: "CTA Optimization", dataPoints: 15 },
+            { name: "Hero Section", dataPoints: 6 },
+            { name: "Social Proof", dataPoints: 10 },
+            { name: "Trust & Guarantee", dataPoints: 8 },
+            { name: "Pricing Psychology", dataPoints: 11 },
+            { name: "Benefits & Copy Length", dataPoints: 9 },
+            { name: "Video Impact", dataPoints: 7 },
+            { name: "Form Optimization", dataPoints: 10 },
+            { name: "Checkout Flow", dataPoints: 8 },
+            { name: "Page Speed", dataPoints: 6 },
+            { name: "Mobile Optimization", dataPoints: 7 },
+            { name: "Behavioral Psychology", dataPoints: 12 },
+            { name: "Traffic Source Patterns", dataPoints: 6 },
+            { name: "Scroll & Engagement", dataPoints: 8 },
+            { name: "Testing Methodology", dataPoints: 9 },
+          ],
+          totalDataPoints: 145,
+        },
+        salesPsychology: {
+          label: "Sales Psychology & Frameworks",
+          description: "Pre-taught persuasion mechanisms, offer architecture, and conversion frameworks",
+          categories: [
+            { name: "Authority Placement", dataPoints: 4 },
+            { name: "Pattern Interrupt (Wallpaper Filter)", dataPoints: 5 },
+            { name: "The Lego Method", dataPoints: 3 },
+            { name: "Pre-Suasion & Priming", dataPoints: 6 },
+            { name: "Commitment & Consistency", dataPoints: 4 },
+            { name: "R.I.C.E. Framework", dataPoints: 5 },
+            { name: "New Bad Guy Technique", dataPoints: 3 },
+            { name: "Buyer Loop (Micro-Commitments)", dataPoints: 5 },
+            { name: "Offer Architecture (3 Tests)", dataPoints: 6 },
+            { name: "6 Cognitive Biases (Google Research)", dataPoints: 6 },
+            { name: "Irresistible Offer Components", dataPoints: 4 },
+            { name: "Before/After Bridge", dataPoints: 4 },
+            { name: "Missing % Concept", dataPoints: 3 },
+            { name: "Unique Mechanism Creation", dataPoints: 8 },
+            { name: "Mechanism Positioning", dataPoints: 3 },
+            { name: "AIDA Framework", dataPoints: 4 },
+            { name: "15-Section Sales Page Structure", dataPoints: 15 },
+          ],
+          totalDataPoints: 88,
+        },
+        pageContextRules: {
+          label: "Page Context Rules",
+          description: "Dynamic rules engine that adapts recommendations based on page type, goal, price point, and niche",
+          categories: [
+            { name: "Sales Page Rules", dataPoints: 8 },
+            { name: "Opt-in Page Rules", dataPoints: 6 },
+            { name: "Webinar Registration Rules", dataPoints: 6 },
+            { name: "SaaS Landing Rules", dataPoints: 7 },
+            { name: "E-commerce Rules", dataPoints: 7 },
+            { name: "High-Ticket ($500+) Rules", dataPoints: 5 },
+            { name: "Low-Ticket ($1-50) Rules", dataPoints: 4 },
+            { name: "Niche-Specific Adaptations", dataPoints: 10 },
+          ],
+          totalDataPoints: 53,
+        },
+        autopilotPlaybooks: {
+          label: "Autopilot Playbooks",
+          description: "Section-by-section optimization sequences for 6 page types",
+          categories: [
+            { name: "Sales Page (10 steps)", dataPoints: 10 },
+            { name: "Opt-in Page (5 steps)", dataPoints: 5 },
+            { name: "Webinar Registration (6 steps)", dataPoints: 6 },
+            { name: "Product Page (6 steps)", dataPoints: 6 },
+            { name: "SaaS Landing (5 steps)", dataPoints: 5 },
+            { name: "Generic Landing (5 steps)", dataPoints: 5 },
+          ],
+          totalDataPoints: 37,
+        },
+      };
+
+      const totalPreTaughtKnowledge = Object.values(knowledgeSources).reduce(
+        (sum, src) => sum + src.totalDataPoints, 0
+      );
+
       res.json({
         stats: {
           pagesScanned: parseInt(s.pages_scanned),
@@ -3853,7 +3938,10 @@ export async function registerRoutes(server: Server, app: Express) {
           revenueEvents: parseInt(s.revenue_events),
           sessionsAnalyzed: parseInt(s.sessions_analyzed),
           strategiesTested: parseInt(s.strategies_tested),
+          totalPreTaughtKnowledge,
+          totalKnowledgePoints: totalPreTaughtKnowledge + parseInt(s.total_tests) + parseInt(s.behavioral_signals),
         },
+        knowledgeSources,
         tests: tests.rows.map((t: any) => ({
           sectionType: t.section_type,
           winnerStrategy: STRATEGY_LABELS[t.winner_strategy] || t.winner_strategy,
