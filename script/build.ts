@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
-import { rm, readFile } from "fs/promises";
+import { rm, readFile, copyFile } from "fs/promises";
+import { existsSync } from "fs";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -57,6 +58,16 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
+
+  // Copy standalone static pages to dist/public
+  const staticPages = ["client/brain.html"];
+  for (const page of staticPages) {
+    if (existsSync(page)) {
+      const filename = page.split("/").pop()!;
+      await copyFile(page, `dist/public/${filename}`);
+      console.log(`copied ${filename} to dist/public/`);
+    }
+  }
 }
 
 buildAll().catch((err) => {
