@@ -266,13 +266,17 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
 
   // Reports a display issue to the server — fire and forget via image beacon.
   // Never throws; failures are swallowed so a logging error can't affect the page.
-  function reportDisplayIssue(variantId, reason) {
+  function reportDisplayIssue(variantId, reason, extra) {
     try {
       var img = new Image();
-      img.src = API + "/api/widget/flag-variant?vid=" + encodeURIComponent(vid || "")
+      var url = API + "/api/widget/flag-variant?vid=" + encodeURIComponent(vid || "")
               + "&variantId=" + encodeURIComponent(variantId || "")
               + "&cid=" + encodeURIComponent(String(CID))
               + "&reason=" + encodeURIComponent(reason || "display_check_failed");
+      if (extra && extra.matchRatio !== undefined) {
+        url += "&matchRatio=" + extra.matchRatio.toFixed(2);
+      }
+      img.src = url;
     } catch(e) {}
   }
 
@@ -281,6 +285,38 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
 
     var allElements = findElements(selector, currentText, controlText, category);
     console.log("[SA] applySectionVariant", category, "found", allElements.length, "elements", "selector:", selector);
+
+    // === CONTENT MISMATCH DETECTION ===
+    // If the page's actual content has changed since the scan (user edited their page),
+    // the control text won't match what's on the page. Swapping in a variant would
+    // replace NEW content the user intentionally put there, causing confusion.
+    // Skip the swap and report the mismatch so the user knows to re-scan.
+    if (allElements.length > 0 && controlText) {
+      var pageText = "";
+      for (var pt = 0; pt < allElements.length; pt++) pageText += " " + (allElements[pt].textContent || "");
+      pageText = pageText.trim().toLowerCase().replace(/\s+/g, " ");
+      var ctrlText = (controlText || "").trim().toLowerCase().replace(/\s+/g, " ");
+      // Tokenize and check overlap
+      var ctrlTokens = ctrlText.split(" ").filter(function(w) { return w.length > 3; });
+      var matchCount = 0;
+      for (var mt = 0; mt < ctrlTokens.length; mt++) {
+        if (pageText.indexOf(ctrlTokens[mt]) !== -1) matchCount++;
+      }
+      var matchRatio = ctrlTokens.length > 0 ? matchCount / ctrlTokens.length : 1;
+      if (matchRatio < 0.35 && ctrlTokens.length >= 3) {
+        // Page content has changed significantly since the scan
+        console.warn("[SA] CONTENT MISMATCH: page " + category + " text does not match control (" + (matchRatio * 100).toFixed(0) + "% match). Skipping swap. Please re-scan your page.");
+        console.warn("[SA]   Page has: \"" + pageText.substring(0, 80) + "...\"");
+        console.warn("[SA]   Control: \"" + ctrlText.substring(0, 80) + "...\"");
+        // Report the mismatch to the server so it shows in the dashboard
+        reportDisplayIssue(variantId, "content_mismatch", {
+          pageText: pageText.substring(0, 200),
+          controlText: ctrlText.substring(0, 200),
+          matchRatio: matchRatio
+        });
+        return; // Do NOT apply the swap
+      }
+    }
 
     // For headline/subheadline/cta: ensure we have the right element(s).
     // On GHL, CSS selectors with comma-separated classes (multi-line headings) may
