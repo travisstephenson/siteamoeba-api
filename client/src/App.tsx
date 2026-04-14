@@ -3,6 +3,7 @@ import { useHashLocation } from "wouter/use-hash-location";
 import { queryClient } from "./lib/queryClient";
 import { ErrorBoundary, initGlobalErrorCapture } from "@/components/error-boundary";
 import { OnboardingModal } from "@/components/onboarding-modal";
+import { BrainUpsellModal } from "@/components/brain-upsell-modal";
 import { useEffect } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -75,6 +76,7 @@ function App() {
             <AppRouter />
           </Router>
           <OnboardingModal />
+          <BrainUpsellModal />
           <Toaster />
         </TooltipProvider>
       </QueryClientProvider>
