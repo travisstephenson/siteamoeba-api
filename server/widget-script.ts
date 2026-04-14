@@ -519,24 +519,87 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   var previewToken = (window.location.search.match(/[?&]sa_token=([^&]+)/) || [])[1] || "";
   var isPreviewMode = !!previewMatch;
 
+  // Direct text finder — searches ALL elements of a type for the best text match.
+  // Simpler and more reliable than the selector+fallback cascade, used for preview mode.
+  function directTextFind(controlText, category) {
+    var tags = category === "cta" ? "button, a, [class*='btn']" : "h1, h2, h3, [class*='heading'], [class*='title']";
+    var candidates = document.querySelectorAll(tags);
+    var ctrlWords = (controlText || "").trim().toLowerCase().split(/ +/).filter(function(w) { return w.length > 3; });
+    if (ctrlWords.length === 0) return null;
+    var bestEl = null;
+    var bestScore = 0;
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      var elText = (el.textContent || "").trim().toLowerCase();
+      if (elText.length < 10) continue;
+      var score = 0;
+      for (var j = 0; j < ctrlWords.length; j++) {
+        if (elText.indexOf(ctrlWords[j]) !== -1) score++;
+      }
+      if (score > bestScore) { bestScore = score; bestEl = el; }
+    }
+    // Require at least 40% word overlap
+    if (bestEl && bestScore >= Math.ceil(ctrlWords.length * 0.4)) {
+      console.log("[SA] directTextFind: matched", bestScore + "/" + ctrlWords.length, "words in", bestEl.tagName, "text:", (bestEl.textContent||"").substring(0,50));
+      return bestEl;
+    }
+    console.log("[SA] directTextFind: no match found. Best:", bestScore + "/" + ctrlWords.length);
+    return null;
+  }
+
   function handleAssignData(data) {
       // Apply headline variant — SKIP if control (let original page be the control)
       if (data.headline && data.headline.text && !data.headline.isControl) {
-        applySectionVariant(
-          data.headline.selector, data.headline.text,
-          data.headline.testMethod || "text_swap",
-          data.headline.controlText, data.headline.category || "headline",
-          data.headline.currentText, data.headline.id
-        );
+        // In preview mode, try a direct text-match approach first
+        // (more reliable on pages with many H1s where selector-based matching struggles)
+        if (isPreviewMode && data.headline.controlText) {
+          var directMatch = directTextFind(data.headline.controlText, "headline");
+          if (directMatch) {
+            applyTextToElement(directMatch, data.headline.text, data.headline.testMethod || "text_swap", "headline");
+            directMatch.setAttribute("data-sa-swapped", "true");
+            console.log("[SA] preview: direct text match applied for headline");
+          } else {
+            // Fall back to normal approach
+            applySectionVariant(
+              data.headline.selector, data.headline.text,
+              data.headline.testMethod || "text_swap",
+              data.headline.controlText, data.headline.category || "headline",
+              data.headline.currentText, data.headline.id
+            );
+          }
+        } else {
+          applySectionVariant(
+            data.headline.selector, data.headline.text,
+            data.headline.testMethod || "text_swap",
+            data.headline.controlText, data.headline.category || "headline",
+            data.headline.currentText, data.headline.id
+          );
+        }
       }
       // Apply subheadline variant — SKIP if control
       if (data.subheadline && data.subheadline.text && !data.subheadline.isControl) {
-        applySectionVariant(
-          data.subheadline.selector, data.subheadline.text,
-          data.subheadline.testMethod || "text_swap",
-          data.subheadline.controlText, data.subheadline.category || "subheadline",
-          data.subheadline.currentText, data.subheadline.id
-        );
+        if (isPreviewMode && data.subheadline.controlText) {
+          var directSubMatch = directTextFind(data.subheadline.controlText, "subheadline");
+          if (directSubMatch) {
+            applyTextToElement(directSubMatch, data.subheadline.text, data.subheadline.testMethod || "text_swap", "subheadline");
+            directSubMatch.setAttribute("data-sa-swapped", "true");
+            console.log("[SA] preview: direct text match applied for subheadline");
+          } else {
+            applySectionVariant(
+              data.subheadline.selector, data.subheadline.text,
+              data.subheadline.testMethod || "text_swap",
+              data.subheadline.controlText, data.subheadline.category || "subheadline",
+              data.subheadline.currentText, data.subheadline.id
+            );
+          }
+        } else {
+          applySectionVariant(
+            data.subheadline.selector, data.subheadline.text,
+            data.subheadline.testMethod || "text_swap",
+            data.subheadline.controlText, data.subheadline.category || "subheadline",
+            data.subheadline.currentText, data.subheadline.id
+          );
+        }
       }
       // Apply section variants (body_copy, CTAs, etc.) — SKIP controls
       if (data.sections && Array.isArray(data.sections)) {
