@@ -330,8 +330,8 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       if (matchRatio < 0.35 && ctrlTokens.length >= 3) {
         // Page content has changed significantly since the scan
         console.warn("[SA] CONTENT MISMATCH: page " + category + " text does not match control (" + (matchRatio * 100).toFixed(0) + "% match). Skipping swap. Please re-scan your page.");
-        console.warn("[SA]   Page has: \"" + pageText.substring(0, 80) + "...\"");
-        console.warn("[SA]   Control: \"" + ctrlText.substring(0, 80) + "...\"");
+        console.warn("[SA]   Page has: '" + pageText.substring(0, 80) + "...'");
+        console.warn("[SA]   Control: '" + ctrlText.substring(0, 80) + "...'");
         // Report the mismatch to the server so it shows in the dashboard
         reportDisplayIssue(variantId, "content_mismatch", {
           pageText: pageText.substring(0, 200),
