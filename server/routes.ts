@@ -563,18 +563,46 @@ export async function registerRoutes(server: Server, app: Express) {
       }
 
       // 4) customer.subscription.deleted — subscription fully canceled
+      // CRITICAL: Only downgrade if this was the user's CURRENT subscription.
+      // During plan upgrades, the OLD subscription gets canceled, which fires this event.
+      // We must NOT downgrade the user if they still have an active (newer) subscription.
       if (event.type === "customer.subscription.deleted") {
+        const deletedSubId = event.data?.object?.id;
         const customerId = event.data?.object?.customer;
         if (customerId) {
           const user = await storage.getUserByStripeCustomerId(customerId);
           if (user) {
-            await storage.updateUser(user.id, {
-              plan: "free",
-              creditsLimit: 0,
-              stripeSubscriptionId: null,
-              concurrentTestLimit: 1,
-            });
-            console.log(`[billing-webhook] Subscription deleted: downgraded user ${user.id} to free`);
+            // Only downgrade if the deleted sub matches the user's CURRENT sub ID
+            // If they upgraded, their stripeSubscriptionId already points to the new sub
+            if (user.stripeSubscriptionId === deletedSubId || !user.stripeSubscriptionId) {
+              // Double-check: see if they have any OTHER active subs in Stripe
+              let hasOtherActiveSub = false;
+              if (stripe) {
+                try {
+                  const activeSubs = await stripe.subscriptions.list({ customer: customerId, status: 'active', limit: 5 });
+                  hasOtherActiveSub = activeSubs.data.some((s: any) => s.id !== deletedSubId);
+                  if (hasOtherActiveSub) {
+                    // They have another active sub — sync to it instead of downgrading
+                    const bestSub = activeSubs.data.find((s: any) => s.id !== deletedSubId);
+                    if (bestSub) await upgradePlanFromSubscription(bestSub, user);
+                    console.log(`[billing-webhook] Sub ${deletedSubId} deleted but user ${user.id} has another active sub — synced instead of downgrading`);
+                  }
+                } catch (e: any) {
+                  console.warn(`[billing-webhook] Could not check other subs: ${e.message}`);
+                }
+              }
+              if (!hasOtherActiveSub) {
+                await storage.updateUser(user.id, {
+                  plan: "free",
+                  creditsLimit: 0,
+                  stripeSubscriptionId: null,
+                  concurrentTestLimit: 1,
+                });
+                console.log(`[billing-webhook] Subscription deleted: downgraded user ${user.id} to free`);
+              }
+            } else {
+              console.log(`[billing-webhook] Sub ${deletedSubId} deleted but user ${user.id} has different current sub ${user.stripeSubscriptionId} — skipping downgrade`);
+            }
           }
         }
       }
