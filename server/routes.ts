@@ -1422,9 +1422,11 @@ export async function registerRoutes(server: Server, app: Express) {
     if (chargeDesc.includes("auto-recharge for sub-account")) return false;
     if (amount <= 0) return false;
 
-    // Dedup
+    // Dedup: skip if already processed OR previously rejected
     const existing = await pool.query("SELECT id FROM revenue_events WHERE external_id = $1 LIMIT 1", [externalId]);
     if (existing.rows.length > 0) return false;
+    const rejected = await pool.query("SELECT id FROM rejected_charges WHERE charge_id = $1 LIMIT 1", [externalId]);
+    if (rejected.rows.length > 0) return false;
 
     // === ATTRIBUTION ===
     const userCampaigns = await storage.getCampaignsByUser(userId);
@@ -1499,8 +1501,15 @@ export async function registerRoutes(server: Server, app: Express) {
     // through email/customer chain/time proximity, do NOT attribute it.
     // This prevents unrelated revenue (high-ticket 1:1 sales, manual invoices, etc.)
     // from being falsely counted as funnel conversions.
+    // We store a rejected marker so the poller doesn't re-process this charge every cycle.
     if (!matchedCampaignId) {
       console.log(`[stripe-poll] UNATTRIBUTED: $${amount} from ${customerEmail || 'no-email'} — no visitor match found, skipping`);
+      try {
+        await pool.query(
+          `INSERT INTO rejected_charges (user_id, charge_id, reason) VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`,
+          [userId, externalId, `unattributed: no visitor match for ${customerEmail || 'unknown'} $${amount}`]
+        );
+      } catch (e) { /* non-fatal */ }
       return false;
     }
 
