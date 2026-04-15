@@ -1411,24 +1411,10 @@ export async function registerRoutes(server: Server, app: Express) {
       if (tm.rows.length > 0) { matchedVisitorId = tm.rows[0].visitor_id; matchedCampaignId = tm.rows[0].campaign_id; }
     }
 
-    // 4. Fallback: most recent active campaign
-    if (!matchedCampaignId) {
-      console.log(`[stripe-poll] Step 4 fallback: ${userCampaigns.length} total campaigns, chargeDate=${chargeDate}`);
-      const active = userCampaigns.filter((c: any) => {
-        const isActive = c.status === "active";
-        const dateOk = new Date(chargeDate) >= new Date(c.createdAt);
-        if (!isActive || !dateOk) console.log(`[stripe-poll]   C${c.id} status=${c.status} created=${c.createdAt} dateOk=${dateOk}`);
-        return isActive && dateOk;
-      }).sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-      console.log(`[stripe-poll] Step 4: ${active.length} active campaigns match`);
-      if (active.length > 0) matchedCampaignId = active[0].id;
-    }
-
-    if (!matchedCampaignId) { console.log(`[stripe-poll] SKIPPED: no campaign match for ${customerEmail || 'no-email'} $${amount}`); return false; }
-
-    // 5. If we have a campaign but no visitor, find the most recent visitor on this campaign
-    // who arrived within 4 hours before the charge. They visited, saw a variant, then bought.
-    // This connects the Stripe buyer to their variant assignment.
+    // 4. VISITOR-GATED ATTRIBUTION — only attribute if a tracked visitor exists
+    // If we matched a campaign but not a visitor, try to find one who visited recently.
+    // If NO visitor can be found at all, do NOT attribute the charge — it likely came from
+    // a different channel (high-ticket sales, manual invoices, other funnels, etc.)
     if (!matchedVisitorId && matchedCampaignId) {
       const recentVisitor = await pool.query(
         `SELECT id FROM visitors
@@ -1443,6 +1429,34 @@ export async function registerRoutes(server: Server, app: Express) {
         matchedVisitorId = recentVisitor.rows[0].id;
         console.log(`[stripe-poll] Matched charge to recent visitor ${matchedVisitorId} on C${matchedCampaignId}`);
       }
+    }
+
+    // 5. If we STILL have no campaign match AND no visitor match, try matching the email
+    // to ANY visitor (converted or not) who visited within the last 7 days.
+    // This catches buyers who visited the page, left, and came back to buy later.
+    if (!matchedCampaignId && customerEmail) {
+      const recentEmailVisitor = await pool.query(
+        `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v 
+         JOIN campaigns c ON c.id = v.campaign_id
+         WHERE c.user_id = $1 AND v.customer_email = $2
+           AND v.first_seen::timestamptz > ($3::timestamptz - INTERVAL '7 days')
+         ORDER BY v.first_seen DESC LIMIT 1`,
+        [userId, customerEmail, chargeDate]
+      );
+      if (recentEmailVisitor.rows.length > 0) {
+        matchedVisitorId = recentEmailVisitor.rows[0].visitor_id;
+        matchedCampaignId = recentEmailVisitor.rows[0].campaign_id;
+        console.log(`[stripe-poll] Late email match: visitor ${matchedVisitorId} on C${matchedCampaignId}`);
+      }
+    }
+
+    // FINAL GATE: If we cannot tie this charge to a tracked visitor or a known campaign
+    // through email/customer chain/time proximity, do NOT attribute it.
+    // This prevents unrelated revenue (high-ticket 1:1 sales, manual invoices, etc.)
+    // from being falsely counted as funnel conversions.
+    if (!matchedCampaignId) {
+      console.log(`[stripe-poll] UNATTRIBUTED: $${amount} from ${customerEmail || 'no-email'} — no visitor match found, skipping`);
+      return false;
     }
 
     // Backfill email on visitor + set customer chain + mark converted
