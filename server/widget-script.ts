@@ -876,34 +876,91 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       };
 
       function classifyEl(el) {
-        // Check id, class, and heading text for classification keywords
-        var idClass = (el.id || "") + " " + (el.className || "");
-        // Get the first heading inside
-        var heading = el.querySelector("h1, h2, h3, h4");
-        var headingText = heading ? (heading.innerText || "").substring(0, 120) : "";
-        // Build search text from ONLY the section's own attributes + its heading
-        // Do NOT include child element classes to avoid false positives from
-        // persistent page elements (sticky sidebars, footers with prices, etc.)
-        var searchText = idClass + " " + headingText;
-        // Element-based hints — only add if the element is a DIRECT or near-direct child
-        // (avoids sticky sidebars or repeated elements polluting every section)
-        if (el.querySelector(":scope > video, :scope > div > video, :scope iframe[src*='youtube'], :scope iframe[src*='vimeo']")) searchText += " video";
-        if (el.querySelector(":scope > form, :scope > div > form")) searchText += " form cta";
-        if (el.querySelector(":scope > blockquote, :scope > div > blockquote, :scope [class*='testimonial'], :scope [class*='review']")) searchText += " testimonial";
-        // Pricing: only flag if the section's OWN id/class or heading mentions pricing
-        // Don't check child elements — too many false positives from sticky price widgets
-        if (/pricing|price.?table|price.?card|plan.?card|pricing.?section/i.test(idClass)) searchText += " pricing";
+        // === CONTENT-FIRST CLASSIFICATION ===
+        // Read the actual text in the section to determine what it's about.
+        // Never classify based on CSS class names — page builders use arbitrary
+        // class names (noBorder, c-row, etc.) that cause false positives.
 
-        // Priority: check most specific labels first by iterating keyword map in order
-        // The keyword map is ordered from most specific (hero) to least (footer)
-        for (var key in classifyKeywords) {
-          if (classifyKeywords[key].test(searchText)) return key;
+        // 1. Get the heading — this is the strongest signal for what the section is about
+        var heading = el.querySelector("h1, h2, h3, h4");
+        var headingText = heading ? (heading.innerText || "").trim() : "";
+
+        // 2. Get visible body text (first 400 chars, skip scripts/styles)
+        var bodyText = "";
+        try {
+          var clone = el.cloneNode(true);
+          var kill = clone.querySelectorAll("script, style, noscript, svg");
+          for (var k = 0; k < kill.length; k++) kill[k].remove();
+          bodyText = (clone.innerText || clone.textContent || "").substring(0, 400).toLowerCase();
+        } catch(e) {
+          bodyText = (el.innerText || "").substring(0, 400).toLowerCase();
         }
-        // Fallback: try to infer from the section's visible text content (first 200 chars)
-        var visibleText = (el.innerText || "").substring(0, 200).toLowerCase();
-        if (/testimoni|\".*\"|\u201c|\u201d|customer.?said|people.?say/i.test(visibleText)) return "testimonials";
-        if (/guarantee|money.?back|risk.?free|refund/i.test(visibleText)) return "guarantee";
-        if (/faq|frequently|common.?question/i.test(visibleText)) return "faq";
+
+        // 3. Check for structural elements inside the section
+        var hasVideo = !!el.querySelector("video, iframe[src*='youtube'], iframe[src*='vimeo'], iframe[src*='wistia']");
+        var hasForm = !!el.querySelector("form, input[type='email'], input[type='text']");
+        var hasBlockquote = !!el.querySelector("blockquote");
+        var hasStars = !!el.querySelector("[class*='star'], [class*='rating']");
+
+        // 4. Content-based classification — check text meaning, not CSS
+        var ht = headingText.toLowerCase();
+
+        // Video section
+        if (hasVideo && bodyText.length < 150) return "video";
+        if (hasVideo && /watch|play|video|see how/i.test(headingText)) return "video";
+
+        // FAQ
+        if (/faq|frequently asked|common question|q\s*[&+]\s*a/i.test(headingText)) return "faq";
+        if (/faq|frequently asked/i.test(bodyText) && bodyText.split("?").length >= 3) return "faq";
+
+        // Testimonials / social proof
+        if (hasBlockquote && bodyText.length > 50) return "testimonials";
+        if (hasStars) return "testimonials";
+        if (/testimonial|what (people|clients|customers|members|users) (say|think|are saying)/i.test(headingText)) return "testimonials";
+        if (/\u201c|\u201d|\u2018|\u2019/i.test(bodyText) && bodyText.split(/\u201c|\u201d/).length >= 3) return "testimonials";
+        if (/satisfied|happy (customer|client)|success stor|real results|people trust|\d+[,.]?\d*\s*(customer|client|user|member|review)/i.test(bodyText)) return "social_proof";
+
+        // Guarantee / risk reversal
+        if (/guarantee|money.?back|risk.?free|refund|no.?risk|100%.?(satisfaction|guaranteed)/i.test(headingText)) return "guarantee";
+        if (/guarantee|money.?back|risk.?free|refund/i.test(bodyText) && bodyText.length < 300) return "guarantee";
+
+        // Pricing / offer
+        if (/pricing|how much|investment|regular price|today.?s price|one.?time|payment plan|choose your plan/i.test(headingText)) return "pricing";
+        if (/\$\d+.*\$\d+|regular price.*\$|was \$.*now \$/i.test(bodyText)) return "pricing";
+
+        // Bonus
+        if (/bonus|free gift|also (get|include|receive)|extra|throw in/i.test(headingText)) return "bonus";
+
+        // CTA / form section
+        if (hasForm) return "cta";
+        if (/get (started|access|instant)|sign up|register|enroll|claim|reserve|download now|add to cart|join/i.test(headingText)) return "cta";
+
+        // Problem / pain
+        if (/problem|struggle|frustrat|pain|tired of|sick of|can't seem|doesn't work|failing|broken/i.test(headingText)) return "problem";
+        if (/sound familiar|ring a bell|felt like|you've tried/i.test(bodyText.substring(0, 200))) return "problem";
+
+        // Solution / how it works
+        if (/how (it|this) works|the (solution|answer|method|system|secret|process)|introducing|here'?s (how|what|why)/i.test(headingText)) return "solution";
+        if (/step \d|step.?by.?step|module \d|phase \d|pillar \d/i.test(bodyText)) return "solution";
+
+        // Benefits / features / what you get
+        if (/what you (get|receive|learn|discover)|inside|everything (you get|included)|feature|benefit|here'?s what/i.test(headingText)) return "benefits";
+
+        // About / bio
+        if (/about (me|us|the)|who (we|i) (am|are)|my (story|mission|journey)|meet (your|the)|founder/i.test(headingText)) return "about";
+
+        // Scarcity / urgency  
+        if (/limited|hurry|expir|countdown|only \d+ (left|spot|seat)|act (now|fast|today)|don't (wait|miss)/i.test(headingText)) return "scarcity";
+
+        // Hero — first section with a prominent heading
+        var rect = el.getBoundingClientRect();
+        var absTop = rect.top + (window.scrollY || window.pageYOffset);
+        if (absTop < 200 && headingText.length > 15) return "hero";
+
+        // Footer
+        if (/copyright|\u00a9|all rights reserved|privacy|terms of (use|service)/i.test(bodyText) && bodyText.length < 200) return "footer";
+
+        // Default: use truncated heading as the label if we have one
         return "content";
       }
 

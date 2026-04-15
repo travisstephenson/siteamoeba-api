@@ -2522,12 +2522,14 @@ function SectionDropoffPanel({ campaignId }: { campaignId: number }) {
                   <div className="relative flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="text-[10px] text-muted-foreground w-5 shrink-0 tabular-nums">{section.offsetPct}%</span>
-                      <span className="text-xs font-medium truncate">{section.label}</span>
-                      {section.heading && (
-                        <span className="text-[10px] text-muted-foreground truncate hidden sm:inline">
-                          {section.heading.slice(0, 40)}{section.heading.length > 40 ? "..." : ""}
-                        </span>
-                      )}
+                      <span className="text-xs font-medium truncate">
+                        {section.heading
+                          ? `${section.heading.slice(0, 45)}${section.heading.length > 45 ? "..." : ""}`
+                          : section.label.replace(/_/g, " ").replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                      </span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground shrink-0 hidden sm:inline">
+                        {section.label.replace(/_/g, " ")}
+                      </span>
                     </div>
                     <div className="flex items-center gap-3 shrink-0">
                       <span className="text-xs tabular-nums font-medium" style={{ color: "hsl(220 80% 55%)" }}>
