@@ -360,13 +360,17 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     const origin = req.headers.origin || req.headers.referer?.replace(/\/$/, "") || "https://app.siteamoeba.com";
+
+    // Store old subscription ID so we can cancel it after the upgrade completes
+    const oldSubId = user.stripeSubscriptionId || "";
+
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: "subscription",
       line_items: [{ price: planConfig.priceId, quantity: 1 }],
       success_url: `${origin}/#/billing?success=true`,
       cancel_url: `${origin}/#/billing?canceled=true`,
-      metadata: { userId: String(user.id), plan },
+      metadata: { userId: String(user.id), plan, oldSubscriptionId: oldSubId },
     });
 
     res.json({ url: session.url });
@@ -402,11 +406,30 @@ export async function registerRoutes(server: Server, app: Express) {
         limit: 5,
       });
       if (subs.data.length > 0) {
-        // Use the most recent active subscription
-        const sub = subs.data[0];
+        // Use the most recent (highest-value) active subscription
+        // Sort by amount descending so if they have both pro + autopilot, autopilot wins
+        const sorted = subs.data.sort((a: any, b: any) => {
+          const amtA = a.items?.data?.[0]?.price?.unit_amount || 0;
+          const amtB = b.items?.data?.[0]?.price?.unit_amount || 0;
+          return amtB - amtA;
+        });
+        const sub = sorted[0];
         const result = await upgradePlanFromSubscription(sub, user);
         if (result.upgraded) {
           console.log(`[billing-sync] Synced user ${user.id} (${user.email}) to ${result.plan}`);
+
+          // Auto-cancel any lower-tier duplicate subscriptions
+          if (sorted.length > 1) {
+            for (let i = 1; i < sorted.length; i++) {
+              try {
+                await stripe.subscriptions.cancel(sorted[i].id);
+                console.log(`[billing-sync] Auto-canceled duplicate sub ${sorted[i].id} (kept ${sub.id})`);
+              } catch (e: any) {
+                console.warn(`[billing-sync] Could not cancel duplicate sub ${sorted[i].id}: ${e.message}`);
+              }
+            }
+          }
+
           return res.json({ synced: true, plan: result.plan });
         }
       }
@@ -477,6 +500,19 @@ export async function registerRoutes(server: Server, app: Express) {
               stripeSubscriptionId: session.subscription || null,
             });
             console.log(`[billing-webhook] checkout.session.completed: upgraded user ${userId} to ${meta.plan}`);
+
+            // AUTO-CANCEL old subscription on plan upgrade
+            // If the user had a previous subscription (stored in metadata), cancel it
+            // so they're not double-billed. No proration — they get the full period
+            // they already paid for on the old plan, and the new plan starts fresh.
+            if (meta.oldSubscriptionId && meta.oldSubscriptionId !== session.subscription && stripe) {
+              try {
+                await stripe.subscriptions.cancel(meta.oldSubscriptionId);
+                console.log(`[billing-webhook] Auto-canceled old subscription ${meta.oldSubscriptionId} after upgrade to ${meta.plan}`);
+              } catch (cancelErr: any) {
+                console.warn(`[billing-webhook] Could not cancel old sub ${meta.oldSubscriptionId}: ${cancelErr.message}`);
+              }
+            }
           }
         } else if (session?.subscription && stripe) {
           // Fallback: if no metadata, resolve subscription and match by price
