@@ -26,6 +26,7 @@ import {
   LogIn, UserPlus, Trash2, Search, ChevronRight, Building2,
   Shield, PlusCircle, ExternalLink, CheckCircle, XCircle,
   AlertCircle, Share2, Eye, EyeOff, Clock, Zap, ArrowUpDown, Bug,
+  MessageSquare, Send, Reply,
 } from "lucide-react";
 
 // ─── Admin token (in-memory, separate from user auth) ─────────────────────────
@@ -672,6 +673,7 @@ export default function AdminPage() {
             <TabsTrigger value="referrals" className="gap-1.5"><Share2 className="w-3.5 h-3.5" />Referrals</TabsTrigger>
             <TabsTrigger value="enterprise" className="gap-1.5"><Building2 className="w-3.5 h-3.5" />Enterprise</TabsTrigger>
             <TabsTrigger value="errors" className="gap-1.5"><Bug className="w-3.5 h-3.5" />Errors</TabsTrigger>
+            <TabsTrigger value="feedback" className="gap-1.5"><MessageSquare className="w-3.5 h-3.5" />Feedback</TabsTrigger>
           </TabsList>
 
           {/* Users */}
@@ -829,11 +831,131 @@ export default function AdminPage() {
           <TabsContent value="errors" className="mt-4">
             <ClientErrorsPanel />
           </TabsContent>
+
+          <TabsContent value="feedback" className="mt-4">
+            <FeedbackPanel />
+          </TabsContent>
         </Tabs>
       </div>
 
       <UserDetailSheet userId={selectedUserId} onClose={() => setSelectedUserId(null)} />
       <CreateUserDialog open={showCreateUser} onClose={() => setShowCreateUser(false)} />
+    </div>
+  );
+}
+
+function FeedbackPanel() {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [replyingTo, setReplyingTo] = useState<number | null>(null);
+  const [replyText, setReplyText] = useState("");
+  const [sending, setSending] = useState(false);
+
+  const { data: feedbackItems = [], isLoading, refetch } = useQuery<any[]>({
+    queryKey: ["/api/admin/feedback"],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/api/admin/feedback`, {
+        headers: { Authorization: `Bearer ${getAdminToken()}` },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    refetchOnWindowFocus: false,
+    staleTime: 30000,
+  });
+
+  const sendReply = async (id: number) => {
+    if (!replyText.trim()) return;
+    setSending(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/admin/feedback/${id}/respond`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getAdminToken()}` },
+        body: JSON.stringify({ response: replyText.trim() }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast({ title: "Reply sent", description: "The user will see your response next time they log in." });
+      setReplyingTo(null);
+      setReplyText("");
+      refetch();
+    } catch (e: any) {
+      toast({ title: "Error", description: e.message, variant: "destructive" });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const categoryIcon: Record<string, string> = { bug: "\uD83D\uDC1B", feature_request: "\uD83D\uDCA1", brain_quality: "\uD83E\uDDE0", other: "\uD83D\uDCDD" };
+
+  if (isLoading) return <div className="py-8 text-center text-sm text-muted-foreground">Loading feedback...</div>;
+
+  if (feedbackItems.length === 0) return (
+    <Card>
+      <CardContent className="py-12 text-center">
+        <MessageSquare className="w-8 h-8 text-muted-foreground mx-auto mb-3 opacity-50" />
+        <p className="text-sm text-muted-foreground">No feedback yet.</p>
+      </CardContent>
+    </Card>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium">{feedbackItems.length} feedback item{feedbackItems.length !== 1 ? "s" : ""}</p>
+        <Button size="sm" variant="outline" onClick={() => refetch()} className="gap-1.5"><MessageSquare className="w-3.5 h-3.5" />Refresh</Button>
+      </div>
+      {feedbackItems.map((fb: any) => (
+        <Card key={fb.id} className={fb.status === "new" ? "border-blue-500/40" : ""}>
+          <CardContent className="pt-4 pb-3">
+            <div className="flex items-start justify-between gap-2 mb-2">
+              <div className="flex items-center gap-2">
+                <span>{categoryIcon[fb.category] || "\uD83D\uDCDD"}</span>
+                <Badge variant={fb.status === "new" ? "default" : fb.status === "resolved" ? "secondary" : "outline"} className="text-xs">{fb.status}</Badge>
+                <span className="text-xs font-medium">{fb.user_name || fb.user_email || `User #${fb.user_id}`}</span>
+                {fb.user_email && <span className="text-[10px] text-muted-foreground">{fb.user_email}</span>}
+              </div>
+              <span className="text-[10px] text-muted-foreground shrink-0">{fb.created_at?.slice(0, 10)}</span>
+            </div>
+            <p className="text-sm mb-3 whitespace-pre-wrap">{fb.message}</p>
+
+            {/* Existing admin response */}
+            {fb.admin_response && (
+              <div className="bg-blue-50 dark:bg-blue-950/30 rounded-md p-3 mb-3 border border-blue-200 dark:border-blue-800">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <Reply className="w-3 h-3 text-blue-600" />
+                  <span className="text-[10px] font-medium text-blue-600">Your reply</span>
+                  <span className="text-[10px] text-muted-foreground">{fb.responded_at?.slice(0, 10)}</span>
+                  {!fb.response_read && <Badge variant="outline" className="text-[9px] h-4 px-1 border-amber-400 text-amber-600">unread</Badge>}
+                </div>
+                <p className="text-sm whitespace-pre-wrap">{fb.admin_response}</p>
+              </div>
+            )}
+
+            {/* Reply form */}
+            {replyingTo === fb.id ? (
+              <div className="space-y-2 mt-2">
+                <Textarea
+                  placeholder="Write your reply to this user..."
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  rows={3}
+                  className="text-sm"
+                />
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => sendReply(fb.id)} disabled={sending || !replyText.trim()} className="gap-1.5">
+                    <Send className="w-3 h-3" />{sending ? "Sending..." : "Send Reply"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => { setReplyingTo(null); setReplyText(""); }}>Cancel</Button>
+                </div>
+              </div>
+            ) : (
+              <Button size="sm" variant="outline" onClick={() => { setReplyingTo(fb.id); setReplyText(fb.admin_response || ""); }} className="gap-1.5">
+                <Reply className="w-3 h-3" />{fb.admin_response ? "Edit Reply" : "Reply"}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      ))}
     </div>
   );
 }

@@ -325,7 +325,16 @@ export async function registerRoutes(server: Server, app: Express) {
   app.get("/api/auth/me", requireAuth, async (req: Request, res: Response) => {
     const user = await storage.getUserById(req.userId!);
     if (!user) return res.status(401).json({ error: "Not authenticated" });
-    res.json({ user: sanitizeUser(user) });
+    // Include unread feedback response count
+    let unreadFeedback = 0;
+    try {
+      const unread = await pool.query(
+        `SELECT COUNT(*) as cnt FROM feedback WHERE user_id = $1 AND admin_response IS NOT NULL AND response_read = false`,
+        [req.userId]
+      );
+      unreadFeedback = parseInt(unread.rows[0]?.cnt || "0");
+    } catch (e) { /* non-fatal */ }
+    res.json({ user: sanitizeUser(user), unreadFeedback });
   });
 
   // ============== BILLING ==============
@@ -5875,8 +5884,12 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
   app.get("/api/admin/feedback", requireAdmin, async (req: Request, res: Response) => {
-    const items = await storage.getAllFeedback();
-    res.json(items);
+    const result = await pool.query(
+      `SELECT f.*, u.name as user_name, u.email as user_email, u.plan as user_plan
+       FROM feedback f JOIN users u ON u.id = f.user_id
+       ORDER BY f.created_at DESC`
+    );
+    res.json(result.rows);
   });
 
   // GET /api/admin/client-errors — view recent React crashes for debugging
@@ -5898,6 +5911,46 @@ export async function registerRoutes(server: Server, app: Express) {
     if (!status) return res.status(400).json({ error: "status is required" });
     const item = await storage.updateFeedbackStatus(id, status, adminNotes);
     res.json(item);
+  });
+
+  // Admin: respond to feedback (visible to user)
+  app.post("/api/admin/feedback/:id/respond", requireAdmin, async (req: Request, res: Response) => {
+    const id = paramId(req.params.id);
+    if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
+    const { response } = req.body;
+    if (!response || typeof response !== "string" || response.trim().length === 0) {
+      return res.status(400).json({ error: "response is required" });
+    }
+    try {
+      await pool.query(
+        `UPDATE feedback SET admin_response = $1, responded_at = $2, response_read = false, status = 'resolved' WHERE id = $3`,
+        [response.trim(), new Date().toISOString(), id]
+      );
+      const updated = await pool.query(`SELECT * FROM feedback WHERE id = $1`, [id]);
+      res.json(updated.rows[0] || { id });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // User: get my feedback with responses
+  app.get("/api/feedback/my", requireAuth, async (req: Request, res: Response) => {
+    const result = await pool.query(
+      `SELECT id, category, message, status, admin_response, responded_at, response_read, created_at
+       FROM feedback WHERE user_id = $1 ORDER BY created_at DESC`,
+      [req.userId]
+    );
+    res.json(result.rows);
+  });
+
+  // User: mark feedback response as read
+  app.post("/api/feedback/:id/mark-read", requireAuth, async (req: Request, res: Response) => {
+    const id = paramId(req.params.id);
+    await pool.query(
+      `UPDATE feedback SET response_read = true WHERE id = $1 AND user_id = $2`,
+      [id, req.userId]
+    );
+    res.json({ ok: true });
   });
 
   // ============== DAILY OBSERVATIONS ==============

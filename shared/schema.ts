@@ -253,6 +253,9 @@ export const feedback = pgTable("feedback", {
   message: text("message").notNull(),
   status: text("status").notNull().default("new"), // new, reviewed, planned, resolved, declined
   adminNotes: text("admin_notes"),
+  adminResponse: text("admin_response"), // visible reply shown to the user
+  respondedAt: text("responded_at"), // when the admin responded
+  responseRead: boolean("response_read").notNull().default(false), // has the user seen the response
   campaignId: integer("campaign_id"), // optional, if feedback relates to a specific campaign
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });

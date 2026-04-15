@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
 import { User as UserIcon, Mail, Calendar, CreditCard, Trash2, Sparkles, Eye, EyeOff, Check, FlaskConical, Coins, MessageSquarePlus, Plug, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp, Copy, Zap, Loader2, ShoppingBag, Building2, Webhook, ExternalLink } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -383,10 +383,20 @@ function statusBadgeClass(status: string): string {
 }
 
 function YourFeedbackSection({ isAuthenticated }: { isAuthenticated: boolean }) {
-  const { data: items = [], isLoading } = useQuery<Feedback[]>({
-    queryKey: ["/api/feedback"],
+  const { data: items = [], isLoading } = useQuery<any[]>({
+    queryKey: ["/api/feedback/my"],
     enabled: isAuthenticated,
   });
+
+  // Mark responses as read when this section renders
+  const unreadItems = items.filter((i: any) => i.admin_response && !i.response_read);
+  React.useEffect(() => {
+    unreadItems.forEach(async (item: any) => {
+      try {
+        await apiRequest("POST", `/api/feedback/${item.id}/mark-read`);
+      } catch (e) { /* non-fatal */ }
+    });
+  }, [unreadItems.length]);
 
   return (
     <Card>
@@ -394,9 +404,14 @@ function YourFeedbackSection({ isAuthenticated }: { isAuthenticated: boolean }) 
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           <MessageSquarePlus className="w-4 h-4" />
           Your Feedback
+          {unreadItems.length > 0 && (
+            <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-500 text-white text-[10px] font-bold">
+              {unreadItems.length}
+            </span>
+          )}
         </CardTitle>
         <CardDescription className="text-xs">
-          Feedback you've submitted. We review everything and update statuses as we act on them.
+          Feedback you've submitted. We review everything and respond here.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -409,10 +424,10 @@ function YourFeedbackSection({ isAuthenticated }: { isAuthenticated: boolean }) 
           <p className="text-xs text-muted-foreground">No feedback submitted yet. Use the &quot;Send Feedback&quot; button in the sidebar to share your thoughts.</p>
         ) : (
           <div className="space-y-2" data-testid="list-feedback">
-            {items.map((item) => (
+            {items.map((item: any) => (
               <div
                 key={item.id}
-                className="rounded-md border border-border p-3 space-y-1.5"
+                className={`rounded-md border p-3 space-y-1.5 ${item.admin_response && !item.response_read ? 'border-blue-400 bg-blue-50/50 dark:bg-blue-950/20' : 'border-border'}`}
                 data-testid={`card-feedback-${item.id}`}
               >
                 <div className="flex items-center gap-2 flex-wrap">
@@ -430,12 +445,27 @@ function YourFeedbackSection({ isAuthenticated }: { isAuthenticated: boolean }) 
                     {STATUS_LABELS[item.status] ?? item.status}
                   </span>
                   <span className="ml-auto text-xs text-muted-foreground tabular-nums" data-testid={`text-date-${item.id}`}>
-                    {new Date(item.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    {new Date(item.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                   </span>
                 </div>
-                <p className="text-xs text-muted-foreground line-clamp-2" data-testid={`text-message-${item.id}`}>
+                <p className="text-xs text-muted-foreground" data-testid={`text-message-${item.id}`}>
                   {item.message}
                 </p>
+                {/* Admin response */}
+                {item.admin_response && (
+                  <div className="mt-2 rounded-md bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 p-2.5">
+                    <div className="flex items-center gap-1.5 mb-1">
+                      <CheckCircle2 className="w-3 h-3 text-blue-600" />
+                      <span className="text-[10px] font-medium text-blue-600">Team response</span>
+                      {item.responded_at && (
+                        <span className="text-[10px] text-muted-foreground">
+                          {new Date(item.responded_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs whitespace-pre-wrap">{item.admin_response}</p>
+                  </div>
+                )}
               </div>
             ))}
           </div>
