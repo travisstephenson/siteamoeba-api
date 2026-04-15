@@ -4332,13 +4332,16 @@ export async function registerRoutes(server: Server, app: Express) {
 
         await storage.upsertVisitorSession(vid, campaignId, sessionUpdates);
 
-        // Store section map on the campaign (only if we received one and campaign doesn't have one yet)
+        // Store section map on the campaign — update periodically (every 24h) to keep labels fresh
         if (sectionMap && Array.isArray(sectionMap) && sectionMap.length >= 3) {
           try {
-            const existing = await pool.query("SELECT section_map FROM campaigns WHERE id = $1", [campaignId]);
-            if (!existing.rows[0]?.section_map) {
-              await pool.query("UPDATE campaigns SET section_map = $1 WHERE id = $2", [JSON.stringify(sectionMap), campaignId]);
-              console.log(`[events] Stored section map (${sectionMap.length} sections) for campaign ${campaignId}`);
+            const existing = await pool.query("SELECT section_map, section_map_updated_at FROM campaigns WHERE id = $1", [campaignId]);
+            const lastUpdated = existing.rows[0]?.section_map_updated_at;
+            const staleThreshold = 24 * 60 * 60 * 1000; // 24 hours
+            const isStale = !existing.rows[0]?.section_map || !lastUpdated || (Date.now() - new Date(lastUpdated).getTime() > staleThreshold);
+            if (isStale) {
+              await pool.query("UPDATE campaigns SET section_map = $1, section_map_updated_at = NOW() WHERE id = $2", [JSON.stringify(sectionMap), campaignId]);
+              console.log(`[events] Updated section map (${sectionMap.length} sections) for campaign ${campaignId}`);
             }
           } catch (e) { /* non-fatal */ }
         }

@@ -877,19 +877,33 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
 
       function classifyEl(el) {
         // Check id, class, and heading text for classification keywords
-        var searchText = (el.id || "") + " " + (el.className || "") + " ";
+        var idClass = (el.id || "") + " " + (el.className || "");
         // Get the first heading inside
         var heading = el.querySelector("h1, h2, h3, h4");
         var headingText = heading ? (heading.innerText || "").substring(0, 120) : "";
-        searchText += headingText;
-        // Also check for specific elements
-        if (el.querySelector("video, iframe[src*='youtube'], iframe[src*='vimeo']")) searchText += " video";
-        if (el.querySelector("form")) searchText += " form cta";
-        if (el.querySelector("[class*='price'], [class*='pricing']")) searchText += " pricing";
-        if (el.querySelector("blockquote, [class*='testimonial'], [class*='review']")) searchText += " testimonial";
+        // Build search text from ONLY the section's own attributes + its heading
+        // Do NOT include child element classes to avoid false positives from
+        // persistent page elements (sticky sidebars, footers with prices, etc.)
+        var searchText = idClass + " " + headingText;
+        // Element-based hints — only add if the element is a DIRECT or near-direct child
+        // (avoids sticky sidebars or repeated elements polluting every section)
+        if (el.querySelector(":scope > video, :scope > div > video, :scope iframe[src*='youtube'], :scope iframe[src*='vimeo']")) searchText += " video";
+        if (el.querySelector(":scope > form, :scope > div > form")) searchText += " form cta";
+        if (el.querySelector(":scope > blockquote, :scope > div > blockquote, :scope [class*='testimonial'], :scope [class*='review']")) searchText += " testimonial";
+        // Pricing: only flag if the section's OWN id/class or heading mentions pricing
+        // Don't check child elements — too many false positives from sticky price widgets
+        if (/pricing|price.?table|price.?card|plan.?card|pricing.?section/i.test(idClass)) searchText += " pricing";
+
+        // Priority: check most specific labels first by iterating keyword map in order
+        // The keyword map is ordered from most specific (hero) to least (footer)
         for (var key in classifyKeywords) {
           if (classifyKeywords[key].test(searchText)) return key;
         }
+        // Fallback: try to infer from the section's visible text content (first 200 chars)
+        var visibleText = (el.innerText || "").substring(0, 200).toLowerCase();
+        if (/testimoni|\".*\"|\u201c|\u201d|customer.?said|people.?say/i.test(visibleText)) return "testimonials";
+        if (/guarantee|money.?back|risk.?free|refund/i.test(visibleText)) return "guarantee";
+        if (/faq|frequently|common.?question/i.test(visibleText)) return "faq";
         return "content";
       }
 
