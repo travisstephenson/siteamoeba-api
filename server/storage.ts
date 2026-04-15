@@ -1011,12 +1011,12 @@ class StorageImpl implements IStorage {
           `SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND converted = true AND first_seen >= $3`,
           [campaignId, v.id, testStart]
         );
-        // Revenue: sum from revenue_events for matched visitors (captures upsells)
+        // Revenue: sum ALL revenue_events (purchases + refunds) for net revenue
         revResult = await pool.query(
           `SELECT COALESCE(SUM(re.amount), 0) as total
            FROM revenue_events re
            JOIN visitors v ON v.id = re.visitor_id
-           WHERE re.campaign_id = $1 AND v.${column} = $2 AND v.first_seen >= $3 AND re.event_type = 'purchase'`,
+           WHERE re.campaign_id = $1 AND v.${column} = $2 AND v.first_seen >= $3`,
           [campaignId, v.id, testStart]
         );
       }
@@ -1140,11 +1140,11 @@ class StorageImpl implements IStorage {
          ) AS count`,
         [campaign.id]
       );
-      // All revenue_events for this campaign (captures all upsells, not just first purchase)
+      // All revenue_events for this campaign — net of refunds
       const revResult = await pool.query(
         `SELECT COALESCE(SUM(amount), 0) AS total
          FROM revenue_events
-         WHERE campaign_id = $1 AND event_type = 'purchase'`,
+         WHERE campaign_id = $1`,
         [campaign.id]
       );
       const varResult = await pool.query(

@@ -1260,7 +1260,7 @@ export async function registerRoutes(server: Server, app: Express) {
             WHERE campaign_id = $1 AND converted = true AND customer_email IS NOT NULL
           )
         ) AS unmatched_conversions,
-        COALESCE(SUM(re.amount) FILTER (WHERE re.event_type = 'purchase'), 0) AS total_revenue_all
+        COALESCE(SUM(re.amount), 0) AS total_revenue_all
        FROM revenue_events re WHERE re.campaign_id = $1`,
       [campaign.id]
     );
