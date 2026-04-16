@@ -53,6 +53,7 @@ import {
   CheckCircle2,
   CircleDot,
   Loader2,
+  CreditCard,
   LoaderCircle,
   Lightbulb,
   Lock,
@@ -5606,6 +5607,35 @@ export default function CampaignDetailPage() {
           </Button>
         </div>
       </div>
+
+      {/* Stripe Not Connected Warning */}
+      {user && !user.hasStripeConnect && campaign?.campaignType !== 'lead_gen' && (
+        <div className="mx-6 mt-3 rounded-lg border border-blue-500/40 bg-blue-50 dark:bg-blue-950/20 px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <CreditCard className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                  Connect your payment processor to track revenue
+                </p>
+                <p className="text-xs text-blue-700/70 dark:text-blue-300/60 mt-0.5">
+                  Conversions are being tracked, but revenue shows as $0 without a payment integration.
+                  Connect Stripe in Settings to automatically capture the exact amount of every sale.
+                </p>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate('/settings')}
+              className="gap-1.5 shrink-0 border-blue-400 text-blue-600 hover:bg-blue-100 dark:hover:bg-blue-900/30"
+            >
+              <CreditCard className="w-3.5 h-3.5" />
+              Connect Stripe
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Page Changed Warning */}
       {stats?.mismatchSections?.length > 0 && (

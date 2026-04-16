@@ -7523,7 +7523,9 @@ async function countCampaignVisitors(userId: number): Promise<number> {
 }
 
 function sanitizeUser(user: any) {
-  const { passwordHash, llmApiKey, ...safe } = user;
+  const { passwordHash, llmApiKey, stripeAccessToken, ...safe } = user;
+  // Add a boolean flag instead of exposing the token
+  safe.hasStripeConnect = !!stripeAccessToken;
   return safe;
 }
 
