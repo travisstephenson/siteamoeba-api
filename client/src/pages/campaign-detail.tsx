@@ -5637,7 +5637,7 @@ export default function CampaignDetailPage() {
       </div>
 
       {/* Stripe Not Connected Warning */}
-      {user && !user.hasStripeConnect && campaign?.campaignType !== 'lead_gen' && (
+      {user && !user.hasStripeConnect && !user.hasGhlConnect && campaign?.campaignType !== 'lead_gen' && (
         <div className="mx-6 mt-3 rounded-lg border border-blue-500/40 bg-blue-50 dark:bg-blue-950/20 px-4 py-3">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-start gap-2">
@@ -5648,7 +5648,7 @@ export default function CampaignDetailPage() {
                 </p>
                 <p className="text-xs text-blue-700/70 dark:text-blue-300/60 mt-0.5">
                   Conversions are being tracked, but revenue shows as $0 without a payment integration.
-                  Connect Stripe in Settings to automatically capture the exact amount of every sale.
+                  Connect Stripe or GoHighLevel in Settings to automatically capture the exact amount of every sale.
                 </p>
               </div>
             </div>

@@ -697,9 +697,9 @@ export async function registerRoutes(server: Server, app: Express) {
       const apiKey = decryptApiKey((user as any).ghlApiKey);
       const locationId = (user as any).ghlLocationId;
 
-      // Fetch recent orders from GHL
+      // Fetch recent transactions from GHL using correct altId/altType params
       const resp = await fetch(
-        `https://services.leadconnectorhq.com/payments/orders?locationId=${locationId}&limit=100`,
+        `https://services.leadconnectorhq.com/payments/transactions?altId=${locationId}&altType=location&limit=100`,
         {
           headers: {
             'Authorization': `Bearer ${apiKey}`,
@@ -709,19 +709,19 @@ export async function registerRoutes(server: Server, app: Express) {
         }
       );
       if (!resp.ok) {
-        return res.json({ transactions: [], error: 'Failed to fetch GHL orders' });
+        return res.json({ transactions: [], error: 'Failed to fetch GHL transactions' });
       }
       const data = await resp.json();
-      const orders = data.data || data.orders || [];
+      const txns = data.data || data.transactions || [];
 
-      const transactions = orders.map((o: any) => ({
-        id: o._id || o.id,
-        name: o.contactName || o.name || 'Unknown',
-        email: o.contactEmail || o.email || '',
-        amount: typeof o.amount === 'number' ? o.amount / 100 : parseFloat(o.amount) || 0,
-        status: o.status || o.paymentStatus || 'unknown',
-        productName: o.items?.[0]?.name || o.product?.name || o.name || '',
-        createdAt: o.createdAt || o.created_at || '',
+      const transactions = txns.map((t: any) => ({
+        id: t._id || t.id,
+        name: t.contactName || t.contactSnapshot?.name || t.name || 'Unknown',
+        email: t.contactSnapshot?.email || t.contactEmail || t.email || '',
+        amount: typeof t.amount === 'number' ? t.amount / 100 : parseFloat(t.amount) || 0,
+        status: t.status || t.paymentStatus || 'unknown',
+        productName: t.entitySourceName || t.items?.[0]?.name || t.name || '',
+        createdAt: t.createdAt || t.created_at || '',
       }));
 
       res.json({ transactions });
@@ -1760,6 +1760,170 @@ export async function registerRoutes(server: Server, app: Express) {
   // Poll every 60 seconds + run on startup
   setInterval(pollStripeEvents, 60 * 1000);
   setTimeout(pollStripeEvents, 5000);
+
+  // ============== GOHIGHLEVEL TRANSACTION POLLER ==============
+  // Polls GHL payments API every 90 seconds for all users with GHL connected.
+  // Uses the same attribution logic as the Stripe poller: match by email, then time proximity.
+
+  async function pollGhlTransactions() {
+    try {
+      const users = await pool.query(
+        "SELECT id, ghl_api_key, ghl_location_id FROM users WHERE ghl_api_key IS NOT NULL AND ghl_location_id IS NOT NULL"
+      );
+      for (const u of users.rows) {
+        try {
+          const apiKey = decryptApiKey(u.ghl_api_key);
+          const locationId = u.ghl_location_id;
+
+          // Get earliest active campaign date to bound the query
+          const earliestCampaign = await pool.query(
+            `SELECT MIN(created_at) as earliest FROM campaigns WHERE user_id = $1 AND status = 'active'`,
+            [u.id]
+          );
+          const startDate = earliestCampaign.rows[0]?.earliest
+            ? new Date(earliestCampaign.rows[0].earliest).toISOString()
+            : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+          // Fetch transactions from GHL
+          const resp = await fetch(
+            `https://services.leadconnectorhq.com/payments/transactions?altId=${locationId}&altType=location&limit=100&startAt=${encodeURIComponent(startDate)}`,
+            {
+              headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Version': '2021-07-28',
+                'Accept': 'application/json',
+              },
+            }
+          );
+          if (!resp.ok) {
+            console.error(`[ghl-poll] User ${u.id}: API error ${resp.status}`);
+            continue;
+          }
+          const data = await resp.json();
+          const txns = data.data || data.transactions || [];
+
+          let processed = 0;
+          for (const txn of txns) {
+            const externalId = `ghl_${txn._id || txn.id}`;
+            const amountRaw = txn.amount || 0;
+            const amount = typeof amountRaw === 'number' && amountRaw > 100 ? amountRaw / 100 : (typeof amountRaw === 'number' ? amountRaw : parseFloat(amountRaw) || 0);
+            const customerEmail = txn.contactSnapshot?.email || txn.contactEmail || txn.email || null;
+            const txnStatus = (txn.status || '').toLowerCase();
+
+            // Only process successful payments
+            if (txnStatus !== 'succeeded' && txnStatus !== 'completed' && txnStatus !== 'paid') continue;
+            if (amount <= 0) continue;
+
+            // Dedup: skip if already recorded
+            const existing = await pool.query("SELECT id FROM revenue_events WHERE external_id = $1 LIMIT 1", [externalId]);
+            if (existing.rows.length > 0) continue;
+            const rejected = await pool.query("SELECT id FROM rejected_charges WHERE charge_id = $1 LIMIT 1", [externalId]);
+            if (rejected.rows.length > 0) continue;
+
+            const txnDate = txn.createdAt || txn.created_at || new Date().toISOString();
+
+            // === ATTRIBUTION (mirrors Stripe poller logic) ===
+            const userCampaigns = await storage.getCampaignsByUser(u.id);
+            let matchedCampaignId: number | null = null;
+            let matchedVisitorId: string | null = null;
+
+            // 1. Email matches a visitor (converted or not)
+            if (customerEmail) {
+              const em = await pool.query(
+                `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
+                 WHERE c.user_id = $1 AND LOWER(v.customer_email) = LOWER($2)
+                 ORDER BY v.first_seen DESC LIMIT 1`, [u.id, customerEmail]);
+              if (em.rows.length > 0) { matchedVisitorId = em.rows[0].visitor_id; matchedCampaignId = em.rows[0].campaign_id; }
+            }
+
+            // 2. Time proximity — pixel conversion within 2 hours of this transaction
+            if (!matchedCampaignId) {
+              const tm = await pool.query(
+                `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
+                 WHERE c.user_id = $1 AND v.converted = true AND v.converted_at IS NOT NULL
+                   AND ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) < 7200
+                 ORDER BY ABS(EXTRACT(EPOCH FROM (v.converted_at::timestamptz - $2::timestamptz))) ASC LIMIT 1`, [u.id, txnDate]);
+              if (tm.rows.length > 0) { matchedVisitorId = tm.rows[0].visitor_id; matchedCampaignId = tm.rows[0].campaign_id; }
+            }
+
+            // 3. If campaign matched but no visitor, find recent one
+            if (!matchedVisitorId && matchedCampaignId) {
+              const recentVisitor = await pool.query(
+                `SELECT id FROM visitors
+                 WHERE campaign_id = $1
+                   AND first_seen::timestamptz BETWEEN ($2::timestamptz - INTERVAL '4 hours') AND ($2::timestamptz + INTERVAL '10 minutes')
+                   AND converted = false
+                   AND headline_variant_id IS NOT NULL
+                 ORDER BY first_seen::timestamptz DESC LIMIT 1`,
+                [matchedCampaignId, txnDate]
+              );
+              if (recentVisitor.rows.length > 0) {
+                matchedVisitorId = recentVisitor.rows[0].id;
+              }
+            }
+
+            // 4. Last resort: email match across all user campaigns
+            if (!matchedCampaignId && customerEmail) {
+              const recentEmailVisitor = await pool.query(
+                `SELECT v.id AS visitor_id, c.id AS campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
+                 WHERE c.user_id = $1 AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
+                 ORDER BY v.first_seen DESC LIMIT 1`, [u.id]);
+              if (recentEmailVisitor.rows.length > 0) {
+                matchedVisitorId = recentEmailVisitor.rows[0].visitor_id;
+                matchedCampaignId = recentEmailVisitor.rows[0].campaign_id;
+              }
+            }
+
+            // Strict: must have BOTH campaign and visitor
+            if (!matchedCampaignId || !matchedVisitorId) {
+              console.log(`[ghl-poll] UNATTRIBUTED: $${amount} from ${customerEmail || 'no-email'} — skipping`);
+              try {
+                await pool.query(
+                  `INSERT INTO rejected_charges (user_id, charge_id, reason) VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`,
+                  [u.id, externalId, `ghl_unattributed: email=${customerEmail || 'none'} amount=$${amount}`]
+                );
+              } catch {}
+              continue;
+            }
+
+            // Create revenue event
+            await storage.addRevenueEvent({
+              visitorId: matchedVisitorId,
+              campaignId: matchedCampaignId,
+              source: "gohighlevel",
+              eventType: "purchase",
+              amount,
+              currency: "USD",
+              externalId,
+              customerEmail: customerEmail || undefined,
+              metadata: JSON.stringify({ ghl_txn_id: txn._id || txn.id, product: txn.entitySourceName || '' }),
+            });
+
+            // Mark visitor converted if not already
+            if (matchedVisitorId) {
+              const visitor = await storage.getVisitor(matchedVisitorId);
+              if (visitor && !visitor.converted) {
+                await storage.markConverted(matchedVisitorId, externalId, amount);
+              }
+            }
+
+            processed++;
+            console.log(`[ghl-poll] $${amount} ${customerEmail || '?'} -> C${matchedCampaignId} (visitor:${matchedVisitorId?.substring(0, 12)})`);
+          }
+
+          if (processed > 0) console.log(`[ghl-poll] User ${u.id}: ${processed} new transactions processed`);
+        } catch (err: any) {
+          console.error(`[ghl-poll] User ${u.id} error:`, err.message);
+        }
+      }
+    } catch (err: any) {
+      console.error("[ghl-poll] Fatal:", err.message);
+    }
+  }
+
+  // Poll GHL every 90 seconds + run on startup (offset from Stripe to avoid overlap)
+  setInterval(pollGhlTransactions, 90 * 1000);
+  setTimeout(pollGhlTransactions, 15000);
 
   // ============== AUTOPILOT EVALUATION LOOP ==============
   // Check all active autopilot campaigns every 5 minutes for tests that should be declared
@@ -5702,17 +5866,34 @@ export async function registerRoutes(server: Server, app: Express) {
   // Helper: find a visitor across ALL campaigns belonging to a user, matched by email
   async function matchVisitorByEmailAcrossUser(userId: number, email: string): Promise<{ visitorId: string; campaignId: number } | null> {
     try {
-      const result = await pool.query(
+      // 1. Try exact email match on a visitor (converted or not)
+      const emailMatch = await pool.query(
         `SELECT v.id, v.campaign_id FROM visitors v
          JOIN campaigns c ON c.id = v.campaign_id
          WHERE c.user_id = $1
+           AND LOWER(v.customer_email) = LOWER($2)
+         ORDER BY v.first_seen DESC
+         LIMIT 1`,
+        [userId, email]
+      );
+      if (emailMatch.rows.length > 0) {
+        return { visitorId: emailMatch.rows[0].id as string, campaignId: emailMatch.rows[0].campaign_id as number };
+      }
+
+      // 2. Fallback: recent unconverted visitor on any active campaign (last 4 hours)
+      const recentMatch = await pool.query(
+        `SELECT v.id, v.campaign_id FROM visitors v
+         JOIN campaigns c ON c.id = v.campaign_id
+         WHERE c.user_id = $1
+           AND c.status = 'active'
            AND v.converted = false
+           AND v.first_seen::timestamptz > NOW() - INTERVAL '4 hours'
          ORDER BY v.first_seen DESC
          LIMIT 1`,
         [userId]
       );
-      if (result.rows.length > 0) {
-        return { visitorId: result.rows[0].id as string, campaignId: result.rows[0].campaign_id as number };
+      if (recentMatch.rows.length > 0) {
+        return { visitorId: recentMatch.rows[0].id as string, campaignId: recentMatch.rows[0].campaign_id as number };
       }
       return null;
     } catch {

@@ -50,7 +50,6 @@ export const users = pgTable("users", {
   webhookSecret: text("webhook_secret"),
   shopifyStoreUrl: text("shopify_store_url"),
   shopifyConnectedAt: text("shopify_connected_at"),
-  ghlConnectedAt: text("ghl_connected_at"),
   // Whop integration
   whopApiKey: text("whop_api_key"),
   whopConnectedAt: text("whop_connected_at"),
