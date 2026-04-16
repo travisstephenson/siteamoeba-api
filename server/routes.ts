@@ -6237,6 +6237,54 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({ ok: true });
   });
 
+  // ============== FUNNEL STEPS ==============
+
+  // GET /api/campaigns/:id/funnel — get funnel steps for a campaign
+  app.get("/api/campaigns/:id/funnel", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) return res.status(404).json({ error: "Campaign not found" });
+
+    const steps = await pool.query(
+      `SELECT id, step_order, name, price, step_type FROM funnel_steps WHERE campaign_id = $1 ORDER BY step_order ASC`,
+      [campaignId]
+    );
+    res.json({ steps: steps.rows });
+  });
+
+  // POST /api/campaigns/:id/funnel — save all funnel steps (replaces existing)
+  app.post("/api/campaigns/:id/funnel", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) return res.status(404).json({ error: "Campaign not found" });
+
+    const { steps } = req.body;
+    if (!Array.isArray(steps)) return res.status(400).json({ error: "steps array required" });
+
+    // Delete existing and re-insert (simpler than diffing)
+    await pool.query(`DELETE FROM funnel_steps WHERE campaign_id = $1`, [campaignId]);
+
+    const saved = [];
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      if (!s.name || s.price === undefined) continue;
+      const result = await pool.query(
+        `INSERT INTO funnel_steps (campaign_id, step_order, name, price, step_type)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [campaignId, i + 1, s.name.trim(), parseFloat(s.price) || 0, s.stepType || 'front_end']
+      );
+      saved.push(result.rows[0]);
+    }
+
+    // Also update the campaign's price_point to the front-end offer price
+    const frontEnd = saved.find((s: any) => s.step_type === 'front_end') || saved[0];
+    if (frontEnd) {
+      await pool.query(`UPDATE campaigns SET price_point = $1 WHERE id = $2`, [String(frontEnd.price), campaignId]);
+    }
+
+    res.json({ steps: saved, count: saved.length });
+  });
+
   // ============== DAILY OBSERVATIONS ==============
 
   // POST /api/campaigns/:id/observations/generate

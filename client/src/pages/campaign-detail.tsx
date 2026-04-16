@@ -102,7 +102,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { VisualEditor } from "@/components/visual-editor";
+import { FunnelBuilder } from "@/components/funnel-builder";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient, API_BASE, getAuthToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -6089,6 +6089,9 @@ export default function CampaignDetailPage() {
 
         {/* Embed code */}
         <EmbedCodeSection campaignId={campaignId} headlineSelector={campaign?.headlineSelector || "h1"} subheadlineSelector={campaign?.subheadlineSelector || "h2"} />
+
+        {/* Revenue Funnel */}
+        <FunnelBuilder campaignId={campaignId} />
 
         {/* Conversion pixel */}
         <ConversionPixelSection campaignId={campaignId} campaignType={stats?.campaignType} />

@@ -246,6 +246,18 @@ export type TestLesson = typeof testLessons.$inferSelect;
 export type InsertTestLesson = z.infer<typeof insertTestLessonSchema>;
 
 // ============== FEEDBACK ==============
+export const funnelSteps = pgTable("funnel_steps", {
+  id: serial("id").primaryKey(),
+  campaignId: integer("campaign_id").notNull(),
+  stepOrder: integer("step_order").notNull().default(1),
+  name: text("name").notNull(),
+  price: text("price").notNull().default("0"),
+  stepType: text("step_type").notNull().default("front_end"), // front_end, order_bump, upsell, downsell, recurring
+  createdAt: text("created_at").$defaultFn(() => new Date().toISOString()),
+});
+
+export type FunnelStep = typeof funnelSteps.$inferSelect;
+
 export const feedback = pgTable("feedback", {
   id: serial("id").primaryKey(),
   userId: integer("user_id").notNull(),

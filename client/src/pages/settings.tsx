@@ -1419,104 +1419,10 @@ export default function SettingsPage() {
         </Card>
 
         {/* Transaction Mapping */}
-        <TransactionMappingCard />
+        {/* Transaction mapping moved to per-campaign Funnel Builder */}
       </div>
     </div>
   );
 }
 
-// === TRANSACTION MAPPING CARD ===
-function TransactionMappingCard() {
-  const { toast } = useToast();
-  const { data, isLoading, refetch } = useQuery<{
-    products: { description: string; charges: number; totalRevenue: number; lastSeen: string; mappedCampaignId: number | null; mappedCampaignName: string | null }[];
-    campaigns: { id: number; name: string; url: string }[];
-  }>({
-    queryKey: ["/api/settings/product-map"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", "/api/settings/product-map");
-      if (!res.ok) throw new Error("Failed to load");
-      return res.json();
-    },
-  });
-
-  const saveMutation = useMutation({
-    mutationFn: async ({ description, campaignId }: { description: string; campaignId: number | null }) => {
-      const res = await apiRequest("POST", "/api/settings/product-map", { description, campaignId });
-      if (!res.ok) throw new Error("Save failed");
-      return res.json();
-    },
-    onSuccess: () => {
-      refetch();
-      toast({ title: "Mapping saved" });
-    },
-  });
-
-  const products = data?.products ?? [];
-  const campaigns = data?.campaigns ?? [];
-
-  if (isLoading) return <Card><CardContent className="p-6"><p className="text-sm text-muted-foreground">Loading transactions...</p></CardContent></Card>;
-  if (!data || products.length === 0) return null;
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <CreditCard className="w-4 h-4" />
-          Transaction Mapping
-        </CardTitle>
-        <CardDescription className="text-xs">
-          Map each product from your Stripe account to a campaign. All future purchases from a customer will chain to the campaign where they made their first mapped purchase.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-2">
-        {products.map((p) => (
-          <div key={p.description} className="flex items-center gap-3 py-2 border-b border-border/50 last:border-0">
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium truncate" title={p.description}>{p.description}</p>
-              <p className="text-[10px] text-muted-foreground">{p.charges} charges · ${p.totalRevenue.toLocaleString()}</p>
-            </div>
-            <Select
-              value={p.mappedCampaignId?.toString() || "_none"}
-              onValueChange={(val) => {
-                saveMutation.mutate({
-                  description: p.description,
-                  campaignId: val === "_none" ? null : parseInt(val),
-                });
-              }}
-            >
-              <SelectTrigger className="w-[200px] h-8 text-xs">
-                <SelectValue placeholder="Assign to campaign" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="_none">Not mapped</SelectItem>
-                {campaigns.map((c) => (
-                  <SelectItem key={c.id} value={c.id.toString()}>{c.name || c.url}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        ))}
-
-        <div className="pt-2">
-          <Button
-            size="sm"
-            variant="outline"
-            className="text-xs"
-            onClick={async () => {
-              const token = getAuthToken();
-              await fetch(API_BASE + '/api/settings/stripe-sync', {
-                method: 'POST',
-                headers: { 'Authorization': 'Bearer ' + (token || ''), 'Content-Type': 'application/json' },
-              });
-              queryClient.invalidateQueries({ queryKey: ["/api/campaigns"] });
-              toast({ title: "Re-synced", description: "Revenue re-attributed using your mappings." });
-            }}
-          >
-            Re-sync Stripe transactions
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+// Transaction Mapping Card removed — replaced by per-campaign Funnel Builder
