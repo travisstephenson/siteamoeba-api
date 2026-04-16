@@ -4945,7 +4945,8 @@ function SpecialistCard({ specialist, defaultOpen = false }: { specialist: Speci
   );
 }
 
-function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfigured: boolean }) {
+function BrainChat({ campaignId, llmConfigured, userPlan }: { campaignId: number; llmConfigured: boolean; userPlan: string }) {
+  const isPaid = userPlan !== 'free';
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -5054,7 +5055,17 @@ function BrainChat({ campaignId, llmConfigured }: { campaignId: number; llmConfi
 
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.error || "Brain chat failed");
+        if (err.error === "UPGRADE_REQUIRED" || res.status === 403) {
+          // Show upgrade message in chat instead of removing the user message
+          setMessages(prev => [...prev, {
+            role: "assistant",
+            content: "Brain Chat is available on paid plans. Upgrade to Pro, Business, or Autopilot to unlock the full Brain — AI-powered optimization insights, personalized recommendations, and CRO reports based on your actual test data.",
+          }]);
+          setIsTyping(false);
+          setTimeout(scrollToBottom, 50);
+          return;
+        }
+        throw new Error(err.message || err.error || "Brain chat failed");
       }
 
       const data = await res.json();
@@ -6132,6 +6143,7 @@ export default function CampaignDetailPage() {
       <BrainChat
         campaignId={campaignId}
         llmConfigured={!!user?.llmProvider}
+        userPlan={user?.plan || 'free'}
       />
     </div>
   );

@@ -2461,6 +2461,7 @@ export async function registerRoutes(server: Server, app: Express) {
       });
     } catch {
       return res.status(400).json({ error: "Please configure your AI provider in Settings or upgrade to a paid plan to scan pages." });
+      // Note: scan is allowed for free users via platform key, so this only fires if platform key is missing AND no BYOK
     }
 
     const { url } = req.body;
@@ -2961,7 +2962,7 @@ export async function registerRoutes(server: Server, app: Express) {
         userModel: user.llmModel,
       });
     } catch {
-      return res.status(400).json({ error: "Please configure your AI provider in Settings or upgrade to a paid plan." });
+      return res.status(403).json({ error: "UPGRADE_REQUIRED", message: "Variant generation requires your own API key (Settings) or a paid plan." });
     }
 
     // Deduct credits for variant generation
@@ -3490,7 +3491,7 @@ export async function registerRoutes(server: Server, app: Express) {
         userModel: user.llmModel,
       });
     } catch {
-      return res.status(400).json({ error: "Brain Chat requires a paid plan or your own API key configured in Settings." });
+      return res.status(403).json({ error: "UPGRADE_REQUIRED", message: "Brain Chat is a paid feature. Upgrade your plan to unlock the Brain and get AI-powered optimization insights." });
     }
 
     // Deduct credits for this Brain Chat message
@@ -6765,10 +6766,11 @@ export async function registerRoutes(server: Server, app: Express) {
 
     // Resolve LLM config
     const llmConfigResolved = resolveLLMConfig({
+      operation: "observation",
+      userPlan: user.plan || "free",
       userProvider: user.llmProvider || undefined,
       userModel: user.llmModel || undefined,
       userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : undefined,
-      isPaid: user.plan !== "free",
     });
     if (!llmConfigResolved.config) {
       return res.status(402).json({ error: "No AI provider configured" });

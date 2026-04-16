@@ -75,12 +75,11 @@ const OPENAI_COMPATIBLE_BASE_URLS: Partial<Record<LLMConfig["provider"], string>
 
 /**
  * Resolve the LLM config for a given operation and user.
- * Priority:
- * 1. Paid user WITH own key → use their key + inject brain data
- * 2. Paid user WITHOUT key → use platform key + inject brain data
- * 3. Free BYOK user → use their key, NO brain data
- * 
- * Returns { config, useBrainData, creditCost }
+ * Access tiers:
+ * 1. Paid user -> platform key for everything + brain data
+ * 2. Free user -> platform key for SCAN only (onboarding)
+ *                 BYOK key for variants/classify (no brain data)
+ *                 NO access to chat, counsel, autopilot, observations
  */
 export function resolveLLMConfig(opts: {
   operation: LLMOperation;
@@ -91,8 +90,6 @@ export function resolveLLMConfig(opts: {
 }): { config: LLMConfig; useBrainData: boolean; creditCost: number; source: "user" | "platform" } {
   const { operation, userPlan, userProvider, userApiKey, userModel } = opts;
   const isPaid = userPlan !== "free";
-  // Treat unsupported providers (e.g. 'manus' saved before removal) as if no key is set
-  // so they always fall through to the platform key
   const SUPPORTED_PROVIDERS = ["anthropic", "openai", "gemini", "mistral", "xai", "meta"];
   const providerIsSupported = SUPPORTED_PROVIDERS.includes(userProvider || "");
   const hasUserKey = !!(userProvider && userApiKey && providerIsSupported);
@@ -101,14 +98,8 @@ export function resolveLLMConfig(opts: {
   const creditCost = OPERATION_CREDIT_COSTS[operation] || 1;
 
   // ---------------------------------------------------------------
-  // Priority order:
-  // 1. Paid user  → ALWAYS use platform key (our AI, our quality)
-  //    BYOK is supplemental — only used if platform key is missing
-  // 2. Free user  → platform key (fast model, no brain data)
-  //    BYOK override available if they want their own model
+  // PAID: platform key for everything, brain data included
   // ---------------------------------------------------------------
-
-  // PAID: platform key is primary
   if (isPaid && platformKey) {
     const tierConfig = PLATFORM_MODELS[tier];
     return {
@@ -137,8 +128,28 @@ export function resolveLLMConfig(opts: {
     };
   }
 
-  // FREE: BYOK only — platform key is reserved for paid plans
-  if (hasUserKey) {
+  // ---------------------------------------------------------------
+  // FREE: restricted access
+  // ---------------------------------------------------------------
+
+  // Brain Chat, CRO Counsel, Autopilot, Observations = PAID ONLY
+  const PAID_ONLY_OPS: LLMOperation[] = ["chat", "counsel", "autopilot", "autopilot_learn", "observation"];
+  if (!isPaid && PAID_ONLY_OPS.includes(operation)) {
+    throw new Error("UPGRADE_REQUIRED");
+  }
+
+  // Scan uses platform key (onboarding: lets users set up before paying)
+  if (!isPaid && operation === "scan" && platformKey) {
+    return {
+      config: { provider: PLATFORM_MODELS.fast.provider, apiKey: platformKey, model: PLATFORM_MODELS.fast.model },
+      useBrainData: false,
+      creditCost: 0,
+      source: "platform",
+    };
+  }
+
+  // BYOK for variant generation, classification, and other allowed ops
+  if (!isPaid && hasUserKey) {
     return {
       config: { provider: userProvider as LLMConfig["provider"], apiKey: userApiKey!, model: userModel || undefined },
       useBrainData: false,
@@ -147,8 +158,8 @@ export function resolveLLMConfig(opts: {
     };
   }
 
-  // Nothing available — shouldn’t happen in production
-  throw new Error("No AI key configured. Please contact support.");
+  // Nothing available
+  throw new Error("No AI key configured. Add your own API key in Settings or upgrade to a paid plan.");
 }
 
 // Classify common LLM API errors into user-friendly messages
