@@ -3292,9 +3292,10 @@ function VisitorFeedPanel({ campaignId, campaignType, forceExpand }: { campaignI
   );
 }
 
-function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector }: { campaignId: number; headlineSelector: string; subheadlineSelector: string }) {
+function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector, verified }: { campaignId: number; headlineSelector: string; subheadlineSelector: string; verified?: boolean }) {
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedInline, setCopiedInline] = useState(false);
+  const [showCode, setShowCode] = useState(!verified);
   const { toast } = useToast();
   const apiBase = getApiBaseUrl();
 
@@ -3323,15 +3324,29 @@ function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector }:
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <Code2 className="w-4 h-4" />
-          Embed Code
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
-          Add to your page's {`<head>`} or just before {`</body>`}.
-        </p>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <Code2 className="w-4 h-4" />
+            Tracking Code
+            {verified && (
+              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 font-medium">
+                <CheckCircle2 className="w-3 h-3" /> Installed
+              </span>
+            )}
+          </CardTitle>
+          {verified && (
+            <Button size="sm" variant="ghost" className="text-xs text-muted-foreground h-7" onClick={() => setShowCode(!showCode)}>
+              {showCode ? "Hide Code" : "View Code"}
+            </Button>
+          )}
+        </div>
+        {!verified && (
+          <p className="text-xs text-muted-foreground">
+            Add to your page's {`<head>`} or just before {`</body>`}.
+          </p>
+        )}
       </CardHeader>
-      <CardContent>
+      {(!verified || showCode) && <CardContent>
         <Tabs defaultValue="script">
           <TabsList className="mb-3 h-8 text-xs">
             <TabsTrigger value="script" className="text-xs" data-testid="tab-embed-script">
@@ -3391,15 +3406,16 @@ function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector }:
             </div>
           </TabsContent>
         </Tabs>
-      </CardContent>
+      </CardContent>}
     </Card>
   );
 }
 
 // ---- Conversion Pixel Section ----
-function ConversionPixelSection({ campaignId, campaignType }: { campaignId: number; campaignType?: string }) {
+function ConversionPixelSection({ campaignId, campaignType, verified }: { campaignId: number; campaignType?: string; verified?: boolean }) {
   const isLeadGenCampaign = campaignType === "lead_gen";
   const [copied, setCopied] = useState(false);
+  const [showCode, setShowCode] = useState(!verified);
   const [revenue, setRevenue] = useState("27");
   const [pixelType, setPixelType] = useState<"sale" | "lead">(isLeadGenCampaign ? "lead" : "sale");
   const [revenueMode, setRevenueMode] = useState<"fixed" | "dynamic">("fixed");
@@ -3472,8 +3488,8 @@ function ConversionPixelSection({ campaignId, campaignType }: { campaignId: numb
       "  var params = new URLSearchParams(window.location.search);",
       "  var pi = params.get('payment_intent');",
       "  if (vid) {",
-      "    // Try multiple sources for the revenue amount",
-      "    var amount = window.sa_revenue || params.get('amount') || params.get('revenue') || params.get('price') || params.get('total') || params.get('sa_amount') || 0;",
+      "    // Revenue: only use explicitly set sources (no auto-reading random URL params)",
+      "    var amount = window.sa_revenue || params.get('sa_amount') || 0;",
       "    var email = params.get('email') || params.get('customer_email') || '';",
       "    var src = \"" + apiBase + "/api/widget/convert?vid=\" + vid + \"&cid=" + campaignId + "&revenue=\" + amount;",
       "    if (pi) src += '&payment_intent=' + pi;",
@@ -3498,23 +3514,35 @@ function ConversionPixelSection({ campaignId, campaignType }: { campaignId: numb
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-semibold flex items-center gap-2">
-          <Zap className="w-4 h-4" />
-          Conversion Pixel
-        </CardTitle>
-        <p className="text-xs text-muted-foreground">
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-sm font-semibold flex items-center gap-2">
+            <Zap className="w-4 h-4" />
+            Conversion Pixel
+            {verified && (
+              <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 font-medium">
+                <CheckCircle2 className="w-3 h-3" /> Installed
+              </span>
+            )}
+          </CardTitle>
+          {verified && (
+            <Button size="sm" variant="ghost" className="text-xs text-muted-foreground h-7" onClick={() => setShowCode(!showCode)}>
+              {showCode ? "Hide Code" : "View Code"}
+            </Button>
+          )}
+        </div>
+        {!verified && <p className="text-xs text-muted-foreground">
           {isLeadGenCampaign
             ? "Paste this on your thank-you page after the opt-in form submission to track leads."
             : "Paste this on your thank-you or confirmation page to track conversions."}
           {" "}It reads the visitor ID set by the embed widget and fires a conversion event.
-        </p>
-        {!isLeadGenCampaign && (
+        </p>}
+        {!verified && !isLeadGenCampaign && (
           <p className="text-xs text-muted-foreground mt-1">
             Use <span className="font-medium text-foreground">Sale</span> for purchase pages, <span className="font-medium text-foreground">Lead</span> for opt-in forms, webinar registrations, or any non-purchase conversion.
           </p>
         )}
       </CardHeader>
-      <CardContent className="space-y-3">
+      {(!verified || showCode) && <CardContent className="space-y-3">
         {/* Pixel type toggle */}
         <div className="flex items-center gap-3">
           <Label className="text-xs whitespace-nowrap">Pixel type</Label>
@@ -3614,7 +3642,7 @@ function ConversionPixelSection({ campaignId, campaignType }: { campaignId: numb
             {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
           </Button>
         </div>
-      </CardContent>
+      </CardContent>}
     </Card>
   );
 }
@@ -6088,13 +6116,13 @@ export default function CampaignDetailPage() {
         )}
 
         {/* Embed code */}
-        <EmbedCodeSection campaignId={campaignId} headlineSelector={campaign?.headlineSelector || "h1"} subheadlineSelector={campaign?.subheadlineSelector || "h2"} />
+        <EmbedCodeSection campaignId={campaignId} headlineSelector={campaign?.headlineSelector || "h1"} subheadlineSelector={campaign?.subheadlineSelector || "h2"} verified={campaign?.pixelVerified} />
 
         {/* Revenue Funnel */}
         <FunnelBuilder campaignId={campaignId} />
 
         {/* Conversion pixel */}
-        <ConversionPixelSection campaignId={campaignId} campaignType={stats?.campaignType} />
+        <ConversionPixelSection campaignId={campaignId} campaignType={stats?.campaignType} verified={campaign?.conversionPixelVerified} />
 
         {/* Webhook (legacy Stripe URL) */}
         <WebhookSection campaignId={campaignId} />

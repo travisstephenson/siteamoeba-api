@@ -1152,9 +1152,12 @@ export async function registerRoutes(server: Server, app: Express) {
       await pool.query('DELETE FROM behavioral_events WHERE campaign_id = $1', [campaignId]);
       await pool.query('DELETE FROM visitor_sessions WHERE campaign_id = $1', [campaignId]);
       await pool.query('DELETE FROM impressions WHERE campaign_id = $1', [campaignId]);
+      await pool.query('DELETE FROM revenue_events WHERE campaign_id = $1', [campaignId]);
       await pool.query('DELETE FROM visitors WHERE campaign_id = $1', [campaignId]);
       // Also clear daily observations so stale insights don't persist
       await pool.query('DELETE FROM daily_observations WHERE campaign_id = $1', [campaignId]);
+      // Clear rejected charges so Stripe poller doesn't skip legitimate future charges
+      await pool.query('DELETE FROM rejected_charges WHERE user_id = $1', [campaign.userId]);
       await pgPool.end();
 
       res.json({
@@ -4078,6 +4081,21 @@ export async function registerRoutes(server: Server, app: Express) {
           // Non-fatal — fall back to the revenue param
           console.warn("[pixel] PI lookup failed:", piErr);
         }
+      }
+
+      // VALIDATE: visitor must exist and belong to this campaign
+      // This prevents orphan pixels from creating false revenue
+      const visitorCheck = await pool.query(
+        `SELECT id, campaign_id FROM visitors WHERE id = $1`, [vid]
+      );
+      if (visitorCheck.rows.length === 0) {
+        console.log(`[pixel] Rejected: visitor ${vid} does not exist`);
+        return;
+      }
+      const visitorCampaign = visitorCheck.rows[0].campaign_id;
+      if (visitorCampaign !== parseInt(cid)) {
+        console.log(`[pixel] Rejected: visitor ${vid} belongs to campaign ${visitorCampaign}, not ${cid}`);
+        return;
       }
 
       await recordPurchaseEvent({
