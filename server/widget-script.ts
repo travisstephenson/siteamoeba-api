@@ -37,6 +37,13 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     vid = "v_" + Math.random().toString(36).substr(2, 9) + "_" + Date.now();
   }
 
+  // CHECK URL: If this page was reached with ?sa_vid= in the URL, adopt that ID.
+  // This is how cross-domain tracking works — the ID travels through checkout URLs.
+  var urlVid = (window.location.search.match(/[?&]sa_vid=([^&]+)/) || [])[1];
+  if (urlVid) {
+    vid = decodeURIComponent(urlVid);
+  }
+
   // Store in ALL available locations for maximum persistence
   try { localStorage.setItem("sa_vid", vid); } catch(e) {}
   try { sessionStorage.setItem("sa_vid", vid); } catch(e) {}
@@ -47,21 +54,54 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   // returning visitors even when all client-side storage is cleared.
   var fp = (function() {
     try {
+      // Canvas fingerprint — unique per GPU/driver/OS combination
+      var canvasHash = "";
+      try {
+        var c = document.createElement("canvas");
+        c.width = 200; c.height = 50;
+        var ctx = c.getContext("2d");
+        if (ctx) {
+          ctx.textBaseline = "top";
+          ctx.font = "14px Arial";
+          ctx.fillStyle = "#f60";
+          ctx.fillRect(125, 1, 62, 20);
+          ctx.fillStyle = "#069";
+          ctx.fillText("SiteAmoeba.fp", 2, 15);
+          ctx.fillStyle = "rgba(102,204,0,0.7)";
+          ctx.fillText("SiteAmoeba.fp", 4, 17);
+          canvasHash = c.toDataURL().slice(-50);
+        }
+      } catch(e) {}
+
+      // WebGL renderer — identifies GPU hardware
+      var glRenderer = "";
+      try {
+        var gl = document.createElement("canvas").getContext("webgl");
+        if (gl) {
+          var dbg = gl.getExtension("WEBGL_debug_renderer_info");
+          if (dbg) glRenderer = gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || "";
+        }
+      } catch(e) {}
+
       var raw = [
         navigator.userAgent,
         screen.width + "x" + screen.height + "x" + screen.colorDepth,
         navigator.language,
         (navigator.hardwareConcurrency || 0),
         new Date().getTimezoneOffset(),
-        (typeof Intl !== "undefined" ? (Intl.DateTimeFormat().resolvedOptions().timeZone || "") : "")
+        (typeof Intl !== "undefined" ? (Intl.DateTimeFormat().resolvedOptions().timeZone || "") : ""),
+        canvasHash,
+        glRenderer,
+        navigator.platform || "",
+        (navigator.maxTouchPoints || 0)
       ].join("|");
-      // Simple djb2-style hash
+      // djb2 hash
       var h = 5381;
       for (var i = 0; i < raw.length; i++) {
         h = ((h << 5) + h) ^ raw.charCodeAt(i);
-        h = h & h; // keep 32-bit
+        h = h & h;
       }
-      return (h >>> 0).toString(36); // unsigned hex-like string
+      return (h >>> 0).toString(36);
     } catch(e) { return ""; }
   })();
 
@@ -862,6 +902,71 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     }, { threshold: 0.5 });
     sections.forEach(function(s) { observer.observe(s); });
   }
+
+  // === VISITOR ID LINK DECORATION ===
+  // Append sa_vid to ALL outbound links so the visitor ID travels through checkout,
+  // payment processors, thank-you pages, etc. This is the foundation of cross-domain
+  // attribution — the visitor ID follows the user everywhere.
+  function decorateLink(url) {
+    if (!url || !vid) return url;
+    try {
+      var u = new URL(url, window.location.origin);
+      // Skip same-page anchors, javascript:, mailto:, tel:
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') return url;
+      // Skip if already has sa_vid
+      if (u.searchParams.has('sa_vid')) return url;
+      // Add the visitor ID
+      u.searchParams.set('sa_vid', vid);
+      // Also add campaign ID so the conversion pixel knows which campaign
+      u.searchParams.set('sa_cid', String(CID));
+      return u.toString();
+    } catch(e) { return url; }
+  }
+
+  // Intercept all link clicks and form submissions
+  document.addEventListener('click', function(e) {
+    var target = e.target;
+    // Walk up to find the nearest <a> tag
+    var link = null;
+    var el = target;
+    for (var i = 0; i < 10 && el; i++) {
+      if (el.tagName === 'A' && el.href) { link = el; break; }
+      el = el.parentElement;
+    }
+    if (link && link.href) {
+      var decorated = decorateLink(link.href);
+      if (decorated !== link.href) {
+        link.href = decorated;
+      }
+    }
+  }, true);
+
+  // Also decorate form actions (checkout forms, opt-in forms)
+  document.addEventListener('submit', function(e) {
+    var form = e.target;
+    if (form && form.action) {
+      var decorated = decorateLink(form.action);
+      if (decorated !== form.action) form.action = decorated;
+      // Also inject sa_vid as a hidden field
+      if (!form.querySelector('input[name="sa_vid"]')) {
+        var hidden = document.createElement('input');
+        hidden.type = 'hidden';
+        hidden.name = 'sa_vid';
+        hidden.value = vid;
+        form.appendChild(hidden);
+        var cidField = document.createElement('input');
+        cidField.type = 'hidden';
+        cidField.name = 'sa_cid';
+        cidField.value = String(CID);
+        form.appendChild(cidField);
+      }
+    }
+  }, true);
+
+  // Expose vid globally so conversion pixels on other pages can read it
+  window.__sa_vid = vid;
+  window.__sa_cid = CID;
+  window.__sa_fp = fp;
 
   // === SECTION MAP: Build a structured map of page sections for drop-off analysis ===
   var sectionMap = null;
