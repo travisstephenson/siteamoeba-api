@@ -1232,7 +1232,7 @@ function WhopIntegration({ userId }: { userId?: number }) {
   );
 }
 
-function IntegrationsCard({ userId, webhookSecret }: { userId?: number; webhookSecret?: string | null }) {
+function IntegrationsCard({ userId, webhookSecret, user }: { userId?: number; webhookSecret?: string | null; user?: any }) {
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -1385,6 +1385,7 @@ export default function SettingsPage() {
         <IntegrationsCard
           userId={user?.id}
           webhookSecret={(user as any)?.webhookSecret}
+          user={user}
         />
 
         {/* Testing Settings */}
