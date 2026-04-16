@@ -3022,6 +3022,7 @@ interface ConversionEntry {
 
 interface VisitorFeedData {
   recentConversions: ConversionEntry[];
+  recentVisitors?: ConversionEntry[];
   summary: {
     totalVisitors: number;
     totalBuyers: number;
@@ -3241,11 +3242,43 @@ function VisitorFeedPanel({ campaignId, campaignType, forceExpand }: { campaignI
                     );
                   })}
                 </div>
-              ) : s.totalVisitors > 0 ? (
-                <p className="text-xs text-muted-foreground text-center py-4">
-                  {isLeadGen ? "No opt-ins yet. Leads will appear here with the variants they saw." : "No conversions yet. Buyers will appear here with the variants they saw."}
-                </p>
-              ) : (
+              ) : null}
+
+              {/* Recent Visitors (all activity) */}
+              {(data?.recentVisitors ?? []).length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                    Recent Visitors
+                  </div>
+                  {(data?.recentVisitors ?? []).filter(v => !v.converted).slice(0, 8).map((v, i) => (
+                    <div
+                      key={v.visitorId + "-v-" + i}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg border border-border/50"
+                    >
+                      <div className="w-6 h-6 rounded-full bg-muted flex items-center justify-center text-[10px] text-muted-foreground shrink-0">
+                        {v.device === "mobile" ? "📱" : v.device === "tablet" ? "📱" : "💻"}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">{timeAgo(v.createdAt)}</span>
+                          {v.headlineIsControl
+                            ? <span className="text-[10px] text-muted-foreground">Control</span>
+                            : <span className="text-[10px] font-medium" style={{ color: 'hsl(160 84% 39%)' }}>Challenger</span>
+                          }
+                        </div>
+                        <div className="text-[10px] text-muted-foreground flex items-center gap-2">
+                          <span>↕ {v.maxScrollDepth}%</span>
+                          <span>⏱ {formatDuration(v.timeOnPage)}</span>
+                          <span>{v.clickCount} clicks</span>
+                          {v.trafficSource !== 'direct' && <span>· {v.trafficSource}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {s.totalVisitors === 0 && conversions.length === 0 && (
                 <p className="text-xs text-muted-foreground text-center py-4">
                   No visitor data yet. Activity will appear once visitors interact with your page.
                 </p>

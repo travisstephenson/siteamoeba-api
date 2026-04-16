@@ -1470,8 +1470,41 @@ class StorageImpl implements IStorage {
       };
     };
 
+    // Recent visitors (all activity, not just conversions) — makes the feed feel live
+    const recentVisitorsResult = await pool.query(
+      `SELECT
+        v.id as visitor_id,
+        v.converted,
+        v.converted_at,
+        v.revenue,
+        v.user_agent,
+        v.referrer,
+        v.first_seen,
+        v.customer_email,
+        COALESCE(v.traffic_source, 'direct') as traffic_source,
+        hv.text as headline_variant,
+        hv.is_control as headline_is_control,
+        hv.id as headline_variant_id,
+        sv.text as subheadline_variant,
+        sv.is_control as subheadline_is_control,
+        vs.device_type,
+        vs.max_scroll_depth,
+        vs.time_on_page,
+        vs.click_count,
+        vs.sections_viewed
+       FROM visitors v
+       LEFT JOIN variants hv ON hv.id = v.headline_variant_id
+       LEFT JOIN variants sv ON sv.id = v.subheadline_variant_id
+       LEFT JOIN visitor_sessions vs ON vs.visitor_id = v.id AND vs.campaign_id = v.campaign_id
+       WHERE v.campaign_id = $1
+       ORDER BY v.first_seen DESC
+       LIMIT 15`,
+      [campaignId]
+    );
+
     return {
       recentConversions: conversionsResult.rows.map(mapRow),
+      recentVisitors: recentVisitorsResult.rows.map(mapRow),
       summary: {
         totalVisitors: parseInt(summary.total_visitors) || 0,
         totalBuyers: parseInt(summary.total_buyers) || 0,
