@@ -4,16 +4,18 @@
  * Per-campaign linear funnel step editor.
  * Pulls products directly from Stripe so names and prices are exact matches.
  */
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import {
-  Plus, Trash2, DollarSign, Save, ArrowDown, ShoppingCart,
+  Plus, Trash2, DollarSign, Save, ArrowDown, ShoppingCart, ChevronsUpDown, Check,
 } from "lucide-react";
 
 interface StripeProduct {
@@ -185,32 +187,20 @@ export function FunnelBuilder({ campaignId }: { campaignId: number }) {
                       </SelectContent>
                     </Select>
 
-                    {/* Product selector (Stripe) or manual input */}
+                    {/* Product selector (Stripe searchable) or manual input */}
                     {hasStripe ? (
-                      <Select
-                        value={step.stripeProductId || "_custom"}
-                        onValueChange={(val) => {
-                          if (val === "_custom") {
-                            updateStep(i, { name: "", price: "", stripeProductId: undefined, stripePriceId: undefined });
+                      <ProductCombobox
+                        products={stripeProducts}
+                        value={step.name}
+                        onSelect={(product) => {
+                          if (product) {
+                            selectProduct(i, product.id);
                           } else {
-                            selectProduct(i, val);
+                            updateStep(i, { name: "", price: "", stripeProductId: undefined });
                           }
                         }}
-                      >
-                        <SelectTrigger className="h-8 text-xs flex-1 min-w-[160px]">
-                          <SelectValue placeholder="Select product...">
-                            {step.name || "Select product..."}
-                          </SelectValue>
-                        </SelectTrigger>
-                        <SelectContent>
-                          {stripeProducts.map(p => (
-                            <SelectItem key={p.id} value={p.id}>
-                              {p.name} — ${p.price.toFixed(2)} ({p.chargeCount} sales)
-                            </SelectItem>
-                          ))}
-                          <SelectItem value="_custom">Custom product (type manually)</SelectItem>
-                        </SelectContent>
-                      </Select>
+                        onCustom={(name) => updateStep(i, { name, stripeProductId: undefined })}
+                      />
                     ) : (
                       <Input
                         placeholder="Product name"
@@ -278,5 +268,93 @@ export function FunnelBuilder({ campaignId }: { campaignId: number }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// === Searchable Product Combobox ===
+function ProductCombobox({
+  products,
+  value,
+  onSelect,
+  onCustom,
+}: {
+  products: StripeProduct[];
+  value: string;
+  onSelect: (product: StripeProduct | null) => void;
+  onCustom: (name: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className="h-8 text-xs flex-1 min-w-[180px] justify-between font-normal"
+        >
+          <span className="truncate">{value || "Select product..."}</span>
+          <ChevronsUpDown className="ml-1 h-3 w-3 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-[350px] p-0" align="start">
+        <Command>
+          <CommandInput
+            placeholder="Search products..."
+            value={search}
+            onValueChange={setSearch}
+            className="text-xs"
+          />
+          <CommandList>
+            <CommandEmpty>
+              <div className="p-2 text-center">
+                <p className="text-xs text-muted-foreground">No products found.</p>
+                {search && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="mt-1 text-xs"
+                    onClick={() => {
+                      onCustom(search);
+                      setOpen(false);
+                      setSearch("");
+                    }}
+                  >
+                    Use "{search}" as custom name
+                  </Button>
+                )}
+              </div>
+            </CommandEmpty>
+            <CommandGroup>
+              {products.map((p) => (
+                <CommandItem
+                  key={p.id}
+                  value={p.name}
+                  onSelect={() => {
+                    onSelect(p);
+                    setOpen(false);
+                    setSearch("");
+                  }}
+                  className="text-xs"
+                >
+                  <Check className={`mr-2 h-3 w-3 ${value === p.name ? "opacity-100" : "opacity-0"}`} />
+                  <div className="flex-1 min-w-0">
+                    <span className="truncate block">{p.name}</span>
+                  </div>
+                  <span className="text-muted-foreground ml-2 shrink-0">
+                    ${p.price.toFixed(2)}
+                  </span>
+                  <span className="text-muted-foreground/50 text-[10px] ml-1 shrink-0">
+                    ({p.chargeCount})
+                  </span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   );
 }
