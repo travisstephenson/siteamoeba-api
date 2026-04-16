@@ -657,31 +657,24 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         // Retry with delays for dynamic pages (GHL, Webflow etc. render content after load)
         // In preview mode: attempt to apply on every retry until it succeeds
         // Retry with delays for dynamic pages — but only apply ONCE
+        // Check for successful application by looking for data-sa-swapped attribute,
+        // NOT by checking if variant words exist on the page (they often overlap with control text)
         var retries = [0, 400, 1200, 2500, 5000];
         var applied = false;
         retries.forEach(function(delay) {
           setTimeout(function() {
             if (applied) return;
-            // Check if the variant text is already on the page (from a prior retry)
-            var checks = [];
-            if (data.headline && !data.headline.isControl) checks.push(data.headline);
-            if (data.subheadline && !data.subheadline.isControl) checks.push(data.subheadline);
-            if (data.sections) data.sections.forEach(function(s) { if (!s.isControl) checks.push(s); });
-            for (var i = 0; i < checks.length; i++) {
-              var v = checks[i];
-              if (!v || !v.text) continue;
-              var variantWords = v.text.toLowerCase().split(/ +/).filter(function(w) { return w.length > 4; }).slice(0, 5);
-              var pageText = document.body.textContent.toLowerCase();
-              var hits = 0;
-              for (var w = 0; w < variantWords.length; w++) {
-                if (pageText.indexOf(variantWords[w]) !== -1) hits++;
-              }
-              if (hits >= Math.ceil(variantWords.length * 0.5)) { applied = true; return; }
+            // Check if a swap already happened (from a prior retry)
+            if (document.querySelector('[data-sa-swapped="true"]')) {
+              applied = true;
+              return;
             }
             // Not yet applied — try now
             handleAssignData(data);
-            // Mark as applied optimistically (the safety checks inside will revert if it failed)
-            applied = true;
+            // Check if it actually worked
+            if (document.querySelector('[data-sa-swapped="true"]')) {
+              applied = true;
+            }
           }, delay);
         });
       })
