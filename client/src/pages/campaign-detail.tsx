@@ -5349,7 +5349,7 @@ export default function CampaignDetailPage() {
   });
   const [showAnomalyPanel, setShowAnomalyPanel] = useState(false);
   const [showNoAIModal, setShowNoAIModal] = useState(false);
-  const [showVisualEditor, setShowVisualEditor] = useState(false);
+  const [rescanLoading, setRescanLoading] = useState(false);
   const userPlan = user?.plan ?? "free";
   const canRunTests = userPlan !== "free" || !!user?.llmProvider;
   const { toast } = useToast();
@@ -5462,18 +5462,6 @@ export default function CampaignDetailPage() {
 
   return (
     <div className="flex flex-col h-full">
-      {/* Visual Editor overlay */}
-      {showVisualEditor && campaign && (
-        <VisualEditor
-          campaignId={campaign.id}
-          campaignUrl={campaign.url}
-          token={getAuthToken() || ""}
-          onClose={() => setShowVisualEditor(false)}
-          onSaved={() => {
-            queryClient.invalidateQueries({ queryKey: [`/api/campaigns/${campaign.id}/stats`] });
-          }}
-        />
-      )}
       {/* Breadcrumb header */}
       <div className="px-6 py-4 border-b border-border flex items-center justify-between">
         <Breadcrumb>
@@ -5518,17 +5506,6 @@ export default function CampaignDetailPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setShowVisualEditor(true)}
-            data-testid="button-visual-editor"
-            className="gap-1.5"
-            style={{ borderColor: "rgba(20,184,166,0.4)", color: "rgb(20,184,166)" }}
-          >
-            <MousePointerClick className="w-3.5 h-3.5" />
-            Visual Editor
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
             onClick={() => setShowRestartDialog(true)}
             data-testid="button-restart-test"
             className="gap-1.5"
@@ -5559,6 +5536,75 @@ export default function CampaignDetailPage() {
           </Button>
         </div>
       </div>
+
+      {/* Page Changed Warning */}
+      {stats?.mismatchSections?.length > 0 && (
+        <div className="mx-6 mt-3 rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/20 px-4 py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                  Your page has changed since the last scan
+                </p>
+                <p className="text-xs text-amber-700/70 dark:text-amber-300/60 mt-0.5">
+                  {stats.mismatchSections.length} section{stats.mismatchSections.length !== 1 ? "s" : ""} no longer match{stats.mismatchSections.length === 1 ? "es" : ""} the original scan.
+                  Tests on affected sections are paused until you rescan.
+                </p>
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {stats.mismatchSections.map((s: any) => (
+                    <span key={s.id} className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-700">
+                      {s.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <Button
+              size="sm"
+              onClick={async () => {
+                try {
+                  setRescanLoading(true);
+                  const res = await apiRequest("POST", `/api/campaigns/${campaign?.id}/rescan`);
+                  const { jobId } = await res.json();
+                  // Poll for completion
+                  const poll = async () => {
+                    const status = await apiRequest("GET", `/api/scan-status/${jobId}`);
+                    const data = await status.json();
+                    if (data.status === "done") {
+                      setRescanLoading(false);
+                      const result = data.result;
+                      if (result.changedSections?.length > 0) {
+                        toast({
+                          title: "Rescan complete",
+                          description: `${result.updated} section${result.updated !== 1 ? "s" : ""} updated. ${result.changedSections.length} had text changes — your control is now the updated text.`,
+                        });
+                      } else {
+                        toast({ title: "Rescan complete", description: `${result.updated} section${result.updated !== 1 ? "s" : ""} refreshed. No text changes detected.` });
+                      }
+                      queryClient.invalidateQueries({ queryKey: [`/api/campaigns/${campaign?.id}/stats`] });
+                    } else if (data.status === "error") {
+                      setRescanLoading(false);
+                      toast({ title: "Rescan failed", description: data.error, variant: "destructive" });
+                    } else {
+                      setTimeout(poll, 3000);
+                    }
+                  };
+                  setTimeout(poll, 3000);
+                } catch (e: any) {
+                  setRescanLoading(false);
+                  toast({ title: "Rescan failed", description: e.message, variant: "destructive" });
+                }
+              }}
+              disabled={rescanLoading}
+              className="gap-1.5 shrink-0 bg-amber-500 hover:bg-amber-600 text-white"
+              data-testid="button-rescan"
+            >
+              {rescanLoading ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />Rescanning...</> : <><RefreshCw className="w-3.5 h-3.5" />Rescan Page</>}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Anomaly Panel */}
       {showAnomalyPanel && (

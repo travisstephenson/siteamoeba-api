@@ -1326,6 +1326,17 @@ export async function registerRoutes(server: Server, app: Express) {
         }, new Date())
       : null;
 
+    // Check for sections with content mismatches (page changed since scan)
+    const mismatchResult = await pool.query(
+      `SELECT id, section_id, label, category, mismatch_count, mismatch_detected_at
+       FROM test_sections WHERE campaign_id = $1 AND mismatch_detected = true`,
+      [campaign.id]
+    );
+    const mismatchSections = mismatchResult.rows.map((r: any) => ({
+      id: r.id, sectionId: r.section_id, label: r.label, category: r.category,
+      mismatchCount: r.mismatch_count, detectedAt: r.mismatch_detected_at,
+    }));
+
     res.json({
       totalVisitors,
       totalConversions,
@@ -1334,6 +1345,7 @@ export async function registerRoutes(server: Server, app: Express) {
       variants,
       campaignType: campaign.campaignType || "purchase",
       testStartDate: testStartDate && !isNaN(testStartDate.getTime()) ? testStartDate.toISOString() : null,
+      mismatchSections,
     });
   });
 
@@ -2409,6 +2421,133 @@ export async function registerRoutes(server: Server, app: Express) {
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
     const section = await storage.createTestSection(parsed.data);
     res.status(201).json(section);
+  });
+
+  // POST /api/campaigns/:id/rescan — re-scan the page and update test sections
+  // Used when a user makes changes to their page and needs to refresh the scan data.
+  // Reuses the scan-page job system but also updates existing sections with new text/selectors.
+  app.post("/api/campaigns/:id/rescan", aiLimiter, requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) return res.status(404).json({ error: "Campaign not found" });
+    if (!campaign.url) return res.status(400).json({ error: "No URL configured" });
+
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    let llmConfigResolved;
+    try {
+      llmConfigResolved = resolveLLMConfig({
+        operation: "scan",
+        userPlan: user.plan || "free",
+        userProvider: user.llmProvider,
+        userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : null,
+        userModel: user.llmModel,
+      });
+    } catch {
+      return res.status(400).json({ error: "AI provider not configured." });
+    }
+
+    // Trigger the scan job (same as scan-page)
+    const jobId = "rescan_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+    scanJobs.set(jobId, { status: "pending", createdAt: Date.now() });
+    res.json({ jobId });
+
+    // Background: run scan and then update existing sections
+    (async () => {
+      try {
+        // Fetch HTML
+        let rawHtml = "";
+        const fetchController = new AbortController();
+        const fetchTimeout = setTimeout(() => fetchController.abort(), 60000);
+        const fetchResponse = await fetch(campaign.url, {
+          signal: fetchController.signal,
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          },
+        });
+        clearTimeout(fetchTimeout);
+        rawHtml = await fetchResponse.text();
+
+        // Truncate for LLM
+        const truncated = rawHtml.length > 120000 ? rawHtml.substring(0, 120000) : rawHtml;
+
+        // Call the LLM to re-scan (same prompt as the initial scan)
+        const { default: OpenAI } = await import("openai");
+        const client = new OpenAI({
+          apiKey: llmConfigResolved.apiKey,
+          baseURL: llmConfigResolved.baseURL || undefined,
+        });
+
+        const scanPrompt = `You are a CRO (Conversion Rate Optimization) expert. Analyze this HTML page and identify testable sections. For each section, provide: id (kebab-case), label, purpose, selector (CSS), category (headline/subheadline/cta/body_copy/social_proof/guarantee/faq/other), currentText (the current text content), testPriority (1-10), testMethod (text_swap or html_swap). Return JSON array only.`;
+
+        const completion = await client.chat.completions.create({
+          model: llmConfigResolved.model,
+          messages: [
+            { role: "system", content: scanPrompt },
+            { role: "user", content: `URL: ${campaign.url}\n\nHTML:\n${truncated}` },
+          ],
+          temperature: 0.3,
+          max_tokens: 4000,
+        });
+
+        const raw = completion.choices[0]?.message?.content || "[]";
+        const jsonMatch = raw.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0];
+        const newSections = jsonMatch ? JSON.parse(jsonMatch) : [];
+
+        if (newSections.length === 0) {
+          scanJobs.set(jobId, { status: "error", error: "Scan found no sections", createdAt: Date.now() });
+          return;
+        }
+
+        // Get existing sections
+        const existing = await pool.query(
+          `SELECT id, section_id, label, current_text, selector FROM test_sections WHERE campaign_id = $1`,
+          [campaignId]
+        );
+        const existingMap = new Map(existing.rows.map((r: any) => [r.section_id, r]));
+
+        let updated = 0, added = 0;
+        const changedSections: any[] = [];
+
+        for (const ns of newSections) {
+          const ex = existingMap.get(ns.id);
+          if (ex) {
+            // Existing section — update text and selector if changed
+            const textChanged = ex.current_text !== ns.currentText;
+            if (textChanged || ex.selector !== ns.selector) {
+              await pool.query(
+                `UPDATE test_sections SET current_text = $1, selector = $2, mismatch_detected = false, mismatch_count = 0 WHERE id = $3`,
+                [ns.currentText, ns.selector, ex.id]
+              );
+              updated++;
+              if (textChanged) {
+                changedSections.push({ id: ex.id, sectionId: ns.id, label: ns.label, oldText: ex.current_text, newText: ns.currentText });
+              }
+            }
+          }
+          // Don't auto-add new sections from rescan — only update existing ones
+        }
+
+        // Clear mismatch flags on sections that were not in the mismatch list
+        await pool.query(
+          `UPDATE test_sections SET mismatch_detected = false WHERE campaign_id = $1 AND mismatch_detected = true`,
+          [campaignId]
+        );
+
+        scanJobs.set(jobId, {
+          status: "done",
+          createdAt: Date.now(),
+          result: { updated, added, changedSections, totalScanned: newSections.length },
+        });
+        console.log(`[rescan] Campaign ${campaignId}: ${updated} sections updated, ${changedSections.length} text changes detected`);
+
+      } catch (err: any) {
+        scanJobs.set(jobId, { status: "error", error: err.message, createdAt: Date.now() });
+        console.error(`[rescan] Error:`, err.message);
+      }
+    })();
   });
 
   // POST /api/sections/:id/preflight
@@ -4523,6 +4662,14 @@ export async function registerRoutes(server: Server, app: Express) {
         `UPDATE variants SET display_issue = true, display_issue_reason = $1, display_issue_at = $2 WHERE id = $3`,
         [reason, new Date().toISOString(), variantId]
       );
+      // If this is a content mismatch, also flag the test section
+      if (reason.includes('mismatch')) {
+        await pool.query(
+          `UPDATE test_sections SET mismatch_detected = true, mismatch_detected_at = NOW(), mismatch_count = mismatch_count + 1
+           WHERE id = (SELECT test_section_id FROM variants WHERE id = $1)`,
+          [variantId]
+        ).catch(() => {});
+      }
       console.log(`[widget] Variant ${variantId} flagged: ${reason}`);
     } catch (err) {
       // Silent — never break the page over a logging failure
