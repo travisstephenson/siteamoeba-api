@@ -6945,7 +6945,181 @@ ${observationText}`;
     res.set("Content-Security-Policy", "");
     res.send(html);
   });
-}
+
+  // ============== VISUAL EDITOR ==============
+  // GET /api/campaigns/:id/visual-editor
+  // Proxy-loads the user's page in an iframe with the editor bridge script injected.
+  // The bridge makes all scanned sections clickable/editable and communicates via postMessage.
+  app.get("/api/campaigns/:id/visual-editor", async (req: Request, res: Response) => {
+    // Auth via query param (needed for iframe src)
+    const tokenStr = req.query.token as string;
+    if (!tokenStr) return res.status(401).send("Not authenticated");
+    let userId: number;
+    try {
+      const payload = jwt.verify(tokenStr, JWT_SECRET) as { userId: number };
+      userId = payload.userId;
+    } catch {
+      return res.status(401).send("Invalid or expired token");
+    }
+
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== userId) return res.status(404).send("Campaign not found");
+    if (!campaign.url) return res.status(400).send("No URL configured for this campaign");
+
+    // Fetch all test sections for this campaign
+    const sections = await pool.query(
+      `SELECT id, section_id, label, selector, category, current_text, test_method, element_styles
+       FROM test_sections WHERE campaign_id = $1 ORDER BY test_priority`, [campaignId]
+    );
+
+    // Fetch all active variants
+    const variants = await pool.query(
+      `SELECT id, text, type, is_control, test_section_id
+       FROM variants WHERE campaign_id = $1 AND is_active = true`, [campaignId]
+    );
+
+    // Fetch the page HTML
+    let html: string;
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+      const resp = await fetch(campaign.url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      html = await resp.text();
+    } catch (err: any) {
+      return res.status(502).send(`Could not fetch page: ${err.message}`);
+    }
+
+    // Strip the SiteAmoeba widget script so it doesn't interfere
+    html = html.replace(/<script[^>]*siteamoeba\.com[^>]*><\/script>/gi, '');
+    html = html.replace(/<script[^>]*widget\/script\/\d+[^>]*><\/script>/gi, '');
+
+    // Add <base> tag so relative URLs (images, CSS, JS) resolve correctly
+    const baseUrl = new URL(campaign.url);
+    const baseTag = `<base href="${baseUrl.origin}${baseUrl.pathname.replace(/[^/]*$/, '')}">`;
+    if (html.includes('<head>')) {
+      html = html.replace('<head>', `<head>\n${baseTag}`);
+    } else if (html.includes('<HEAD>')) {
+      html = html.replace('<HEAD>', `<HEAD>\n${baseTag}`);
+    } else {
+      html = baseTag + html;
+    }
+
+    // Generate and inject the editor bridge script
+    const { generateEditorBridgeScript } = await import('./visual-editor-bridge');
+    const bridgeScript = generateEditorBridgeScript(
+      sections.rows.map((s: any) => ({
+        id: s.id,
+        sectionId: s.section_id,
+        label: s.label,
+        selector: s.selector,
+        category: s.category,
+        currentText: s.current_text,
+        testMethod: s.test_method || 'text_swap',
+      })),
+      variants.rows.map((v: any) => ({
+        id: v.id,
+        text: v.text,
+        type: v.type,
+        isControl: v.is_control,
+        testSectionId: v.test_section_id,
+      })),
+      campaignId
+    );
+
+    // Inject before </body>
+    if (html.includes('</body>')) {
+      html = html.replace('</body>', bridgeScript + '</body>');
+    } else {
+      html += bridgeScript;
+    }
+
+    // Allow iframe embedding
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('X-Frame-Options', 'ALLOWALL');
+    res.set('Content-Security-Policy', '');
+    res.send(html);
+  });
+
+  // POST /api/campaigns/:id/visual-editor/save
+  // Save edits from the visual editor as new variants or update existing ones
+  app.post("/api/campaigns/:id/visual-editor/save", requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) return res.status(404).json({ error: "Campaign not found" });
+
+    const { edits } = req.body;
+    // edits = [{ sectionId: number, text: string, innerHTML?: string }]
+    if (!Array.isArray(edits) || edits.length === 0) {
+      return res.status(400).json({ error: "No edits provided" });
+    }
+
+    const saved: any[] = [];
+    for (const edit of edits) {
+      const { sectionId, text } = edit;
+      if (!sectionId || !text) continue;
+
+      // Check if this section already has a non-control active variant for this campaign
+      const existingVariant = await pool.query(
+        `SELECT id FROM variants 
+         WHERE campaign_id = $1 AND test_section_id = $2 AND is_control = false AND is_active = true
+         LIMIT 1`,
+        [campaignId, sectionId]
+      );
+
+      if (existingVariant.rows.length > 0) {
+        // Update existing variant
+        await pool.query(
+          `UPDATE variants SET text = $1 WHERE id = $2`,
+          [text, existingVariant.rows[0].id]
+        );
+        saved.push({ sectionId, variantId: existingVariant.rows[0].id, action: 'updated' });
+      } else {
+        // Get the section details
+        const section = await pool.query(
+          `SELECT id, section_id, category FROM test_sections WHERE id = $1 AND campaign_id = $2`,
+          [sectionId, campaignId]
+        );
+        if (section.rows.length === 0) continue;
+        const s = section.rows[0];
+
+        // Determine variant type from section category
+        const typeMap: Record<string, string> = {
+          headline: 'headline', subheadline: 'subheadline',
+          cta: 'cta', button: 'cta',
+        };
+        const variantType = typeMap[s.category] || s.category;
+
+        // Create new variant
+        const newVariant = await storage.createVariant({
+          campaignId,
+          text,
+          type: variantType,
+          isControl: false,
+          isActive: true,
+          testSectionId: sectionId,
+        });
+        saved.push({ sectionId, variantId: newVariant.id, action: 'created' });
+
+        // Ensure the section is active for testing
+        await pool.query(
+          `UPDATE test_sections SET is_active = true WHERE id = $1`,
+          [sectionId]
+        );
+      }
+    }
+
+    res.json({ saved, count: saved.length });
+  });
+
+} // end registerRoutes
 
 // ===== Traffic Anomaly Detection =====
 

@@ -101,6 +101,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { VisualEditor } from "@/components/visual-editor";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient, API_BASE, getAuthToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
@@ -5348,6 +5349,7 @@ export default function CampaignDetailPage() {
   });
   const [showAnomalyPanel, setShowAnomalyPanel] = useState(false);
   const [showNoAIModal, setShowNoAIModal] = useState(false);
+  const [showVisualEditor, setShowVisualEditor] = useState(false);
   const userPlan = user?.plan ?? "free";
   const canRunTests = userPlan !== "free" || !!user?.llmProvider;
   const { toast } = useToast();
@@ -5460,6 +5462,18 @@ export default function CampaignDetailPage() {
 
   return (
     <div className="flex flex-col h-full">
+      {/* Visual Editor overlay */}
+      {showVisualEditor && campaign && (
+        <VisualEditor
+          campaignId={campaign.id}
+          campaignUrl={campaign.url}
+          token={getAuthToken() || ""}
+          onClose={() => setShowVisualEditor(false)}
+          onSaved={() => {
+            queryClient.invalidateQueries({ queryKey: [`/api/campaigns/${campaign.id}/stats`] });
+          }}
+        />
+      )}
       {/* Breadcrumb header */}
       <div className="px-6 py-4 border-b border-border flex items-center justify-between">
         <Breadcrumb>
@@ -5501,6 +5515,17 @@ export default function CampaignDetailPage() {
               )}
             </Button>
           </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowVisualEditor(true)}
+            data-testid="button-visual-editor"
+            className="gap-1.5"
+            style={{ borderColor: "rgba(20,184,166,0.4)", color: "rgb(20,184,166)" }}
+          >
+            <MousePointerClick className="w-3.5 h-3.5" />
+            Visual Editor
+          </Button>
           <Button
             variant="outline"
             size="sm"
