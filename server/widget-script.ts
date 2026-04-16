@@ -142,35 +142,22 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     try {
       var elCS = window.getComputedStyle(el);
 
-      // For COLOR: determine the dominant color by checking what percentage of
-      // the text content comes from the element vs inner styled children.
-      // If the element has "Hello <span style='color:red'>World</span>",
-      // the dominant color is the element's color (covers "Hello "), not the span's (covers "World").
+      // For COLOR: use the color of the FIRST text content in the element.
+      // The first word is almost always the primary/dominant color.
+      // Accent-colored spans ("<span style='color:gold'>Seven Jobs</span>") come later
+      // and should not override the primary color when we replace the full text.
       var dominantColor = elCS.color || "";
-      var styledSpans = el.querySelectorAll("span[style], strong[style], em[style]");
-      if (styledSpans.length > 0) {
-        var totalTextLen = (el.textContent || "").length;
-        var styledTextLen = 0;
-        for (var si = 0; si < styledSpans.length; si++) {
-          styledTextLen += (styledSpans[si].textContent || "").length;
+      // Walk the child nodes to find what color the first text renders in
+      var firstTextNode = null;
+      var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+      while (walker.nextNode()) {
+        if ((walker.currentNode.textContent || "").trim().length > 0) {
+          firstTextNode = walker.currentNode;
+          break;
         }
-        // If styled children contain MORE than half the text, use the first styled child's color
-        // Otherwise use the element's own color (it covers the majority)
-        if (styledTextLen > totalTextLen * 0.5) {
-          dominantColor = window.getComputedStyle(styledSpans[0]).color || dominantColor;
-        }
-        // else: keep the element's own color as dominant
-      } else {
-        // No styled children — check if there's ANY child node with different color
-        // (GHL wraps all text in a span even without inline styles)
-        var firstChild = el.querySelector("span, strong, em, b, i");
-        if (firstChild) {
-          var firstChildColor = window.getComputedStyle(firstChild).color || "";
-          // Only use child color if element color is black/default (means CSS is on the child)
-          if (dominantColor === "rgb(0, 0, 0)" || dominantColor === "rgba(0, 0, 0, 0)") {
-            dominantColor = firstChildColor;
-          }
-        }
+      }
+      if (firstTextNode && firstTextNode.parentElement) {
+        dominantColor = window.getComputedStyle(firstTextNode.parentElement).color || dominantColor;
       }
 
       // For OTHER properties: inner styled child is the best source for font properties
