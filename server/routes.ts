@@ -1654,10 +1654,20 @@ export async function registerRoutes(server: Server, app: Express) {
           let startingAfter: string | undefined = undefined;
           let processed = 0;
           let pageCount = 0;
-          console.log(`[stripe-poll] Starting poll for user ${u.id}`);
+          // Only fetch charges created AFTER the user's earliest active campaign.
+          // This prevents ingesting months/years of historical transactions.
+          const earliestCampaign = await pool.query(
+            `SELECT MIN(created_at) as earliest FROM campaigns WHERE user_id = $1 AND status = 'active'`,
+            [u.id]
+          );
+          const chargeStartDate = earliestCampaign.rows[0]?.earliest
+            ? Math.floor(new Date(earliestCampaign.rows[0].earliest).getTime() / 1000)
+            : Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000); // default: last 7 days
+
+          console.log(`[stripe-poll] Starting poll for user ${u.id} (charges since ${new Date(chargeStartDate * 1000).toISOString()})`);
 
           while (hasMore && pageCount < 5) {
-            const params: any = { limit: 100 };
+            const params: any = { limit: 100, created: { gte: chargeStartDate } };
             if (startingAfter) params.starting_after = startingAfter;
             const charges = await stripeClient.charges.list(params);
             hasMore = charges.has_more;
