@@ -137,17 +137,7 @@ export function resolveLLMConfig(opts: {
     };
   }
 
-  // FREE: platform key (fast model, no brain data)
-  if (platformKey) {
-    return {
-      config: { provider: PLATFORM_MODELS.fast.provider, apiKey: platformKey, model: PLATFORM_MODELS.fast.model },
-      useBrainData: false,
-      creditCost: 0,
-      source: "platform",
-    };
-  }
-
-  // FREE fallback: BYOK only
+  // FREE: BYOK only — platform key is reserved for paid plans
   if (hasUserKey) {
     return {
       config: { provider: userProvider as LLMConfig["provider"], apiKey: userApiKey!, model: userModel || undefined },
