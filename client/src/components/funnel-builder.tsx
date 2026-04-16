@@ -19,8 +19,9 @@ import {
 interface StripeProduct {
   id: string;
   name: string;
-  description: string;
-  prices: { id: string; amount: number; currency: string; interval: string | null }[];
+  price: number;
+  allPrices: number[];
+  chargeCount: number;
 }
 
 interface FunnelStep {
@@ -117,17 +118,14 @@ export function FunnelBuilder({ campaignId }: { campaignId: number }) {
     setHasChanges(true);
   };
 
-  // Select a Stripe product — auto-fills name and price
+  // Select a Stripe product — auto-fills name and price from actual transactions
   const selectProduct = (index: number, productId: string) => {
     const product = stripeProducts.find(p => p.id === productId);
     if (!product) return;
-    const price = product.prices[0]; // Use lowest price by default
     updateStep(index, {
       name: product.name,
-      price: price ? String(price.amount) : "",
+      price: String(product.price),
       stripeProductId: product.id,
-      stripePriceId: price?.id,
-      stepType: price?.interval ? "recurring" : steps[index].stepType,
     });
   };
 
@@ -207,13 +205,7 @@ export function FunnelBuilder({ campaignId }: { campaignId: number }) {
                         <SelectContent>
                           {stripeProducts.map(p => (
                             <SelectItem key={p.id} value={p.id}>
-                              <div className="flex items-center justify-between gap-3 w-full">
-                                <span>{p.name}</span>
-                                <span className="text-muted-foreground">
-                                  ${p.prices[0]?.amount.toFixed(2) || "—"}
-                                  {p.prices[0]?.interval ? `/${p.prices[0].interval}` : ""}
-                                </span>
-                              </div>
+                              {p.name} — ${p.price.toFixed(2)} ({p.chargeCount} sales)
                             </SelectItem>
                           ))}
                           <SelectItem value="_custom">Custom product (type manually)</SelectItem>
@@ -241,33 +233,7 @@ export function FunnelBuilder({ campaignId }: { campaignId: number }) {
                       />
                     </div>
 
-                    {/* If Stripe product has multiple prices, show selector */}
-                    {hasStripe && step.stripeProductId && (() => {
-                      const product = stripeProducts.find(p => p.id === step.stripeProductId);
-                      if (product && product.prices.length > 1) {
-                        return (
-                          <Select
-                            value={step.stripePriceId || product.prices[0]?.id}
-                            onValueChange={(priceId) => {
-                              const price = product.prices.find(p => p.id === priceId);
-                              if (price) updateStep(i, { price: String(price.amount), stripePriceId: priceId });
-                            }}
-                          >
-                            <SelectTrigger className="h-8 text-[10px] w-[100px] shrink-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {product.prices.map(p => (
-                                <SelectItem key={p.id} value={p.id}>
-                                  ${p.amount}{p.interval ? `/${p.interval}` : ""}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        );
-                      }
-                      return null;
-                    })()}
+
                   </div>
                   <Button
                     size="sm"

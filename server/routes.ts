@@ -6239,7 +6239,8 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // ============== FUNNEL STEPS ==============
 
-  // GET /api/settings/stripe-products — fetch all products + prices from user's Stripe account
+  // GET /api/settings/stripe-products — fetch real products from actual Stripe transactions
+  // Pulls from charge descriptions (what was actually sold), not just manually created products.
   app.get("/api/settings/stripe-products", requireAuth, async (req: Request, res: Response) => {
     const user = await storage.getUserById(req.userId!);
     if (!user || !(user as any).stripeAccessToken) {
@@ -6249,30 +6250,50 @@ export async function registerRoutes(server: Server, app: Express) {
       const decryptedKey = decryptApiKey((user as any).stripeAccessToken);
       const stripeClient = new Stripe(decryptedKey);
 
-      // Fetch all active products with their prices
-      const products = await stripeClient.products.list({ active: true, limit: 100 });
-      const prices = await stripeClient.prices.list({ active: true, limit: 100 });
+      // Fetch recent charges to find actual product names + prices from transactions
+      const charges = await stripeClient.charges.list({ limit: 100 });
 
-      // Map prices to products
-      const pricesByProduct: Record<string, any[]> = {};
-      for (const price of prices.data) {
-        const prodId = typeof price.product === 'string' ? price.product : price.product?.id || '';
-        if (!pricesByProduct[prodId]) pricesByProduct[prodId] = [];
-        pricesByProduct[prodId].push({
-          id: price.id,
-          amount: (price.unit_amount || 0) / 100,
-          currency: price.currency?.toUpperCase() || 'USD',
-          interval: price.recurring?.interval || null, // null = one-time, 'month'/'year' = recurring
-        });
+      // Group by description — each unique description is a "product"
+      const productMap: Record<string, { name: string; amounts: number[]; count: number; lastSeen: number }> = {};
+
+      for (const charge of charges.data) {
+        if (charge.status !== 'succeeded') continue;
+        const desc = (charge.description || '').trim();
+        if (!desc || desc.length < 3) continue;
+        // Skip subscription-related charges
+        if (desc.toLowerCase().includes('subscription creation') || desc.toLowerCase().includes('subscription update')) continue;
+
+        const amount = charge.amount / 100;
+        if (!productMap[desc]) {
+          productMap[desc] = { name: desc, amounts: [], count: 0, lastSeen: charge.created };
+        }
+        productMap[desc].amounts.push(amount);
+        productMap[desc].count++;
+        if (charge.created > productMap[desc].lastSeen) productMap[desc].lastSeen = charge.created;
       }
 
-      const result = products.data.map(p => ({
-        id: p.id,
-        name: p.name,
-        description: p.description || '',
-        images: p.images || [],
-        prices: (pricesByProduct[p.id] || []).sort((a: any, b: any) => a.amount - b.amount),
-      })).filter(p => p.prices.length > 0);
+      // Build product list with most common price
+      const result = Object.values(productMap)
+        .map(p => {
+          // Find the most common amount
+          const amountCounts: Record<number, number> = {};
+          for (const a of p.amounts) {
+            amountCounts[a] = (amountCounts[a] || 0) + 1;
+          }
+          const sortedAmounts = Object.entries(amountCounts)
+            .sort(([, a], [, b]) => b - a)
+            .map(([amount]) => parseFloat(amount));
+
+          return {
+            id: p.name, // use description as ID
+            name: p.name,
+            price: sortedAmounts[0] || 0,
+            allPrices: [...new Set(sortedAmounts)],
+            chargeCount: p.count,
+            lastSeen: new Date(p.lastSeen * 1000).toISOString(),
+          };
+        })
+        .sort((a, b) => b.chargeCount - a.chargeCount); // Most sold first
 
       res.json({ products: result });
     } catch (err: any) {
