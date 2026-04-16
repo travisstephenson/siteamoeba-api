@@ -1537,11 +1537,43 @@ export async function registerRoutes(server: Server, app: Express) {
       }
     }
 
-    // FINAL GATE: If we cannot tie this charge to a tracked visitor or a known campaign
-    // through email/customer chain/time proximity, do NOT attribute it.
-    // This prevents unrelated revenue (high-ticket 1:1 sales, manual invoices, etc.)
-    // from being falsely counted as funnel conversions.
-    // We store a rejected marker so the poller doesn't re-process this charge every cycle.
+    // 6. SMART FALLBACK: If we still don't have a match, check if the user has exactly ONE
+    // active campaign with recent visitors. Single-funnel users (most common case) should
+    // have charges attributed to their only active funnel. Multi-campaign users with
+    // off-funnel revenue (like Tiffany's high-ticket sales) are protected because the
+    // charge amount won't match a campaign with very different price points.
+    if (!matchedCampaignId) {
+      const activeCampaigns = userCampaigns.filter((c: any) => c.status === 'active');
+      if (activeCampaigns.length === 1) {
+        // Single active campaign — safe to attribute
+        matchedCampaignId = activeCampaigns[0].id;
+        console.log(`[stripe-poll] Single-campaign fallback: attributed $${amount} to C${matchedCampaignId}`);
+      } else if (activeCampaigns.length > 1) {
+        // Multiple active campaigns — try to match by checking which campaign had
+        // recent visitors with similar charge amounts in its revenue history
+        for (const c of activeCampaigns) {
+          const recentVisitors = await pool.query(
+            `SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen > NOW() - INTERVAL '24 hours'`,
+            [c.id]
+          );
+          if (parseInt(recentVisitors.rows[0]?.cnt || '0') > 0) {
+            // This campaign has active traffic — check if the charge amount matches prior conversions
+            const priorRevenue = await pool.query(
+              `SELECT DISTINCT amount FROM revenue_events WHERE campaign_id = $1 AND amount > 0 LIMIT 20`,
+              [c.id]
+            );
+            const knownAmounts = priorRevenue.rows.map((r: any) => parseFloat(r.amount));
+            if (knownAmounts.length === 0 || knownAmounts.includes(amount)) {
+              matchedCampaignId = c.id;
+              console.log(`[stripe-poll] Multi-campaign fallback: $${amount} matches C${matchedCampaignId} (active traffic + matching amount)`);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    // FINAL GATE: If we STILL cannot attribute, reject it
     if (!matchedCampaignId) {
       console.log(`[stripe-poll] UNATTRIBUTED: $${amount} from ${customerEmail || 'no-email'} — no visitor match found, skipping`);
       try {
