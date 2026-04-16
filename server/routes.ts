@@ -4061,6 +4061,20 @@ export async function registerRoutes(server: Server, app: Express) {
 
     if (!vid || !cid) return;
     try {
+      // If no revenue provided, try the campaign's price_point as a fallback
+      // This catches cases where users don't have Stripe connected and didn't set
+      // a fixed amount in the pixel, but DID configure a price on their campaign.
+      if (amount <= 0) {
+        const campaign = await storage.getCampaign(parseInt(cid));
+        if (campaign?.pricePoint) {
+          const parsed = parseFloat(campaign.pricePoint.replace(/[^0-9.]/g, ''));
+          if (parsed > 0) {
+            amount = parsed;
+            console.log(`[convert] Using campaign price_point fallback: $${amount} for C${cid}`);
+          }
+        }
+      }
+
       // If payment_intent is provided AND Stripe is connected for this campaign's user,
       // fetch the real amount and email directly from Stripe — no manual revenue needed
       let stripeEmail: string | undefined = email;
