@@ -1101,19 +1101,19 @@ export async function registerRoutes(server: Server, app: Express) {
         u1.email as referrer_email, u1.name as referrer_name,
         u2.email as referred_email, u2.name as referred_name, u2.plan as referred_plan
       FROM referrals r
-      LEFT JOIN users u1 ON r.referrer_user_id = u1.id
-      LEFT JOIN users u2 ON r.referred_user_id = u2.id
+      LEFT JOIN users u1 ON r.referrer_id = u1.id
+      LEFT JOIN users u2 ON r.referred_id = u2.id
       ORDER BY r.created_at DESC
     `);
     // Referral stats per user
     const stats = await pool.query(`
-      SELECT referrer_user_id, u.email, u.name,
+      SELECT referrer_id, u.email, u.name,
         COUNT(*) as total_referrals,
         SUM(CASE WHEN status = 'converted' THEN 1 ELSE 0 END) as converted,
-        COALESCE(SUM(commission_amount), 0) as total_commission
+        COALESCE(SUM(total_earned), 0) as total_commission
       FROM referrals r
-      LEFT JOIN users u ON r.referrer_user_id = u.id
-      GROUP BY referrer_user_id, u.email, u.name
+      LEFT JOIN users u ON r.referrer_id = u.id
+      GROUP BY referrer_id, u.email, u.name
       ORDER BY total_referrals DESC
     `);
     res.json({ referrals: referrals.rows, leaderboard: stats.rows });
