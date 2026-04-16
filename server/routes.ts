@@ -635,6 +635,102 @@ export async function registerRoutes(server: Server, app: Express) {
     });
   });
 
+  // ============== GOHIGHLEVEL INTEGRATION ==============
+
+  // POST /api/settings/ghl-connect — save GHL Location ID + API Key, validate connection
+  app.post("/api/settings/ghl-connect", requireAuth, async (req: Request, res: Response) => {
+    const { locationId, apiKey } = req.body;
+    if (!locationId || !apiKey) return res.status(400).json({ error: "Location ID and API Key are required" });
+
+    // Validate the key by fetching the location info
+    try {
+      const testResp = await fetch(`https://services.leadconnectorhq.com/locations/${locationId}`, {
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Version': '2021-07-28',
+          'Accept': 'application/json',
+        },
+      });
+
+      if (!testResp.ok) {
+        const err = await testResp.json().catch(() => ({ message: 'Unknown error' }));
+        return res.status(400).json({ error: `GHL API error: ${err.message || testResp.statusText}. Check your Location ID and API Key.` });
+      }
+
+      const locationData = await testResp.json();
+      const locationName = locationData.location?.name || locationData.name || 'Connected';
+
+      // Encrypt and store
+      const encryptedKey = encryptApiKey(apiKey);
+      await storage.updateUser(req.userId!, {
+        ghlLocationId: locationId,
+        ghlApiKey: encryptedKey,
+        ghlConnectedAt: new Date().toISOString(),
+        ghlLocationName: locationName,
+      } as any);
+
+      res.json({ connected: true, locationName });
+    } catch (err: any) {
+      console.error('[ghl-connect]', err.message);
+      res.status(400).json({ error: `Could not connect to GHL: ${err.message}` });
+    }
+  });
+
+  // POST /api/settings/ghl-disconnect
+  app.post("/api/settings/ghl-disconnect", requireAuth, async (req: Request, res: Response) => {
+    await storage.updateUser(req.userId!, {
+      ghlLocationId: null,
+      ghlApiKey: null,
+      ghlConnectedAt: null,
+      ghlLocationName: null,
+    } as any);
+    res.json({ disconnected: true });
+  });
+
+  // GET /api/settings/ghl-transactions — fetch recent GHL transactions for the user
+  app.get("/api/settings/ghl-transactions", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user || !(user as any).ghlApiKey || !(user as any).ghlLocationId) {
+      return res.json({ transactions: [] });
+    }
+    try {
+      const apiKey = decryptApiKey((user as any).ghlApiKey);
+      const locationId = (user as any).ghlLocationId;
+
+      // Fetch recent orders from GHL
+      const resp = await fetch(
+        `https://services.leadconnectorhq.com/payments/orders?locationId=${locationId}&limit=100`,
+        {
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Version': '2021-07-28',
+            'Accept': 'application/json',
+          },
+        }
+      );
+      if (!resp.ok) {
+        return res.json({ transactions: [], error: 'Failed to fetch GHL orders' });
+      }
+      const data = await resp.json();
+      const orders = data.data || data.orders || [];
+
+      const transactions = orders.map((o: any) => ({
+        id: o._id || o.id,
+        name: o.contactName || o.name || 'Unknown',
+        email: o.contactEmail || o.email || '',
+        amount: typeof o.amount === 'number' ? o.amount / 100 : parseFloat(o.amount) || 0,
+        status: o.status || o.paymentStatus || 'unknown',
+        productName: o.items?.[0]?.name || o.product?.name || o.name || '',
+        createdAt: o.createdAt || o.created_at || '',
+      }));
+
+      res.json({ transactions });
+    } catch (err: any) {
+      console.error('[ghl-transactions]', err.message);
+      res.json({ transactions: [], error: err.message });
+    }
+  });
+
   // ============== CAMPAIGNS ==============
 
   app.get("/api/campaigns", requireAuth, async (req: Request, res: Response) => {
@@ -7655,9 +7751,9 @@ async function countCampaignVisitors(userId: number): Promise<number> {
 }
 
 function sanitizeUser(user: any) {
-  const { passwordHash, llmApiKey, stripeAccessToken, ...safe } = user;
-  // Add a boolean flag instead of exposing the token
+  const { passwordHash, llmApiKey, stripeAccessToken, ghlApiKey, ...safe } = user;
   safe.hasStripeConnect = !!stripeAccessToken;
+  safe.hasGhlConnect = !!ghlApiKey;
   return safe;
 }
 

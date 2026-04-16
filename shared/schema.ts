@@ -42,6 +42,10 @@ export const users = pgTable("users", {
   stripeAccountId: text("stripe_account_id"),
   stripeAccessToken: text("stripe_access_token"),
   stripeConnectedAt: text("stripe_connected_at"),
+  ghlLocationId: text("ghl_location_id"),
+  ghlApiKey: text("ghl_api_key"),
+  ghlConnectedAt: text("ghl_connected_at"),
+  ghlLocationName: text("ghl_location_name"),
   // User-level integrations
   webhookSecret: text("webhook_secret"),
   shopifyStoreUrl: text("shopify_store_url"),

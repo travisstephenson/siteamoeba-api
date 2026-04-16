@@ -882,29 +882,42 @@ function ShopifyIntegration({ userId }: { userId?: number }) {
   );
 }
 
-// ----- GoHighLevel Integration -----
-function GoHighLevelIntegration({ userId, webhookSecret }: { userId?: number; webhookSecret?: string | null }) {
+// ----- GoHighLevel Integration (Direct API) -----
+function GoHighLevelIntegration({ user }: { user?: any }) {
   const { toast } = useToast();
   const [expanded, setExpanded] = useState(false);
-  const [localSecret, setLocalSecret] = useState<string | null>(webhookSecret || null);
-  const [generatingSecret, setGeneratingSecret] = useState(false);
+  const [locationId, setLocationId] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [connecting, setConnecting] = useState(false);
 
-  const webhookUrl = userId ? `${PROD_BASE}/api/webhooks/ghl/${userId}` : "";
+  const isConnected = user?.hasGhlConnect;
+  const locationName = user?.ghlLocationName;
 
-  const handleGenerateSecret = async () => {
-    setGeneratingSecret(true);
-    try {
-      const res = await apiRequest("POST", "/api/settings/generate-webhook-secret");
-      if (!res.ok) throw new Error("Failed to generate secret");
-      const data = await res.json();
-      setLocalSecret(data.secret);
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
-      toast({ title: "Webhook secret generated" });
-    } catch {
-      toast({ title: "Failed to generate secret", variant: "destructive" });
-    } finally {
-      setGeneratingSecret(false);
+  const handleConnect = async () => {
+    if (!locationId.trim() || !apiKey.trim()) {
+      toast({ title: "Both fields required", description: "Enter your Location ID and Private Integration Key.", variant: "destructive" });
+      return;
     }
+    setConnecting(true);
+    try {
+      const res = await apiRequest("POST", "/api/settings/ghl-connect", { locationId: locationId.trim(), apiKey: apiKey.trim() });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Connection failed");
+      toast({ title: "GoHighLevel connected!", description: `Linked to ${data.locationName}` });
+      setLocationId("");
+      setApiKey("");
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    } catch (err: any) {
+      toast({ title: "Connection failed", description: err.message, variant: "destructive" });
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    await apiRequest("POST", "/api/settings/ghl-disconnect");
+    queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    toast({ title: "GoHighLevel disconnected" });
   };
 
   return (
@@ -919,63 +932,63 @@ function GoHighLevelIntegration({ userId, webhookSecret }: { userId?: number; we
         </div>
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium">GoHighLevel</p>
-          <p className="text-xs text-muted-foreground">CRM & pipeline webhook</p>
+          <p className="text-xs text-muted-foreground">{isConnected ? locationName || 'Connected' : 'Connect to track payments'}</p>
         </div>
-        <Badge variant="outline" className="text-xs text-muted-foreground" data-testid="badge-ghl-status">Webhook</Badge>
+        {isConnected
+          ? <Badge className="text-xs bg-emerald-500/15 text-emerald-500 border-emerald-500/30">Connected</Badge>
+          : <Badge variant="outline" className="text-xs text-muted-foreground">Not connected</Badge>
+        }
         {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground shrink-0" /> : <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />}
       </button>
 
       {expanded && (
-        <div className="px-4 pb-4 pt-3 border-t border-border space-y-4">
-          {userId && (
-            <div>
-              <p className="text-xs text-muted-foreground mb-1">Webhook URL</p>
-              <UrlRow url={webhookUrl} testId="ghl-webhook-url" />
-            </div>
-          )}
-
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">Webhook Secret <span className="text-xs">(send as <code className="bg-muted rounded px-1">x-webhook-secret</code> header)</span></p>
-            {localSecret ? (
+        <div className="px-4 pb-4 pt-3 border-t border-border space-y-3">
+          {isConnected ? (
+            <div className="space-y-3">
               <div className="flex items-center gap-2">
-                <code className="flex-1 bg-muted rounded-md px-3 py-2 text-xs font-mono text-foreground truncate" data-testid="text-ghl-webhook-secret">{localSecret}</code>
-                <CopyButton text={localSecret} testId="button-copy-ghl-secret" />
+                <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                <span className="text-sm">{locationName}</span>
               </div>
-            ) : (
+              <p className="text-xs text-muted-foreground">Payments from your GHL account will be automatically matched to tracked visitors.</p>
+              <Button size="sm" variant="outline" className="text-xs text-destructive" onClick={handleDisconnect}>Disconnect</Button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-medium block mb-1">Location ID</label>
+                <p className="text-[10px] text-muted-foreground mb-1">Found in GHL: Settings → Business Profile</p>
+                <Input
+                  placeholder="e.g. abc123DEF456"
+                  value={locationId}
+                  onChange={(e) => setLocationId(e.target.value)}
+                  className="h-8 text-xs font-mono"
+                  data-testid="input-ghl-location-id"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1">Private Integration Key</label>
+                <p className="text-[10px] text-muted-foreground mb-1">Found in GHL: Settings → Integrations → Private Integrations → Create New → Select All Scopes</p>
+                <Input
+                  placeholder="pit-..."
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  className="h-8 text-xs font-mono"
+                  type="password"
+                  data-testid="input-ghl-api-key"
+                />
+              </div>
               <Button
                 size="sm"
-                variant="outline"
-                className="text-xs h-8 gap-1"
-                onClick={handleGenerateSecret}
-                disabled={generatingSecret}
-                data-testid="button-generate-ghl-secret"
+                className="w-full gap-1.5"
+                onClick={handleConnect}
+                disabled={connecting}
+                data-testid="button-ghl-connect"
               >
-                {generatingSecret ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                Generate Secret
+                {connecting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plug className="w-3.5 h-3.5" />}
+                {connecting ? "Connecting..." : "Connect GoHighLevel"}
               </Button>
-            )}
-          </div>
-
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">Expected payload format</p>
-            <div className="bg-muted rounded-md p-3">
-              <pre className="text-xs font-mono text-foreground whitespace-pre-wrap">{`{
-  "event": "opportunity.won",
-  "contact": { "email": "customer@example.com" },
-  "opportunity": { "monetary_value": 297.00 }
-}`}</pre>
             </div>
-          </div>
-
-          <div className="rounded-md bg-muted/40 p-3 text-xs text-muted-foreground space-y-1">
-            <p className="font-medium text-foreground">Setup in GoHighLevel</p>
-            <ol className="list-decimal list-inside space-y-1">
-              <li>Go to <strong className="text-foreground">Settings</strong> → Webhooks → Add Webhook</li>
-              <li>Set Event: <em>Contact created</em> or <em>Opportunity won</em></li>
-              <li>Paste the webhook URL above</li>
-              <li>Add header <code className="bg-muted rounded px-1">x-webhook-secret</code> with your secret</li>
-            </ol>
-          </div>
+          )}
         </div>
       )}
     </div>
@@ -1235,7 +1248,7 @@ function IntegrationsCard({ userId, webhookSecret }: { userId?: number; webhookS
         <StripeIntegration userId={userId} />
         <WhopIntegration userId={userId} />
         <ShopifyIntegration userId={userId} />
-        <GoHighLevelIntegration userId={userId} webhookSecret={webhookSecret} />
+        <GoHighLevelIntegration user={user} />
         <GenericWebhookIntegration userId={userId} webhookSecret={webhookSecret} />
       </CardContent>
     </Card>
