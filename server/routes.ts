@@ -6239,6 +6239,48 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // ============== FUNNEL STEPS ==============
 
+  // GET /api/settings/stripe-products — fetch all products + prices from user's Stripe account
+  app.get("/api/settings/stripe-products", requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user || !(user as any).stripeAccessToken) {
+      return res.json({ products: [] });
+    }
+    try {
+      const decryptedKey = decryptApiKey((user as any).stripeAccessToken);
+      const stripeClient = new Stripe(decryptedKey);
+
+      // Fetch all active products with their prices
+      const products = await stripeClient.products.list({ active: true, limit: 100 });
+      const prices = await stripeClient.prices.list({ active: true, limit: 100 });
+
+      // Map prices to products
+      const pricesByProduct: Record<string, any[]> = {};
+      for (const price of prices.data) {
+        const prodId = typeof price.product === 'string' ? price.product : price.product?.id || '';
+        if (!pricesByProduct[prodId]) pricesByProduct[prodId] = [];
+        pricesByProduct[prodId].push({
+          id: price.id,
+          amount: (price.unit_amount || 0) / 100,
+          currency: price.currency?.toUpperCase() || 'USD',
+          interval: price.recurring?.interval || null, // null = one-time, 'month'/'year' = recurring
+        });
+      }
+
+      const result = products.data.map(p => ({
+        id: p.id,
+        name: p.name,
+        description: p.description || '',
+        images: p.images || [],
+        prices: (pricesByProduct[p.id] || []).sort((a: any, b: any) => a.amount - b.amount),
+      })).filter(p => p.prices.length > 0);
+
+      res.json({ products: result });
+    } catch (err: any) {
+      console.error('[stripe-products]', err.message);
+      res.json({ products: [], error: err.message });
+    }
+  });
+
   // GET /api/campaigns/:id/funnel — get funnel steps for a campaign
   app.get("/api/campaigns/:id/funnel", requireAuth, async (req: Request, res: Response) => {
     const campaignId = paramId(req.params.id);
