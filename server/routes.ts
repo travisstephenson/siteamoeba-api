@@ -6250,8 +6250,22 @@ export async function registerRoutes(server: Server, app: Express) {
       const decryptedKey = decryptApiKey((user as any).stripeAccessToken);
       const stripeClient = new Stripe(decryptedKey);
 
-      // Fetch recent charges to find actual product names + prices from transactions
-      const charges = await stripeClient.charges.list({ limit: 100 });
+      // Fetch charges from the last 30 days to find actual product names + prices
+      const thirtyDaysAgo = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000);
+      let allCharges: any[] = [];
+      let hasMore = true;
+      let startingAfter: string | undefined = undefined;
+      let pages = 0;
+      while (hasMore && pages < 10) {
+        const params: any = { limit: 100, created: { gte: thirtyDaysAgo } };
+        if (startingAfter) params.starting_after = startingAfter;
+        const batch = await stripeClient.charges.list(params);
+        allCharges = allCharges.concat(batch.data);
+        hasMore = batch.has_more;
+        if (batch.data.length > 0) startingAfter = batch.data[batch.data.length - 1].id;
+        pages++;
+      }
+      const charges = { data: allCharges };
 
       // Group by description — each unique description is a "product"
       const productMap: Record<string, { name: string; amounts: number[]; count: number; lastSeen: number }> = {};
