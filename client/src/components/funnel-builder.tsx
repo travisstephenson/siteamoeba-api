@@ -59,18 +59,18 @@ export function FunnelBuilder({ campaignId }: { campaignId: number }) {
   });
 
   // Fetch Stripe products
-  const { data: stripeData } = useQuery<{ products: StripeProduct[] }>({
+  const { data: stripeData, isLoading: stripeLoading } = useQuery<{ products: StripeProduct[] }>({
     queryKey: ["/api/settings/stripe-products"],
     queryFn: async () => {
       const res = await apiRequest("GET", "/api/settings/stripe-products");
       if (!res.ok) return { products: [] };
       return res.json();
     },
-    staleTime: 60000,
+    staleTime: 300000, // 5 min client-side cache
   });
 
   const stripeProducts = stripeData?.products ?? [];
-  const hasStripe = stripeProducts.length > 0;
+  const hasStripe = stripeProducts.length > 0 || stripeLoading;
 
   // Sync from API to local state
   useEffect(() => {
@@ -191,6 +191,7 @@ export function FunnelBuilder({ campaignId }: { campaignId: number }) {
                     {hasStripe ? (
                       <ProductCombobox
                         products={stripeProducts}
+                        loading={stripeLoading}
                         value={step.name}
                         onSelect={(product) => {
                           if (product) {
@@ -274,11 +275,13 @@ export function FunnelBuilder({ campaignId }: { campaignId: number }) {
 // === Searchable Product Combobox ===
 function ProductCombobox({
   products,
+  loading,
   value,
   onSelect,
   onCustom,
 }: {
   products: StripeProduct[];
+  loading?: boolean;
   value: string;
   onSelect: (product: StripeProduct | null) => void;
   onCustom: (name: string) => void;
@@ -310,7 +313,7 @@ function ProductCombobox({
           <CommandList>
             <CommandEmpty>
               <div className="p-2 text-center">
-                <p className="text-xs text-muted-foreground">No products found.</p>
+                <p className="text-xs text-muted-foreground">{loading ? "Loading products from Stripe..." : "No products found."}</p>
                 {search && (
                   <Button
                     size="sm"

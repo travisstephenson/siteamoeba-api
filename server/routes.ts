@@ -6239,6 +6239,9 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // ============== FUNNEL STEPS ==============
 
+  // In-memory cache for Stripe products per user (avoid 40s fetch every time)
+  const stripeProductCache: Record<number, { products: any[]; fetchedAt: number }> = {};
+
   // GET /api/settings/stripe-products — fetch real products from actual Stripe transactions
   // Pulls from charge descriptions (what was actually sold), not just manually created products.
   app.get("/api/settings/stripe-products", requireAuth, async (req: Request, res: Response) => {
@@ -6246,6 +6249,13 @@ export async function registerRoutes(server: Server, app: Express) {
     if (!user || !(user as any).stripeAccessToken) {
       return res.json({ products: [] });
     }
+
+    // Return cached if fresh (cache for 10 minutes)
+    const cached = stripeProductCache[user.id];
+    if (cached && Date.now() - cached.fetchedAt < 10 * 60 * 1000) {
+      return res.json({ products: cached.products });
+    }
+
     try {
       const decryptedKey = decryptApiKey((user as any).stripeAccessToken);
       const stripeClient = new Stripe(decryptedKey);
@@ -6308,6 +6318,9 @@ export async function registerRoutes(server: Server, app: Express) {
           };
         })
         .sort((a, b) => b.chargeCount - a.chargeCount); // Most sold first
+
+      // Cache for 10 minutes
+      stripeProductCache[user.id] = { products: result, fetchedAt: Date.now() };
 
       res.json({ products: result });
     } catch (err: any) {
