@@ -140,18 +140,54 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     var savedStyles = {};
     var STYLE_PROPS = ["color", "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textTransform", "textAlign"];
     try {
-      // Capture from the inner styled child (most specific source of truth)
-      var styledChild = el.querySelector("span[style], strong[style], em[style], b[style], span, strong, em, b, i") || el;
-      var childCS = window.getComputedStyle(styledChild);
-      // Capture from the element itself (CSS class-based styling)
       var elCS = window.getComputedStyle(el);
+
+      // For COLOR: determine the dominant color by checking what percentage of
+      // the text content comes from the element vs inner styled children.
+      // If the element has "Hello <span style='color:red'>World</span>",
+      // the dominant color is the element's color (covers "Hello "), not the span's (covers "World").
+      var dominantColor = elCS.color || "";
+      var styledSpans = el.querySelectorAll("span[style], strong[style], em[style]");
+      if (styledSpans.length > 0) {
+        var totalTextLen = (el.textContent || "").length;
+        var styledTextLen = 0;
+        for (var si = 0; si < styledSpans.length; si++) {
+          styledTextLen += (styledSpans[si].textContent || "").length;
+        }
+        // If styled children contain MORE than half the text, use the first styled child's color
+        // Otherwise use the element's own color (it covers the majority)
+        if (styledTextLen > totalTextLen * 0.5) {
+          dominantColor = window.getComputedStyle(styledSpans[0]).color || dominantColor;
+        }
+        // else: keep the element's own color as dominant
+      } else {
+        // No styled children — check if there's ANY child node with different color
+        // (GHL wraps all text in a span even without inline styles)
+        var firstChild = el.querySelector("span, strong, em, b, i");
+        if (firstChild) {
+          var firstChildColor = window.getComputedStyle(firstChild).color || "";
+          // Only use child color if element color is black/default (means CSS is on the child)
+          if (dominantColor === "rgb(0, 0, 0)" || dominantColor === "rgba(0, 0, 0, 0)") {
+            dominantColor = firstChildColor;
+          }
+        }
+      }
+
+      // For OTHER properties: inner styled child is the best source for font properties
+      // (GHL/Elementor often put font-family on spans, not on the heading element)
+      var styledChild = el.querySelector("span[style], strong[style], em[style], b[style], span, strong, em, b, i") || el;
+      var childCS = (styledChild !== el) ? window.getComputedStyle(styledChild) : elCS;
+
       for (var p = 0; p < STYLE_PROPS.length; p++) {
         var prop = STYLE_PROPS[p];
-        // Use the child's value if it differs from the element's (inner span override)
-        // Otherwise use the element's own computed value (CSS class-based)
-        var childVal = childCS[prop] || "";
-        var elVal = elCS[prop] || "";
-        savedStyles[prop] = childVal || elVal;
+        if (prop === "color") {
+          savedStyles[prop] = dominantColor;
+        } else {
+          // For non-color props: prefer child value (font-size, font-family often on inner spans)
+          var childVal = childCS[prop] || "";
+          var elVal = elCS[prop] || "";
+          savedStyles[prop] = childVal || elVal;
+        }
       }
     } catch(e) {}
 
