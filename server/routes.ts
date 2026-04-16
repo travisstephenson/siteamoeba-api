@@ -104,9 +104,9 @@ function sanitizeInput(input: string): string {
 // Plan config — Stripe price IDs for beta pricing (half off)
 const PLANS: Record<string, { credits: number; campaigns: number; priceId: string | null }> = {
   free:      { credits: 0,    campaigns: 999, priceId: null },
-  pro:       { credits: 1000,  campaigns: 999, priceId: "price_1TICnfLj5hhothOuz2yfIWZi" },
-  business:  { credits: 2400, campaigns: 999, priceId: "price_1TICngLj5hhothOuPEzJ9Nwa" },
-  autopilot: { credits: 6000, campaigns: 999, priceId: "price_1TICngLj5hhothOuIYr4AGgK" },
+  pro:       { credits: 500,   campaigns: 999, priceId: "price_1TICnfLj5hhothOuz2yfIWZi" },
+  business:  { credits: 1200,  campaigns: 999, priceId: "price_1TICngLj5hhothOuPEzJ9Nwa" },
+  autopilot: { credits: 3000,  campaigns: 999, priceId: "price_1TICngLj5hhothOuIYr4AGgK" },
 };
 
 const PLAN_LIMITS: Record<string, { concurrentTests: number }> = {
@@ -628,9 +628,9 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json({
       plans: [
         { id: "free", name: "Free", price: 0, betaPrice: 0, credits: 0, features: ["BYOK — use your own AI keys", "Unlimited campaigns", "Behavioral tracking", "Analytics dashboard"] },
-        { id: "pro", name: "Pro", price: 47, betaPrice: 23.50, credits: 1000, features: ["Brain access", "1,000 AI credits", "Daily observations", "Brain Chat", "All page sections"] },
-        { id: "business", name: "Business", price: 97, betaPrice: 48.50, credits: 2400, features: ["2,400 AI credits", "Multi-seat access", "Advanced analytics", "Custom webhooks"] },
-        { id: "autopilot", name: "Autopilot", price: 299, betaPrice: 149.50, credits: 6000, features: ["6,000 AI credits", "Autonomous optimization", "AI-driven winner promotion", "Unlimited concurrent tests"] },
+        { id: "pro", name: "Pro", price: 47, betaPrice: 23.50, credits: 500, features: ["Brain access", "500 AI credits", "Daily observations", "Brain Chat", "All page sections"] },
+        { id: "business", name: "Business", price: 97, betaPrice: 48.50, credits: 1200, features: ["1,200 AI credits", "Multi-seat access", "Advanced analytics", "Custom webhooks"] },
+        { id: "autopilot", name: "Autopilot", price: 299, betaPrice: 149.50, credits: 3000, features: ["3,000 AI credits", "Autonomous optimization", "AI-driven winner promotion", "Unlimited concurrent tests"] },
       ],
     });
   });
