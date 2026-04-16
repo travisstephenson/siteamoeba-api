@@ -26,6 +26,8 @@ export interface GenerationContext {
   networkIntelligence?: string;
   // THIS campaign's test history — don't generate variants using strategies that already lost
   campaignTestHistory?: string;
+  // Winning patterns from ALL test_lessons — used for Brain's Choice ranking
+  winningPatterns?: string;
 }
 
 // ============================================================
@@ -185,7 +187,9 @@ RULES:
 6. Do NOT invent new claims, change numbers, or distort the story
 7. Do NOT include existing variants or close rewrites
 
-Return ONLY the JSON array, no other text.`;
+BRAIN'S CHOICE: After generating all 3 variants, select the ONE you believe has the highest probability of winning based on the proven winning patterns provided. Set "brainChoice": true on that variant and provide a "brainReasoning" field explaining WHY — reference specific winning patterns, data, or CRO principles that support your recommendation. The other two should have "brainChoice": false.
+
+Return ONLY the JSON array with objects containing: text, strategy, reasoning, brainChoice (boolean), brainReasoning (string, only on the chosen variant). No other text.`;
 
   const brainKnowledge = getBrainKnowledgeForSection("headline");
   const pageContextRules = getPageContextRules(context.pageType, context.pageGoal, context.pricePoint, context.niche);
@@ -210,6 +214,11 @@ Return ONLY the JSON array, no other text.`;
   // Inject campaign test history — avoid repeating losing strategies
   if (context.campaignTestHistory) {
     systemWithBrain += "\n\nTHIS CAMPAIGN'S PAST TEST RESULTS (DO NOT use strategies that already lost):\n" + context.campaignTestHistory + "\nGenerate variants using DIFFERENT strategies than those that have already been tested and lost on this specific campaign.";
+  }
+
+  // Inject winning patterns from ALL test_lessons — the Brain's evidence base for its Choice
+  if (context.winningPatterns) {
+    systemWithBrain += "\n\nPROVEN WINNING PATTERNS FROM THE SITEAMOEBA NETWORK (use these to inform your Brain's Choice recommendation):\n" + context.winningPatterns + "\n\nWhen selecting your Brain's Choice, favor strategies that align with these proven winners. If a strategy has won multiple tests with high confidence, it should be strongly preferred. Reference these specific results in your brainReasoning.";
   }
 
   return [
@@ -258,7 +267,9 @@ INSTRUCTIONS:
 6. If the control sub-headline has HTML styling tags, preserve that pattern
 7. Do NOT repeat any existing variants
 
-Return ONLY the JSON array, no other text.`;
+BRAIN'S CHOICE: After generating all 3 variants, select the ONE you believe has the highest probability of winning based on the proven winning patterns provided. Set "brainChoice": true on that variant and provide a "brainReasoning" field explaining WHY. The other two should have "brainChoice": false.
+
+Return ONLY the JSON array with objects containing: text, strategy, reasoning, brainChoice (boolean), brainReasoning (string, only on the chosen variant). No other text.`;
 
   const brainKnowledge = getBrainKnowledgeForSection("subheadline");
   const pageContextRulesSubh = getPageContextRules(context.pageType, context.pageGoal, context.pricePoint, context.niche);
@@ -266,6 +277,12 @@ Return ONLY the JSON array, no other text.`;
 
   if (context.brainKnowledge) {
     systemWithBrain += "\n\nREAL TEST RESULTS FROM THE SITEAMOEBA NETWORK:\n" + context.brainKnowledge + "\n\nUse these real results to inform your variant strategy.";
+  }
+  if (context.winningPatterns) {
+    systemWithBrain += "\n\nPROVEN WINNING PATTERNS (use to inform Brain's Choice):\n" + context.winningPatterns;
+  }
+  if (context.campaignTestHistory) {
+    systemWithBrain += "\n\nTHIS CAMPAIGN'S PAST RESULTS (avoid losing strategies):\n" + context.campaignTestHistory;
   }
 
   return [
@@ -585,14 +602,21 @@ ${existingVariants}
 
 ${context.existingPersuasionTags?.length ? `Strategies already being tested: ${context.existingPersuasionTags.join(", ")}\nGenerate variants using DIFFERENT strategies.` : ""}
 
-Generate 3 new test variants. Return a JSON array:
-[
-  {"text": "variant text here", "strategy": "strategy_name", "reasoning": "why this hook/structure could outperform while preserving the same message"}
-]`;
+Generate 3 new test variants.
+
+BRAIN'S CHOICE: After generating all 3 variants, select the ONE you believe has the highest probability of winning based on the proven winning patterns provided. Set "brainChoice": true on that variant and provide a "brainReasoning" field explaining WHY. The other two should have "brainChoice": false.
+
+Return ONLY a JSON array with objects containing: text, strategy, reasoning, brainChoice (boolean), brainReasoning (string, only on the chosen variant). No other text.`;
 
   let finalSystem = systemPrompt;
   if (context.brainKnowledge) {
     finalSystem += "\n\nREAL TEST RESULTS FROM THE SITEAMOEBA NETWORK:\n" + context.brainKnowledge + "\n\nUse these real results to inform your variant strategy.";
+  }
+  if (context.winningPatterns) {
+    finalSystem += "\n\nPROVEN WINNING PATTERNS (use to inform Brain's Choice):\n" + context.winningPatterns;
+  }
+  if (context.campaignTestHistory) {
+    finalSystem += "\n\nTHIS CAMPAIGN'S PAST RESULTS (avoid losing strategies):\n" + context.campaignTestHistory;
   }
 
   return [

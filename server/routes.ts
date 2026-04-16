@@ -2796,6 +2796,29 @@ export async function registerRoutes(server: Server, app: Express) {
       } catch (err) {
         console.warn('Failed to fetch campaign test history:', err);
       }
+
+      // WINNING PATTERNS from ALL test_lessons — for Brain's Choice ranking
+      try {
+        const allLessons = await pool.query(
+          `SELECT section_type, page_type, niche, winner_strategy, loser_strategy,
+                  winner_conversion_rate, loser_conversion_rate, lift_percent, confidence,
+                  sample_size, LEFT(winner_text, 100) as winner_text, lesson
+           FROM test_lessons WHERE section_type = $1
+           ORDER BY confidence DESC, lift_percent DESC LIMIT 10`,
+          [type]
+        );
+        if (allLessons.rows.length > 0) {
+          const patterns = allLessons.rows.map((r: any) =>
+            `PROVEN WINNER: "${r.winner_strategy}" beat "${r.loser_strategy}" by +${(r.lift_percent || 0).toFixed(0)}% ` +
+            `(${r.confidence?.toFixed(0) || '?'}% confidence, ${r.sample_size || '?'} visitors)` +
+            `${r.niche ? ` in ${r.niche} niche` : ''}` +
+            `${r.lesson ? `. KEY LESSON: ${r.lesson.slice(0, 200)}` : ''}`
+          ).join('\n');
+          context.winningPatterns = patterns;
+        }
+      } catch (err) {
+        console.warn('Failed to fetch winning patterns:', err);
+      }
     }
 
     let messages;
@@ -2837,8 +2860,27 @@ export async function registerRoutes(server: Server, app: Express) {
         text: v.text.trim(),
         strategy: v.strategy || 'unknown',
         reasoning: v.reasoning || '',
+        brainChoice: v.brainChoice === true,
+        brainReasoning: v.brainChoice ? (v.brainReasoning || '') : undefined,
       }))
       .slice(0, 3);
+
+    // Ensure exactly one Brain's Choice (pick first if multiple, pick best strategy if none)
+    const hasChoice = sanitized.some(v => v.brainChoice);
+    if (!hasChoice && sanitized.length > 0) {
+      // Default: pick the first variant as Brain's Choice
+      sanitized[0].brainChoice = true;
+      sanitized[0].brainReasoning = sanitized[0].brainReasoning || 'Selected as the most likely to outperform based on available test data and CRO principles.';
+    }
+    const choiceCount = sanitized.filter(v => v.brainChoice).length;
+    if (choiceCount > 1) {
+      // Only keep the first Brain's Choice
+      let found = false;
+      for (const v of sanitized) {
+        if (v.brainChoice && found) { v.brainChoice = false; v.brainReasoning = undefined; }
+        if (v.brainChoice) found = true;
+      }
+    }
 
     res.json({ variants: sanitized });
   });

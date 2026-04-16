@@ -586,6 +586,8 @@ interface AIVariant {
   text: string;
   strategy: string;
   reasoning: string;
+  brainChoice?: boolean;
+  brainReasoning?: string;
 }
 
 // ---- Brain upsell card (after generating variants, for free users) ----
@@ -1193,11 +1195,21 @@ function AIVariantGenerator({
           {variants.map((variant, i) => (
             <div
               key={i}
-              className="border border-border rounded-lg p-3 bg-card space-y-2"
+              className={`border rounded-lg p-3 bg-card space-y-2 ${
+                variant.brainChoice
+                  ? "border-emerald-500/50 ring-1 ring-emerald-500/20 bg-emerald-500/[0.03]"
+                  : "border-border"
+              }`}
               data-testid={`card-ai-variant-${type}-${i}`}
             >
-              {/* Strategy badge */}
+              {/* Strategy badge + Brain's Choice */}
               <div className="flex items-center gap-2">
+                {variant.brainChoice && (
+                  <Badge className="text-[10px] gap-1 bg-emerald-500/15 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20">
+                    <Sparkles className="w-3 h-3" />
+                    Brain's Choice
+                  </Badge>
+                )}
                 <Badge variant="secondary" className="text-xs">
                   {STRATEGY_LABELS[variant.strategy] || variant.strategy}
                 </Badge>
@@ -1210,8 +1222,26 @@ function AIVariantGenerator({
                 data-testid={`text-ai-variant-${type}-${i}`}
               />
 
+              {/* Brain's Choice reasoning */}
+              {variant.brainChoice && variant.brainReasoning && (
+                <div className="rounded-md bg-emerald-500/[0.06] border border-emerald-500/20 px-3 py-2">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <Sparkles className="w-3 h-3 text-emerald-400" />
+                    <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">Why Brain recommends this</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    {variant.brainReasoning}
+                  </p>
+                </div>
+              )}
+
               {/* Reasoning */}
-              {variant.reasoning && (
+              {variant.reasoning && !variant.brainChoice && (
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  {variant.reasoning}
+                </p>
+              )}
+              {variant.reasoning && variant.brainChoice && (
                 <p className="text-xs text-muted-foreground leading-relaxed">
                   {variant.reasoning}
                 </p>
@@ -1220,13 +1250,15 @@ function AIVariantGenerator({
               {/* Use this variant button */}
               <Button
                 size="sm"
-                className="h-7 text-xs"
+                className={`h-7 text-xs ${variant.brainChoice ? "bg-emerald-600 hover:bg-emerald-700 text-white" : ""}`}
                 onClick={() => addMutation.mutate({ variant, index: i })}
                 disabled={addMutation.isPending && addingVariantIndex === i}
                 data-testid={`button-use-ai-variant-${type}-${i}`}
               >
                 {addMutation.isPending && addingVariantIndex === i ? (
                   "Adding..."
+                ) : variant.brainChoice ? (
+                  <>Use Brain's Choice</>
                 ) : (
                   <>Use this variant</>
                 )}
@@ -2223,8 +2255,9 @@ function VariantCard({
         />
       </div>
 
-      {/* Sample size indicator */}
-      {!variant.isControl && sampleRemaining !== null && sampleRemaining > 0 && (
+      {/* Sample size indicator — only show when z-test confidence is below 95% */}
+      {/* Once the z-test says we're confident, the power-based estimate is irrelevant */}
+      {!variant.isControl && (variant.confidence ?? 0) < 95 && sampleRemaining !== null && sampleRemaining > 0 && (
         <p className="text-xs text-muted-foreground mb-3">
           {(() => {
             const needed = sampleSizeNeeded(variant.visitors ?? 0, variant.conversionRate ?? 0) ?? 0;
