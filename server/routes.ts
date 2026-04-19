@@ -718,7 +718,7 @@ export async function registerRoutes(server: Server, app: Express) {
         id: t._id || t.id,
         name: t.contactName || t.contactSnapshot?.name || t.name || 'Unknown',
         email: t.contactSnapshot?.email || t.contactEmail || t.email || '',
-        amount: typeof t.amount === 'number' ? t.amount / 100 : parseFloat(t.amount) || 0,
+        amount: typeof t.amount === 'number' ? t.amount : parseFloat(t.amount) || 0,
         status: t.status || t.paymentStatus || 'unknown',
         productName: t.entitySourceName || t.items?.[0]?.name || t.name || '',
         createdAt: t.createdAt || t.created_at || '',
@@ -1768,21 +1768,18 @@ export async function registerRoutes(server: Server, app: Express) {
   async function pollGhlTransactions() {
     try {
       const users = await pool.query(
-        "SELECT id, ghl_api_key, ghl_location_id FROM users WHERE ghl_api_key IS NOT NULL AND ghl_location_id IS NOT NULL"
+        "SELECT id, ghl_api_key, ghl_location_id, ghl_connected_at FROM users WHERE ghl_api_key IS NOT NULL AND ghl_location_id IS NOT NULL"
       );
       for (const u of users.rows) {
         try {
           const apiKey = decryptApiKey(u.ghl_api_key);
           const locationId = u.ghl_location_id;
 
-          // Get earliest active campaign date to bound the query
-          const earliestCampaign = await pool.query(
-            `SELECT MIN(created_at) as earliest FROM campaigns WHERE user_id = $1 AND status = 'active'`,
-            [u.id]
-          );
-          const startDate = earliestCampaign.rows[0]?.earliest
-            ? new Date(earliestCampaign.rows[0].earliest).toISOString()
-            : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+          // Only process transactions from AFTER GHL was connected (never pull historical)
+          const ghlConnectedAt = u.ghl_connected_at;
+          const startDate = ghlConnectedAt
+            ? new Date(ghlConnectedAt).toISOString()
+            : new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
           // Fetch transactions from GHL
           const resp = await fetch(
@@ -1806,7 +1803,8 @@ export async function registerRoutes(server: Server, app: Express) {
           for (const txn of txns) {
             const externalId = `ghl_${txn._id || txn.id}`;
             const amountRaw = txn.amount || 0;
-            const amount = typeof amountRaw === 'number' && amountRaw > 100 ? amountRaw / 100 : (typeof amountRaw === 'number' ? amountRaw : parseFloat(amountRaw) || 0);
+            // GHL returns amounts in dollars (NOT cents) — do not divide
+            const amount = typeof amountRaw === 'number' ? amountRaw : parseFloat(amountRaw) || 0;
             const customerEmail = txn.contactSnapshot?.email || txn.contactEmail || txn.email || null;
             const txnStatus = (txn.status || '').toLowerCase();
 
@@ -1862,17 +1860,8 @@ export async function registerRoutes(server: Server, app: Express) {
               }
             }
 
-            // 4. Last resort: email match across all user campaigns
-            if (!matchedCampaignId && customerEmail) {
-              const recentEmailVisitor = await pool.query(
-                `SELECT v.id AS visitor_id, c.id AS campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
-                 WHERE c.user_id = $1 AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
-                 ORDER BY v.first_seen DESC LIMIT 1`, [u.id]);
-              if (recentEmailVisitor.rows.length > 0) {
-                matchedVisitorId = recentEmailVisitor.rows[0].visitor_id;
-                matchedCampaignId = recentEmailVisitor.rows[0].campaign_id;
-              }
-            }
+            // No more fallbacks — GHL transactions MUST match by email or time proximity.
+            // We never blindly assign GHL revenue to random visitors.
 
             // Strict: must have BOTH campaign and visitor
             if (!matchedCampaignId || !matchedVisitorId) {
@@ -2745,26 +2734,14 @@ export async function registerRoutes(server: Server, app: Express) {
         // Truncate for LLM
         const truncated = rawHtml.length > 120000 ? rawHtml.substring(0, 120000) : rawHtml;
 
-        // Call the LLM to re-scan (same prompt as the initial scan)
-        const { default: OpenAI } = await import("openai");
-        const client = new OpenAI({
-          apiKey: llmConfigResolved.apiKey,
-          baseURL: llmConfigResolved.baseURL || undefined,
-        });
-
+        // Call the LLM to re-scan using the provider-agnostic callLLM
         const scanPrompt = `You are a CRO (Conversion Rate Optimization) expert. Analyze this HTML page and identify testable sections. For each section, provide: id (kebab-case), label, purpose, selector (CSS), category (headline/subheadline/cta/body_copy/social_proof/guarantee/faq/other), currentText (the current text content), testPriority (1-10), testMethod (text_swap or html_swap). Return JSON array only.`;
 
-        const completion = await client.chat.completions.create({
-          model: llmConfigResolved.model,
-          messages: [
-            { role: "system", content: scanPrompt },
-            { role: "user", content: `URL: ${campaign.url}\n\nHTML:\n${truncated}` },
-          ],
-          temperature: 0.3,
-          max_tokens: 4000,
-        });
+        const raw = await callLLM(llmConfigResolved.config, [
+          { role: "system", content: scanPrompt },
+          { role: "user", content: `URL: ${campaign.url}\n\nHTML:\n${truncated}` },
+        ]);
 
-        const raw = completion.choices[0]?.message?.content || "[]";
         const jsonMatch = raw.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0];
         const newSections = jsonMatch ? JSON.parse(jsonMatch) : [];
 
