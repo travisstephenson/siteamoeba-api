@@ -727,6 +727,13 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     if (utmParams.utm_campaign) assignUrl += "&utm_campaign=" + encodeURIComponent(utmParams.utm_campaign);
     if (utmParams.utm_content)  assignUrl += "&utm_content="  + encodeURIComponent(utmParams.utm_content);
     if (utmParams.utm_term)     assignUrl += "&utm_term="     + encodeURIComponent(utmParams.utm_term);
+    // Capture click IDs for attribution (fbclid, gclid, ttclid)
+    var urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('fbclid'))  assignUrl += "&fbclid="  + encodeURIComponent(urlParams.get('fbclid'));
+    if (urlParams.get('gclid'))   assignUrl += "&gclid="   + encodeURIComponent(urlParams.get('gclid'));
+    if (urlParams.get('ttclid'))  assignUrl += "&ttclid="  + encodeURIComponent(urlParams.get('ttclid'));
+    // Send the page URL for journey tracking
+    assignUrl += "&url=" + encodeURIComponent(window.location.href.split('?')[0]);
     fetch(assignUrl)
       .then(function(r) {
         if (!r.ok) { console.log("SiteAmoeba: assign error", r.status); return null; }

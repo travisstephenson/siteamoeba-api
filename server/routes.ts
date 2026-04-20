@@ -2166,6 +2166,367 @@ export async function registerRoutes(server: Server, app: Express) {
   setInterval(pollGhlTransactions, 90 * 1000);
   setTimeout(pollGhlTransactions, 15000);
 
+
+  // ============== TRAFFIC INTELLIGENCE ==============
+
+  // Helper to normalize traffic source
+  function normalizeSource(trafficSource: string | null, utmSource: string | null, utmMedium: string | null): string {
+    const ts = trafficSource || '';
+    const us = utmSource || '';
+    const um = utmMedium || '';
+
+    if ((us === 'fb_ad' || us === 'fb' || us === 'facebook' || us === 'META') && um.includes('paid')) return 'Facebook Ads';
+    if ((us === 'fb_ad' || us === 'fb' || us === 'facebook' || us === 'META') || ts === 'facebook') return 'Facebook Ads';
+    if (us === 'ig' && um.includes('paid')) return 'Instagram Ads';
+    if (ts === 'instagram' && (us === 'fb_ad' || us === 'META')) return 'Instagram Ads';
+    if (ts === 'instagram' && (us === 'social_media' || us === '')) return 'Instagram Organic';
+    if (us === 'email' || um.includes('email')) return 'Email';
+    if (ts === 'google_organic' || us === 'google') return 'Google Organic';
+    if (ts === 'youtube') return 'YouTube';
+    if (ts === 'direct' || (ts === '' && us === '')) return 'Direct';
+    if (us === 'an') return 'Audience Network';
+    return ts || us || 'Unknown';
+  }
+
+  app.get("/api/traffic/overview", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.userId!;
+
+      // Source attribution
+      const sourceRes = await pool.query(`
+        SELECT
+          CASE
+            WHEN v.utm_source IN ('fb_ad','fb','facebook','META') AND v.utm_medium LIKE '%paid%' THEN 'Facebook Ads'
+            WHEN v.utm_source IN ('fb_ad','fb','facebook','META') OR v.traffic_source = 'facebook' THEN 'Facebook Ads'
+            WHEN v.utm_source = 'ig' AND v.utm_medium LIKE '%paid%' THEN 'Instagram Ads'
+            WHEN v.traffic_source = 'instagram' AND v.utm_source IN ('fb_ad','META') THEN 'Instagram Ads'
+            WHEN v.traffic_source = 'instagram' AND (v.utm_source = 'social_media' OR v.utm_source IS NULL) THEN 'Instagram Organic'
+            WHEN v.utm_source = 'email' OR v.utm_medium LIKE '%email%' THEN 'Email'
+            WHEN v.traffic_source = 'google_organic' OR v.utm_source = 'google' THEN 'Google Organic'
+            WHEN v.traffic_source = 'youtube' THEN 'YouTube'
+            WHEN v.traffic_source = 'direct' OR (v.traffic_source IS NULL AND v.utm_source IS NULL) THEN 'Direct'
+            WHEN v.utm_source = 'an' THEN 'Audience Network'
+            ELSE COALESCE(v.traffic_source, v.utm_source, 'Unknown')
+          END as source,
+          COUNT(DISTINCT v.id) as visitors,
+          COUNT(DISTINCT CASE WHEN v.converted THEN v.id END) as conversions,
+          ROUND(COALESCE(SUM(re.amount), 0)::numeric, 2) as revenue
+        FROM visitors v
+        JOIN campaigns c ON c.id = v.campaign_id
+        LEFT JOIN revenue_events re ON re.visitor_id = v.id
+        WHERE c.user_id = $1 AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
+        GROUP BY source
+        ORDER BY visitors DESC
+      `, [userId]);
+
+      // Device breakdown
+      const deviceRes = await pool.query(`
+        SELECT
+          COALESCE(v.device_category, 'Unknown') as device,
+          COUNT(DISTINCT v.id) as visitors,
+          COUNT(DISTINCT CASE WHEN v.converted THEN v.id END) as conversions,
+          ROUND(COALESCE(SUM(re.amount), 0)::numeric, 2) as revenue
+        FROM visitors v
+        JOIN campaigns c ON c.id = v.campaign_id
+        LEFT JOIN revenue_events re ON re.visitor_id = v.id
+        WHERE c.user_id = $1 AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
+        GROUP BY device
+        ORDER BY visitors DESC
+      `, [userId]);
+
+      // Daily traffic (last 30 days)
+      const dailyRes = await pool.query(`
+        SELECT
+          DATE(v.first_seen::timestamptz) as date,
+          COUNT(DISTINCT v.id) as visitors,
+          COUNT(DISTINCT CASE WHEN v.converted THEN v.id END) as conversions,
+          ROUND(COALESCE(SUM(re.amount), 0)::numeric, 2) as revenue
+        FROM visitors v
+        JOIN campaigns c ON c.id = v.campaign_id
+        LEFT JOIN revenue_events re ON re.visitor_id = v.id
+        WHERE c.user_id = $1 AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
+        GROUP BY DATE(v.first_seen::timestamptz)
+        ORDER BY date ASC
+      `, [userId]);
+
+      // Top campaigns
+      const campaignRes = await pool.query(`
+        SELECT
+          c.id as campaign_id,
+          c.name as campaign_name,
+          COUNT(DISTINCT v.id) as visitors,
+          COUNT(DISTINCT CASE WHEN v.converted THEN v.id END) as conversions,
+          ROUND(COALESCE(SUM(re.amount), 0)::numeric, 2) as revenue
+        FROM visitors v
+        JOIN campaigns c ON c.id = v.campaign_id
+        LEFT JOIN revenue_events re ON re.visitor_id = v.id
+        WHERE c.user_id = $1 AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
+        GROUP BY c.id, c.name
+        ORDER BY revenue DESC
+        LIMIT 10
+      `, [userId]);
+
+      // Aggregate totals
+      const totalVisitors = sourceRes.rows.reduce((s: number, r: any) => s + parseInt(r.visitors), 0);
+      const totalConversions = sourceRes.rows.reduce((s: number, r: any) => s + parseInt(r.conversions), 0);
+      const totalRevenue = sourceRes.rows.reduce((s: number, r: any) => s + parseFloat(r.revenue), 0);
+
+      res.json({
+        sources: sourceRes.rows.map((r: any) => ({
+          source: r.source,
+          visitors: parseInt(r.visitors),
+          conversions: parseInt(r.conversions),
+          revenue: parseFloat(r.revenue),
+        })),
+        deviceBreakdown: deviceRes.rows.map((r: any) => ({
+          device: r.device,
+          visitors: parseInt(r.visitors),
+          conversions: parseInt(r.conversions),
+          revenue: parseFloat(r.revenue),
+        })),
+        dailyTraffic: dailyRes.rows.map((r: any) => ({
+          date: r.date,
+          visitors: parseInt(r.visitors),
+          conversions: parseInt(r.conversions),
+          revenue: parseFloat(r.revenue),
+        })),
+        topCampaigns: campaignRes.rows.map((r: any) => ({
+          campaignId: r.campaign_id,
+          campaignName: r.campaign_name,
+          visitors: parseInt(r.visitors),
+          conversions: parseInt(r.conversions),
+          revenue: parseFloat(r.revenue),
+        })),
+        totalVisitors,
+        totalConversions,
+        totalRevenue: Math.round(totalRevenue * 100) / 100,
+      });
+    } catch (err: any) {
+      console.error("[traffic/overview]", err.message);
+      res.status(500).json({ error: "Failed to load traffic overview" });
+    }
+  });
+
+  app.get("/api/traffic/journeys", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.userId!;
+
+      // Get recent converting visitors
+      const convertingRes = await pool.query(`
+        SELECT DISTINCT ON (v.id)
+          v.id as visitor_id,
+          v.customer_email,
+          v.device_fingerprint,
+          v.first_seen,
+          v.device_category,
+          v.traffic_source,
+          v.utm_source,
+          v.utm_medium,
+          c.name as campaign_name,
+          re.amount,
+          re.created_at as converted_at
+        FROM visitors v
+        JOIN campaigns c ON c.id = v.campaign_id
+        JOIN revenue_events re ON re.visitor_id = v.id
+        WHERE c.user_id = $1
+          AND v.converted = true
+          AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
+        ORDER BY v.id, re.created_at DESC
+        LIMIT 50
+      `, [userId]);
+
+      const conversions = [];
+
+      for (const row of convertingRes.rows) {
+        // Get all visits from same fingerprint across all user campaigns
+        const journeyRes = await pool.query(`
+          SELECT
+            v.id,
+            v.first_seen,
+            v.device_category,
+            v.traffic_source,
+            v.utm_source,
+            v.utm_medium,
+            v.converted,
+            c.name as campaign_name,
+            vs.max_scroll_depth,
+            vs.time_on_page
+          FROM visitors v
+          JOIN campaigns c ON c.id = v.campaign_id
+          LEFT JOIN visitor_sessions vs ON vs.visitor_id = v.id
+          WHERE c.user_id = $1
+            AND v.device_fingerprint = $2
+            AND v.device_fingerprint IS NOT NULL
+          ORDER BY v.first_seen ASC
+          LIMIT 20
+        `, [userId, row.device_fingerprint]);
+
+        const journeyRows = journeyRes.rows;
+        const firstSeen = journeyRows.length > 0 ? journeyRows[0].first_seen : row.first_seen;
+        const convertedAt = row.converted_at;
+        const msToConvert = new Date(convertedAt).getTime() - new Date(firstSeen).getTime();
+        const daysToConvert = Math.round(msToConvert / (1000 * 60 * 60 * 24));
+
+        conversions.push({
+          visitorId: row.visitor_id,
+          email: row.customer_email || null,
+          amount: parseFloat(row.amount) || 0,
+          convertedAt: row.converted_at,
+          campaignName: row.campaign_name,
+          source: normalizeSource(row.traffic_source, row.utm_source, row.utm_medium),
+          device: row.device_category || 'Unknown',
+          firstSeen: row.first_seen,
+          daysToConvert: Math.max(daysToConvert, 0),
+          totalVisits: journeyRows.length,
+          journey: journeyRows.map((j: any) => ({
+            timestamp: j.first_seen,
+            source: normalizeSource(j.traffic_source, j.utm_source, j.utm_medium),
+            campaignName: j.campaign_name,
+            device: j.device_category || 'Unknown',
+            scrollDepth: j.max_scroll_depth || 0,
+            timeOnPage: j.time_on_page || 0,
+            converted: !!j.converted,
+          })),
+        });
+      }
+
+      // Sort by convertedAt desc
+      conversions.sort((a, b) => new Date(b.convertedAt).getTime() - new Date(a.convertedAt).getTime());
+
+      res.json({ conversions: conversions.slice(0, 50) });
+    } catch (err: any) {
+      console.error("[traffic/journeys]", err.message);
+      res.status(500).json({ error: "Failed to load journeys" });
+    }
+  });
+
+  app.get("/api/traffic/source-detail", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const userId = req.userId!;
+      const source = (req.query.source as string) || '';
+
+      // Build source match condition
+      let sourceCondition = `
+        CASE
+          WHEN v.utm_source IN ('fb_ad','fb','facebook','META') AND v.utm_medium LIKE '%paid%' THEN 'Facebook Ads'
+          WHEN v.utm_source IN ('fb_ad','fb','facebook','META') OR v.traffic_source = 'facebook' THEN 'Facebook Ads'
+          WHEN v.utm_source = 'ig' AND v.utm_medium LIKE '%paid%' THEN 'Instagram Ads'
+          WHEN v.traffic_source = 'instagram' AND v.utm_source IN ('fb_ad','META') THEN 'Instagram Ads'
+          WHEN v.traffic_source = 'instagram' AND (v.utm_source = 'social_media' OR v.utm_source IS NULL) THEN 'Instagram Organic'
+          WHEN v.utm_source = 'email' OR v.utm_medium LIKE '%email%' THEN 'Email'
+          WHEN v.traffic_source = 'google_organic' OR v.utm_source = 'google' THEN 'Google Organic'
+          WHEN v.traffic_source = 'youtube' THEN 'YouTube'
+          WHEN v.traffic_source = 'direct' OR (v.traffic_source IS NULL AND v.utm_source IS NULL) THEN 'Direct'
+          WHEN v.utm_source = 'an' THEN 'Audience Network'
+          ELSE COALESCE(v.traffic_source, v.utm_source, 'Unknown')
+        END
+      `;
+
+      // Campaign breakdown
+      const campaignRes = await pool.query(`
+        SELECT
+          c.id as campaign_id,
+          c.name as campaign_name,
+          COUNT(DISTINCT v.id) as visitors,
+          COUNT(DISTINCT CASE WHEN v.converted THEN v.id END) as conversions,
+          ROUND(COALESCE(SUM(re.amount), 0)::numeric, 2) as revenue
+        FROM visitors v
+        JOIN campaigns c ON c.id = v.campaign_id
+        LEFT JOIN revenue_events re ON re.visitor_id = v.id
+        WHERE c.user_id = $1
+          AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
+          AND (${sourceCondition}) = $2
+        GROUP BY c.id, c.name
+        ORDER BY visitors DESC
+      `, [userId, source]);
+
+      // UTM campaign breakdown
+      const utmRes = await pool.query(`
+        SELECT
+          COALESCE(v.utm_campaign, 'Unknown') as utm_campaign,
+          COUNT(DISTINCT v.id) as visitors,
+          COUNT(DISTINCT CASE WHEN v.converted THEN v.id END) as conversions,
+          ROUND(COALESCE(SUM(re.amount), 0)::numeric, 2) as revenue
+        FROM visitors v
+        JOIN campaigns c ON c.id = v.campaign_id
+        LEFT JOIN revenue_events re ON re.visitor_id = v.id
+        WHERE c.user_id = $1
+          AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
+          AND (${sourceCondition}) = $2
+        GROUP BY v.utm_campaign
+        ORDER BY visitors DESC
+        LIMIT 10
+      `, [userId, source]);
+
+      // Device breakdown
+      const deviceRes = await pool.query(`
+        SELECT
+          COALESCE(v.device_category, 'Unknown') as device,
+          COUNT(DISTINCT v.id) as visitors,
+          COUNT(DISTINCT CASE WHEN v.converted THEN v.id END) as conversions,
+          ROUND(COALESCE(SUM(re.amount), 0)::numeric, 2) as revenue
+        FROM visitors v
+        JOIN campaigns c ON c.id = v.campaign_id
+        LEFT JOIN revenue_events re ON re.visitor_id = v.id
+        WHERE c.user_id = $1
+          AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
+          AND (${sourceCondition}) = $2
+        GROUP BY device
+        ORDER BY visitors DESC
+      `, [userId, source]);
+
+      // Daily trend
+      const dailyRes = await pool.query(`
+        SELECT
+          DATE(v.first_seen::timestamptz) as date,
+          COUNT(DISTINCT v.id) as visitors,
+          COUNT(DISTINCT CASE WHEN v.converted THEN v.id END) as conversions,
+          ROUND(COALESCE(SUM(re.amount), 0)::numeric, 2) as revenue
+        FROM visitors v
+        JOIN campaigns c ON c.id = v.campaign_id
+        LEFT JOIN revenue_events re ON re.visitor_id = v.id
+        WHERE c.user_id = $1
+          AND v.first_seen::timestamptz > NOW() - INTERVAL '30 days'
+          AND (${sourceCondition}) = $2
+        GROUP BY DATE(v.first_seen::timestamptz)
+        ORDER BY date ASC
+      `, [userId, source]);
+
+      res.json({
+        source,
+        campaigns: campaignRes.rows.map((r: any) => ({
+          campaignId: r.campaign_id,
+          campaignName: r.campaign_name,
+          visitors: parseInt(r.visitors),
+          conversions: parseInt(r.conversions),
+          revenue: parseFloat(r.revenue),
+        })),
+        utmCampaigns: utmRes.rows.map((r: any) => ({
+          utmCampaign: r.utm_campaign,
+          visitors: parseInt(r.visitors),
+          conversions: parseInt(r.conversions),
+          revenue: parseFloat(r.revenue),
+        })),
+        deviceBreakdown: deviceRes.rows.map((r: any) => ({
+          device: r.device,
+          visitors: parseInt(r.visitors),
+          conversions: parseInt(r.conversions),
+          revenue: parseFloat(r.revenue),
+        })),
+        dailyTrend: dailyRes.rows.map((r: any) => ({
+          date: r.date,
+          visitors: parseInt(r.visitors),
+          conversions: parseInt(r.conversions),
+          revenue: parseFloat(r.revenue),
+        })),
+      });
+    } catch (err: any) {
+      console.error("[traffic/source-detail]", err.message);
+      res.status(500).json({ error: "Failed to load source detail" });
+    }
+  });
+
+
   // ============== AUTOPILOT EVALUATION LOOP ==============
   // Check all active autopilot campaigns every 5 minutes for tests that should be declared
   async function pollAutopilotCampaigns() {
@@ -4396,6 +4757,10 @@ export async function registerRoutes(server: Server, app: Express) {
     const utmContent  = (req.query.utm_content  as string) || null;
     const utmTerm     = (req.query.utm_term     as string) || null;
     const referrer    = (req.query.ref          as string) || null;
+    const fbclid      = (req.query.fbclid       as string) || null;
+    const gclid       = (req.query.gclid        as string) || null;
+    const ttclid      = (req.query.ttclid       as string) || null;
+    const pageUrl     = (req.query.url          as string) || null;
     const ua          = req.headers["user-agent"] || null;
     const trafficSource  = parseTrafficSource(referrer || "", utmSource || "", utmMedium || "");
     const deviceCategory = parseDeviceCategory(ua || "");
@@ -4426,6 +4791,60 @@ export async function registerRoutes(server: Server, app: Express) {
           : null,
         fingerprint: fingerprint || null,
       } as any);
+      // === CREATE TOUCHPOINT for attribution tracking ===
+      try {
+        // Normalize source into clean platform + channel
+        let platform = 'unknown';
+        let channel = 'unknown';
+        const src = (utmSource || '').toLowerCase();
+        const med = (utmMedium || '').toLowerCase();
+        const ts = (trafficSource || '').toLowerCase();
+
+        if (src === 'fb_ad' || src === 'fb' || src === 'facebook' || src === 'meta' || ts === 'facebook') {
+          platform = 'facebook'; channel = 'paid';
+        } else if (src === 'ig' || (ts === 'instagram' && (src === 'fb_ad' || src === 'meta'))) {
+          platform = 'instagram'; channel = 'paid';
+        } else if (ts === 'instagram' && (src === 'social_media' || !src)) {
+          platform = 'instagram'; channel = med === 'social' || !med ? 'organic' : 'paid';
+        } else if (src === 'email' || med.includes('email')) {
+          platform = 'email'; channel = 'email';
+        } else if (ts === 'google_organic' || src === 'google') {
+          platform = 'google'; channel = 'organic';
+        } else if (ts === 'youtube' || src === 'youtube') {
+          platform = 'youtube'; channel = src ? 'paid' : 'organic';
+        } else if (src === 'an' || src === 'alga') {
+          platform = 'audience_network'; channel = 'paid';
+        } else if (ts === 'direct' || (!ts && !src)) {
+          platform = 'direct'; channel = 'direct';
+        } else if (fbclid) {
+          platform = ts === 'instagram' ? 'instagram' : 'facebook'; channel = 'paid';
+        } else if (gclid) {
+          platform = 'google'; channel = 'paid';
+        } else if (ttclid) {
+          platform = 'tiktok'; channel = 'paid';
+        } else {
+          platform = ts || src || 'unknown';
+          channel = med && med.includes('paid') ? 'paid' : (med || 'unknown');
+        }
+
+        await pool.query(
+          `INSERT INTO touchpoints (user_id, campaign_id, visitor_id, device_fingerprint,
+            platform, channel, campaign_name, ad_set, ad_creative,
+            utm_source, utm_medium, utm_campaign, utm_content, utm_term,
+            fbclid, gclid, ttclid, device_category, page_url, referrer, visited_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW())`,
+          [
+            campaign.userId, campaignId, visitorId, fingerprint || null,
+            platform, channel, utmCampaign || null, utmMedium || null, utmContent || null,
+            utmSource, utmMedium, utmCampaign, utmContent, utmTerm,
+            fbclid, gclid, ttclid, deviceCategory, pageUrl, referrer,
+          ]
+        );
+      } catch (tpErr) {
+        // Non-fatal: don't block visitor assignment if touchpoint fails
+        console.error('[touchpoint] Failed to create:', (tpErr as any)?.message);
+      }
+
     } catch (createErr: any) {
       if (createErr?.code === '23505') {
         // Race condition: visitor already exists — fetch the existing record and serve its assignment

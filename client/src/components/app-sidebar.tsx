@@ -16,6 +16,7 @@ import {
   Gift,
   Zap,
   Lightbulb,
+  BarChart3,
 } from "lucide-react";
 import {
   Sidebar,
@@ -434,6 +435,16 @@ export function AppSidebar() {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
+
+              {/* Traffic Intelligence link */}
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={location === "/traffic"}>
+                  <Link href="/traffic" data-testid="link-traffic">
+                    <BarChart3 className="w-4 h-4" />
+                    <span className="text-sm">Traffic</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
 
               {/* New Campaign link */}
               <SidebarMenuItem>

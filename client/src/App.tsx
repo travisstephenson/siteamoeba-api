@@ -18,6 +18,7 @@ import BillingPage from "@/pages/billing";
 import SettingsPage from "@/pages/settings";
 import ReferralsPage from "@/pages/referrals";
 import AdminPage from "@/pages/admin";
+import TrafficPage from "@/pages/traffic";
 import VisualEditorPage from "@/pages/visual-editor";
 import NotFound from "@/pages/not-found";
 
@@ -42,6 +43,7 @@ function SidebarLayout() {
             <Switch>
               <Route path="/" component={CampaignsPage} />
               <Route path="/campaigns/:id" component={CampaignDetailPage} />
+              <Route path="/traffic" component={TrafficPage} />
               <Route path="/billing" component={BillingPage} />
               <Route path="/referrals" component={ReferralsPage} />
               <Route path="/settings" component={SettingsPage} />
