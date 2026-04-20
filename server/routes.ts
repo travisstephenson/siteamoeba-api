@@ -3430,10 +3430,24 @@ export async function registerRoutes(server: Server, app: Express) {
               }
             }
           }
-          // Don't auto-add new sections from rescan — only update existing ones
+          else {
+            // NEW section found by rescan — add it (inactive by default so user chooses what to test)
+            try {
+              const category = (ns.category || "body_copy").toLowerCase();
+              await pool.query(
+                `INSERT INTO test_sections (campaign_id, section_id, label, category, selector, current_text, test_method, test_priority, is_active)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)
+                 ON CONFLICT DO NOTHING`,
+                [campaignId, ns.id, ns.label || ns.id, category, ns.selector || '', ns.currentText || '', ns.testMethod || 'text_swap', ns.testPriority || 5]
+              );
+              added++;
+            } catch (addErr) {
+              console.warn('[rescan] Failed to add section:', ns.id, (addErr as any)?.message);
+            }
+          }
         }
 
-        // Clear mismatch flags on sections that were not in the mismatch list
+        // Clear mismatch flags
         await pool.query(
           `UPDATE test_sections SET mismatch_detected = false WHERE campaign_id = $1 AND mismatch_detected = true`,
           [campaignId]
@@ -3442,9 +3456,10 @@ export async function registerRoutes(server: Server, app: Express) {
         scanJobs.set(jobId, {
           status: "done",
           createdAt: Date.now(),
+          sections: newSections,
           result: { updated, added, changedSections, totalScanned: newSections.length },
         });
-        console.log(`[rescan] Campaign ${campaignId}: ${updated} sections updated, ${changedSections.length} text changes detected`);
+        console.log(`[rescan] Campaign ${campaignId}: ${updated} updated, ${added} new sections added, ${newSections.length} total scanned`);
 
       } catch (err: any) {
         scanJobs.set(jobId, { status: "error", error: err.message, createdAt: Date.now() });
