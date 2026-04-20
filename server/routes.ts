@@ -1306,16 +1306,24 @@ export async function registerRoutes(server: Server, app: Express) {
   var _selectedEl = null;
   var _hoverLabel = null;
 
-  var SKIP_TAGS = ['SCRIPT','STYLE','SVG','IMG','VIDEO','AUDIO','IFRAME','NOSCRIPT','HEAD','META','LINK','INPUT','TEXTAREA','SELECT'];
+  var SKIP_TAGS = ['SCRIPT','STYLE','SVG','VIDEO','AUDIO','IFRAME','NOSCRIPT','HEAD','META','LINK','INPUT','TEXTAREA','SELECT'];
   var INLINE_TAGS = ['SPAN','STRONG','EM','B','I','A','U','MARK','SUB','SUP','SMALL','S','DEL','INS','ABBR','FONT'];
   var BLOCK_TEXT_TAGS = ['H1','H2','H3','H4','H5','H6','P','LI','BLOCKQUOTE','FIGCAPTION','LABEL','TD','TH','CAPTION','DT','DD','BUTTON'];
 
-  // Is this element a meaningful text container?
-  // True if: has text AND (no children, OR all children are inline styling wrappers)
-  function isSelectableText(el) {
+  // Is this element selectable (text container or meaningful image)?
+  function isSelectable(el) {
     if (!el || !el.tagName) return false;
     var tag = el.tagName.toUpperCase();
     if (SKIP_TAGS.indexOf(tag) !== -1) return false;
+    // Images are selectable
+    if (tag === 'IMG') {
+      var src = el.src || '';
+      // Skip tiny images (icons, spacers, tracking pixels)
+      if (el.width < 50 || el.height < 50) return false;
+      if (src.indexOf('facebook.com/tr') !== -1 || src.indexOf('google-analytics') !== -1 || src.indexOf('pixel') !== -1) return false;
+      return true;
+    }
+    // Text elements (existing logic)
     var text = (el.innerText || el.textContent || '').trim();
     if (text.length < 3) return false;
     // If no child elements, it's a simple text node — selectable
@@ -1334,12 +1342,15 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // Walk UP from a clicked element to find the best text container
   // e.g., clicking a <span> inside an <h1> should select the <h1>
+  // Images are always the direct target — don't walk up
   function findBestContainer(el) {
+    // Images are always the direct target - don't walk up
+    if (el && el.tagName && el.tagName.toUpperCase() === 'IMG') return el;
     var cur = el;
     var best = null;
     var depth = 0;
     while (cur && cur !== document.body && depth < 8) {
-      if (isSelectableText(cur)) best = cur;
+      if (isSelectable(cur)) best = cur;
       // Stop walking up at block-level text containers (H1, P, etc.)
       if (best && BLOCK_TEXT_TAGS.indexOf(cur.tagName.toUpperCase()) !== -1) return best;
       cur = cur.parentElement;
@@ -1386,7 +1397,11 @@ export async function registerRoutes(server: Server, app: Express) {
     _hoverLabel = document.createElement('div');
     _hoverLabel.id = '_sa_hover_label';
     _hoverLabel.style.cssText = 'position:fixed;background:#2563eb;color:#fff;font:bold 11px/1 monospace;padding:2px 6px;border-radius:3px;z-index:2147483647;pointer-events:none;';
-    _hoverLabel.textContent = el.tagName.toUpperCase();
+    if (el.tagName.toUpperCase() === 'IMG') {
+      _hoverLabel.textContent = 'IMG ' + (el.naturalWidth || el.width) + '\u00d7' + (el.naturalHeight || el.height);
+    } else {
+      _hoverLabel.textContent = el.tagName.toUpperCase();
+    }
     document.body.appendChild(_hoverLabel);
 
     function posLabel() {
@@ -1421,7 +1436,11 @@ export async function registerRoutes(server: Server, app: Express) {
     var lbl = document.createElement('div');
     lbl.id = '_sa_sel_label';
     lbl.style.cssText = 'position:fixed;background:#2563eb;color:#fff;font:bold 11px/1 monospace;padding:2px 6px;border-radius:3px;z-index:2147483647;pointer-events:none;';
-    lbl.textContent = el.tagName.toUpperCase();
+    if (el.tagName.toUpperCase() === 'IMG') {
+      lbl.textContent = 'IMG ' + (el.naturalWidth || el.width) + '\u00d7' + (el.naturalHeight || el.height);
+    } else {
+      lbl.textContent = el.tagName.toUpperCase();
+    }
     document.body.appendChild(lbl);
     var rect = el.getBoundingClientRect();
     lbl.style.top = Math.max(0, rect.top - 20) + 'px';
@@ -1462,11 +1481,19 @@ export async function registerRoutes(server: Server, app: Express) {
     markSelected(el);
 
     var rect = el.getBoundingClientRect();
+    var isImage = el.tagName.toUpperCase() === 'IMG';
     var data = {
       tagName: el.tagName.toUpperCase(),
-      textContent: (el.innerText || el.textContent || '').trim(),
+      textContent: isImage ? (el.alt || '') : (el.innerText || el.textContent || '').trim(),
       treePath: getTreePath(el),
-      computedStyles: getComputedStyleData(el),
+      isImage: isImage,
+      imageSrc: isImage ? el.src : null,
+      imageAlt: isImage ? (el.alt || '') : null,
+      imageWidth: isImage ? (el.naturalWidth || el.width) : null,
+      imageHeight: isImage ? (el.naturalHeight || el.height) : null,
+      imageRenderedWidth: isImage ? el.offsetWidth : null,
+      imageRenderedHeight: isImage ? el.offsetHeight : null,
+      computedStyles: isImage ? {} : getComputedStyleData(el),
       parentInfo: el.parentElement ? getTreePath(el.parentElement) : '',
       outerHTML: (el.outerHTML || '').substring(0, 200),
       rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
@@ -8508,6 +8535,39 @@ ${observationText}`;
     }
 
     res.json({ saved, count: saved.length });
+  });
+
+  // ── AI Image Generation ──
+  app.post("/api/ai/generate-image", aiLimiter, requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    const creditCheck = await consumeCredits(req.userId!, 5); // 5 credits per image
+    if (!creditCheck.ok) return res.status(402).json({ error: creditCheck.errorMsg });
+
+    const { prompt, width, height } = req.body;
+    if (!prompt) return res.status(400).json({ error: "Prompt required" });
+
+    try {
+      const { default: OpenAI } = await import("openai");
+      const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY || process.env.PLATFORM_OPENAI_KEY });
+
+      const response = await client.images.generate({
+        model: "dall-e-3",
+        prompt: prompt,
+        n: 1,
+        size: "1024x1024",
+        quality: "standard",
+      });
+
+      const imageUrl = response.data[0]?.url;
+      if (!imageUrl) throw new Error("No image generated");
+
+      res.json({ url: imageUrl });
+    } catch (err: any) {
+      console.error("[generate-image]", err.message);
+      res.status(500).json({ error: "Image generation failed: " + err.message });
+    }
   });
 
 } // end registerRoutes

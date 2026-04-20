@@ -29,6 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
+import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, queryClient, API_BASE, getAuthToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Campaign, Variant } from "@shared/schema";
@@ -53,6 +54,13 @@ interface ElementIdentity {
   parentInfo: string;
   outerHTML: string;
   rect: { top: number; left: number; width: number; height: number };
+  isImage?: boolean;
+  imageSrc?: string;
+  imageAlt?: string;
+  imageWidth?: number;
+  imageHeight?: number;
+  imageRenderedWidth?: number;
+  imageRenderedHeight?: number;
 }
 
 interface StyleOverrides {
@@ -115,6 +123,11 @@ export default function VisualEditorPage() {
     textTransform: "none",
     letterSpacing: "",
   });
+
+  // Image variant state
+  const [imageUrl, setImageUrl] = useState("");
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [imagePrompt, setImagePrompt] = useState("");
 
   // ---- Data fetching ----
 
@@ -303,12 +316,68 @@ export default function VisualEditorPage() {
 
   // ---- Handlers ----
 
+  async function handleGenerateImage() {
+    if (!imagePrompt.trim()) return;
+    setIsGeneratingImage(true);
+    try {
+      const res = await apiRequest("POST", "/api/ai/generate-image", {
+        prompt: imagePrompt,
+        width: selectedElement?.imageWidth || 1024,
+        height: selectedElement?.imageHeight || 1024,
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Generation failed");
+      }
+      const data = await res.json();
+      if (data.url) setImageUrl(data.url);
+    } catch (err: any) {
+      toast({ title: "Image Generation Failed", description: err.message, variant: "destructive" });
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  }
+
+  async function handleSaveImageVariant() {
+    if (!selectedElement || !imageUrl) return;
+    try {
+      const mutations = {
+        elementIdentity: {
+          tagName: selectedElement.tagName,
+          treePath: selectedElement.treePath,
+          isImage: true,
+          originalSrc: selectedElement.imageSrc,
+          originalWidth: selectedElement.imageWidth,
+          originalHeight: selectedElement.imageHeight,
+        },
+        newImageUrl: imageUrl,
+      };
+      const res = await apiRequest("POST", `/api/campaigns/${campaignId}/variants`, {
+        type: "image",
+        text: imageUrl,
+        testSectionId: null,
+        mutations: JSON.stringify(mutations),
+      });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Failed to save");
+      }
+      toast({ title: "Image variant saved", description: "Your image variant has been created." });
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "variants"] });
+      handleCancel();
+    } catch (err: any) {
+      toast({ title: "Save failed", description: err.message, variant: "destructive" });
+    }
+  }
+
   function handleCancel() {
     setSelectedElement(null);
     setVariantText("");
     setMobileFontSize("");
     setAiSuggestions([]);
     setStyleOverrides({ color: "", fontWeight: "", fontSize: "", lineHeight: "", fontStyle: "normal", textTransform: "none", letterSpacing: "" });
+    setImageUrl("");
+    setImagePrompt("");
   }
 
   function updateStyle(key: keyof StyleOverrides, value: string) {
@@ -445,177 +514,275 @@ export default function VisualEditorPage() {
 
                   <Separator />
 
-                  {/* Original text */}
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                      Original Text
-                    </Label>
-                    <div className="rounded-md bg-muted/50 border border-border px-3 py-2 text-xs text-muted-foreground leading-relaxed">
-                      {selectedElement.textContent}
-                    </div>
-                  </div>
+                  {selectedElement.isImage ? (
+                    /* ── IMAGE EDITING PANEL ── */
+                    <div className="space-y-4">
+                      {/* Current image preview */}
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                          Current Image
+                        </Label>
+                        <div className="rounded-md border border-border overflow-hidden bg-muted/30">
+                          <img
+                            src={selectedElement.imageSrc}
+                            alt={selectedElement.imageAlt || ""}
+                            className="w-full h-auto max-h-48 object-contain"
+                          />
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">
+                          {selectedElement.imageWidth}×{selectedElement.imageHeight}px
+                          {selectedElement.imageRenderedWidth ? ` (displayed at ${selectedElement.imageRenderedWidth}×${selectedElement.imageRenderedHeight}px)` : ""}
+                        </p>
+                      </div>
 
-                  {/* Generate with AI */}
-                  <Button variant="outline" size="sm" className="w-full h-8 text-xs gap-1.5"
-                    onClick={handleGenerateAI} disabled={isGenerating}>
-                    {isGenerating ? (
-                      <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating…</>
-                    ) : (
-                      <><Sparkles className="w-3.5 h-3.5" /> Generate With AI</>
-                    )}
-                  </Button>
+                      <Separator />
 
-                  {/* AI suggestions */}
-                  {aiSuggestions.length > 0 && (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                        AI Suggestions — click to use
-                      </Label>
-                      {aiSuggestions.map((s, i) => (
-                        <button key={i} onClick={() => selectAiSuggestion(s)}
-                          className={`w-full text-left rounded-md border px-3 py-2 text-xs leading-relaxed transition-colors ${
-                            variantText === s ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
-                          }`}>
-                          {s}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Variant text — rich text editor */}
-                  <div className="space-y-1.5">
-                    <Label className="text-xs font-semibold text-foreground uppercase tracking-wide">
-                      Variant Text
-                    </Label>
-                    {/* Toolbar */}
-                    <div className="flex items-center gap-1 p-1 rounded-md border border-border bg-muted/30">
-                      <button
-                        onMouseDown={(e) => { e.preventDefault(); execFormat("bold"); }}
-                        className="h-7 w-7 rounded flex items-center justify-center hover:bg-muted text-xs font-bold"
-                        title="Bold"
-                      >B</button>
-                      <button
-                        onMouseDown={(e) => { e.preventDefault(); execFormat("italic"); }}
-                        className="h-7 w-7 rounded flex items-center justify-center hover:bg-muted text-xs italic"
-                        title="Italic"
-                      >I</button>
-                      <button
-                        onMouseDown={(e) => { e.preventDefault(); execFormat("underline"); }}
-                        className="h-7 w-7 rounded flex items-center justify-center hover:bg-muted text-xs underline"
-                        title="Underline"
-                      >U</button>
-                      <div className="w-px h-5 bg-border mx-0.5" />
-                      <div className="relative">
-                        <input
-                          type="color"
-                          value={toolbarColor}
-                          onChange={(e) => {
-                            setToolbarColor(e.target.value);
-                            execFormat("foreColor", e.target.value);
-                          }}
-                          className="w-7 h-7 rounded border border-border cursor-pointer bg-transparent"
-                          title="Text Color"
+                      {/* Option 1: Image URL */}
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                          Replacement Image URL
+                        </Label>
+                        <Input
+                          value={imageUrl}
+                          onChange={(e) => setImageUrl(e.target.value)}
+                          placeholder="https://example.com/image.jpg"
+                          className="text-xs h-8"
+                          data-testid="input-image-url"
                         />
                       </div>
-                      <div className="w-px h-5 bg-border mx-0.5" />
-                      <select
-                        onChange={(e) => {
-                          if (e.target.value) setSelectionFontSize(e.target.value);
-                          e.target.value = "";
-                        }}
-                        className="h-7 text-xs rounded border border-border bg-background px-1"
-                        title="Font Size"
-                        defaultValue=""
-                      >
-                        <option value="" disabled>Size</option>
-                        {["14px","16px","18px","20px","24px","28px","32px","36px","40px","48px"].map(s => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
-                    </div>
-                    {/* Contenteditable editor */}
-                    <div
-                      ref={editorRef}
-                      contentEditable
-                      suppressContentEditableWarning
-                      className="min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring"
-                      onInput={() => {
-                        if (editorRef.current) setVariantText(editorRef.current.innerHTML);
-                      }}
-                    />
-                  </div>
 
-                  {/* Mobile Font Size */}
-                  <div className="flex items-center gap-3">
-                    <Label className="text-xs w-28 shrink-0">Mobile Font Size</Label>
-                    <div className="flex items-center gap-1.5 flex-1">
-                      <Input
-                        value={mobileFontSize}
-                        onChange={(e) => setMobileFontSize(e.target.value)}
-                        placeholder="e.g. 24"
-                        className="text-xs h-8"
-                      />
-                      <span className="text-xs text-muted-foreground shrink-0">px</span>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Style controls */}
-                  <div className="space-y-3">
-                    <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block">
-                      Style Controls
-                    </Label>
-                    <div className="flex items-center gap-3">
-                      <Label className="text-xs w-28 shrink-0">Text Color</Label>
-                      <div className="flex items-center gap-2 flex-1">
-                        <input type="color"
-                          value={styleOverrides.color.startsWith("#") ? styleOverrides.color : "#000000"}
-                          onChange={(e) => updateStyle("color", e.target.value)}
-                          className="w-8 h-8 rounded border border-border cursor-pointer bg-transparent" />
-                        <Input value={styleOverrides.color} onChange={(e) => updateStyle("color", e.target.value)}
-                          placeholder="e.g. #d4a800" className="text-xs h-8 flex-1" />
+                      {/* Option 2: Generate with AI */}
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                          Or Generate with AI
+                        </Label>
+                        <Textarea
+                          value={imagePrompt}
+                          onChange={(e) => setImagePrompt(e.target.value)}
+                          placeholder="Describe the image you want... e.g. 'A woman in her 60s with glowing, youthful skin, warm lighting, lifestyle photography'"
+                          className="text-xs resize-none min-h-[60px]"
+                          data-testid="textarea-image-prompt"
+                        />
+                        <Button
+                          variant="outline" size="sm" className="w-full h-8 text-xs gap-1.5"
+                          onClick={handleGenerateImage}
+                          disabled={isGeneratingImage || !imagePrompt.trim()}
+                          data-testid="button-generate-image"
+                        >
+                          {isGeneratingImage
+                            ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating...</>
+                            : <><Sparkles className="w-3.5 h-3.5" /> Generate Image</>}
+                        </Button>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <Label className="text-xs w-28 shrink-0">Font Weight</Label>
-                      <Select value={styleOverrides.fontWeight} onValueChange={(v) => updateStyle("fontWeight", v)}>
-                        <SelectTrigger className="h-8 text-xs flex-1"><SelectValue placeholder="Select weight" /></SelectTrigger>
-                        <SelectContent>
-                          {["300", "400", "500", "600", "700", "800", "900"].map((w) => (
-                            <SelectItem key={w} value={w} className="text-xs">{w}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <Label className="text-xs w-28 shrink-0">Font Size</Label>
-                      <div className="flex items-center gap-1.5 flex-1">
-                        <Input value={styleOverrides.fontSize} onChange={(e) => updateStyle("fontSize", e.target.value)}
-                          placeholder="e.g. 32" className="text-xs h-8" />
-                        <span className="text-xs text-muted-foreground shrink-0">px</span>
-                      </div>
-                    </div>
-                  </div>
 
-                  <Separator />
-
-                  {/* Actions */}
-                  <div className="flex gap-2">
-                    <Button className="flex-1 h-9 text-xs gap-1.5"
-                      onClick={() => saveMutation.mutate()}
-                      disabled={saveMutation.isPending || !variantText.trim() || variantText === selectedElement.textContent}>
-                      {saveMutation.isPending ? (
-                        <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
-                      ) : (
-                        <><Save className="w-3.5 h-3.5" /> Save Variant</>
+                      {/* Preview of new image */}
+                      {imageUrl && (
+                        <>
+                          <Separator />
+                          <div className="space-y-1.5">
+                            <Label className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                              New Image Preview
+                            </Label>
+                            <div className="rounded-md border border-primary/30 overflow-hidden bg-muted/30">
+                              <img src={imageUrl} alt="Preview" className="w-full h-auto max-h-48 object-contain" />
+                            </div>
+                          </div>
+                        </>
                       )}
-                    </Button>
-                    <Button variant="outline" size="sm" className="h-9 text-xs" onClick={handleCancel}
-                      disabled={saveMutation.isPending}>
-                      Cancel
-                    </Button>
-                  </div>
+
+                      <Separator />
+
+                      {/* Save */}
+                      <div className="flex gap-2">
+                        <Button
+                          className="flex-1 h-9 text-xs gap-1.5"
+                          onClick={handleSaveImageVariant}
+                          disabled={!imageUrl}
+                          data-testid="button-save-image-variant"
+                        >
+                          <Save className="w-3.5 h-3.5" /> Save Image Variant
+                        </Button>
+                        <Button variant="outline" size="sm" className="h-9 text-xs" onClick={handleCancel}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    /* ── TEXT EDITING PANEL ── */
+                    <div className="space-y-4">
+                      {/* Original text */}
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                          Original Text
+                        </Label>
+                        <div className="rounded-md bg-muted/50 border border-border px-3 py-2 text-xs text-muted-foreground leading-relaxed">
+                          {selectedElement.textContent}
+                        </div>
+                      </div>
+
+                      {/* Generate with AI */}
+                      <Button variant="outline" size="sm" className="w-full h-8 text-xs gap-1.5"
+                        onClick={handleGenerateAI} disabled={isGenerating}>
+                        {isGenerating ? (
+                          <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating…</>
+                        ) : (
+                          <><Sparkles className="w-3.5 h-3.5" /> Generate With AI</>
+                        )}
+                      </Button>
+
+                      {/* AI suggestions */}
+                      {aiSuggestions.length > 0 && (
+                        <div className="space-y-1.5">
+                          <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                            AI Suggestions — click to use
+                          </Label>
+                          {aiSuggestions.map((s, i) => (
+                            <button key={i} onClick={() => selectAiSuggestion(s)}
+                              className={`w-full text-left rounded-md border px-3 py-2 text-xs leading-relaxed transition-colors ${
+                                variantText === s ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+                              }`}>
+                              {s}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Variant text — rich text editor */}
+                      <div className="space-y-1.5">
+                        <Label className="text-xs font-semibold text-foreground uppercase tracking-wide">
+                          Variant Text
+                        </Label>
+                        {/* Toolbar */}
+                        <div className="flex items-center gap-1 p-1 rounded-md border border-border bg-muted/30">
+                          <button
+                            onMouseDown={(e) => { e.preventDefault(); execFormat("bold"); }}
+                            className="h-7 w-7 rounded flex items-center justify-center hover:bg-muted text-xs font-bold"
+                            title="Bold"
+                          >B</button>
+                          <button
+                            onMouseDown={(e) => { e.preventDefault(); execFormat("italic"); }}
+                            className="h-7 w-7 rounded flex items-center justify-center hover:bg-muted text-xs italic"
+                            title="Italic"
+                          >I</button>
+                          <button
+                            onMouseDown={(e) => { e.preventDefault(); execFormat("underline"); }}
+                            className="h-7 w-7 rounded flex items-center justify-center hover:bg-muted text-xs underline"
+                            title="Underline"
+                          >U</button>
+                          <div className="w-px h-5 bg-border mx-0.5" />
+                          <div className="relative">
+                            <input
+                              type="color"
+                              value={toolbarColor}
+                              onChange={(e) => {
+                                setToolbarColor(e.target.value);
+                                execFormat("foreColor", e.target.value);
+                              }}
+                              className="w-7 h-7 rounded border border-border cursor-pointer bg-transparent"
+                              title="Text Color"
+                            />
+                          </div>
+                          <div className="w-px h-5 bg-border mx-0.5" />
+                          <select
+                            onChange={(e) => {
+                              if (e.target.value) setSelectionFontSize(e.target.value);
+                              e.target.value = "";
+                            }}
+                            className="h-7 text-xs rounded border border-border bg-background px-1"
+                            title="Font Size"
+                            defaultValue=""
+                          >
+                            <option value="" disabled>Size</option>
+                            {["14px","16px","18px","20px","24px","28px","32px","36px","40px","48px"].map(s => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        </div>
+                        {/* Contenteditable editor */}
+                        <div
+                          ref={editorRef}
+                          contentEditable
+                          suppressContentEditableWarning
+                          className="min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring"
+                          onInput={() => {
+                            if (editorRef.current) setVariantText(editorRef.current.innerHTML);
+                          }}
+                        />
+                      </div>
+
+                      {/* Mobile Font Size */}
+                      <div className="flex items-center gap-3">
+                        <Label className="text-xs w-28 shrink-0">Mobile Font Size</Label>
+                        <div className="flex items-center gap-1.5 flex-1">
+                          <Input
+                            value={mobileFontSize}
+                            onChange={(e) => setMobileFontSize(e.target.value)}
+                            placeholder="e.g. 24"
+                            className="text-xs h-8"
+                          />
+                          <span className="text-xs text-muted-foreground shrink-0">px</span>
+                        </div>
+                      </div>
+
+                      <Separator />
+
+                      {/* Style controls */}
+                      <div className="space-y-3">
+                        <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide block">
+                          Style Controls
+                        </Label>
+                        <div className="flex items-center gap-3">
+                          <Label className="text-xs w-28 shrink-0">Text Color</Label>
+                          <div className="flex items-center gap-2 flex-1">
+                            <input type="color"
+                              value={styleOverrides.color.startsWith("#") ? styleOverrides.color : "#000000"}
+                              onChange={(e) => updateStyle("color", e.target.value)}
+                              className="w-8 h-8 rounded border border-border cursor-pointer bg-transparent" />
+                            <Input value={styleOverrides.color} onChange={(e) => updateStyle("color", e.target.value)}
+                              placeholder="e.g. #d4a800" className="text-xs h-8 flex-1" />
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <Label className="text-xs w-28 shrink-0">Font Weight</Label>
+                          <Select value={styleOverrides.fontWeight} onValueChange={(v) => updateStyle("fontWeight", v)}>
+                            <SelectTrigger className="h-8 text-xs flex-1"><SelectValue placeholder="Select weight" /></SelectTrigger>
+                            <SelectContent>
+                              {["300", "400", "500", "600", "700", "800", "900"].map((w) => (
+                                <SelectItem key={w} value={w} className="text-xs">{w}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <Label className="text-xs w-28 shrink-0">Font Size</Label>
+                          <div className="flex items-center gap-1.5 flex-1">
+                            <Input value={styleOverrides.fontSize} onChange={(e) => updateStyle("fontSize", e.target.value)}
+                              placeholder="e.g. 32" className="text-xs h-8" />
+                            <span className="text-xs text-muted-foreground shrink-0">px</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <Separator />
+
+                      {/* Actions */}
+                      <div className="flex gap-2">
+                        <Button className="flex-1 h-9 text-xs gap-1.5"
+                          onClick={() => saveMutation.mutate()}
+                          disabled={saveMutation.isPending || !variantText.trim() || variantText === selectedElement.textContent}>
+                          {saveMutation.isPending ? (
+                            <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving…</>
+                          ) : (
+                            <><Save className="w-3.5 h-3.5" /> Save Variant</>
+                          )}
+                        </Button>
+                        <Button variant="outline" size="sm" className="h-9 text-xs" onClick={handleCancel}
+                          disabled={saveMutation.isPending}>
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               ) : !hasActiveTest ? (
                 /* ── No test running: prompt to start ── */
