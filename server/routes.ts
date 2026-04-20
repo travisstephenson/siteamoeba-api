@@ -1462,26 +1462,8 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    // TEST LOCKING: prevent variant changes while a test is actively running
-    // A test is "running" when there are 2+ active variants (control + at least 1 challenger)
-    // AND the campaign has visitors in the last 24 hours (actively collecting data)
-    if (campaign.status === "active") {
-      const activeVars = await pool.query(
-        "SELECT COUNT(*) as cnt FROM variants WHERE campaign_id = $1 AND is_active = true",
-        [campaign.id]
-      );
-      const hasActiveTest = parseInt(activeVars.rows[0]?.cnt || "0") >= 2;
-      if (hasActiveTest) {
-        const recentVisitors = await pool.query(
-          "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen::timestamptz > NOW() - INTERVAL '24 hours'",
-          [campaign.id]
-        );
-        const isCollectingData = parseInt(recentVisitors.rows[0]?.cnt || "0") > 0;
-        if (isCollectingData) {
-          return res.status(409).json({ error: "TEST_LOCKED", message: "Cannot add variants while a test is actively running with visitors. End the current test first, then add new variants." });
-        }
-      }
-    }
+    // Test locking removed — users manage their own test lifecycle
+
 
     // persuasionTags can be passed directly (from AI generation) or will be auto-classified
     // Strip persuasionTags from validation since it comes as array but schema expects string
@@ -1538,26 +1520,8 @@ export async function registerRoutes(server: Server, app: Express) {
     if (!campaign || campaign.userId !== req.userId) {
       return res.status(404).json({ error: "Not found" });
     }
-    // TEST LOCKING — only block edits during actively running test (2+ variants + recent visitors)
-    if (campaign.status === "active") {
-      const allowedKeys = Object.keys(req.body);
-      const onlyTogglingActive = allowedKeys.length === 1 && allowedKeys[0] === "isActive";
-      if (!onlyTogglingActive) {
-        const activeVars = await pool.query(
-          "SELECT COUNT(*) as cnt FROM variants WHERE campaign_id = $1 AND is_active = true",
-          [campaign.id]
-        );
-        if (parseInt(activeVars.rows[0]?.cnt || "0") >= 2) {
-          const recentVisitors = await pool.query(
-            "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen::timestamptz > NOW() - INTERVAL '24 hours'",
-            [campaign.id]
-          );
-          if (parseInt(recentVisitors.rows[0]?.cnt || "0") > 0) {
-            return res.status(409).json({ error: "TEST_LOCKED", message: "Cannot edit variants while a test is actively running. End the current test first." });
-          }
-        }
-      }
-    }
+    // Test locking removed — users manage their own test lifecycle
+
     const updated = await storage.updateVariant(variant.id, req.body);
     res.json(updated);
   });
@@ -1569,22 +1533,8 @@ export async function registerRoutes(server: Server, app: Express) {
     if (!campaign || campaign.userId !== req.userId) {
       return res.status(404).json({ error: "Not found" });
     }
-    // TEST LOCKING: only block if actively running test
-    if (campaign.status === "active") {
-      const activeVars = await pool.query(
-        "SELECT COUNT(*) as cnt FROM variants WHERE campaign_id = $1 AND is_active = true",
-        [campaign.id]
-      );
-      if (parseInt(activeVars.rows[0]?.cnt || "0") >= 2) {
-        const recentVisitors = await pool.query(
-          "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen::timestamptz > NOW() - INTERVAL '24 hours'",
-          [campaign.id]
-        );
-        if (parseInt(recentVisitors.rows[0]?.cnt || "0") > 0) {
-          return res.status(409).json({ error: "TEST_LOCKED", message: "Cannot delete variants while a test is actively running. End the current test first." });
-        }
-      }
-    }
+    // Test locking removed — users manage their own test lifecycle
+
     await storage.deleteVariant(variant.id);
     res.json({ deleted: variant.id });
   });
@@ -3189,25 +3139,8 @@ export async function registerRoutes(server: Server, app: Express) {
 
     const { campaignId, type, sectionId } = req.body;
 
-    // TEST LOCKING: only block if a test is actively running (2+ active variants + recent visitors)
-    if (campaignId) {
-      const campaign = await storage.getCampaign(campaignId);
-      if (campaign && campaign.status === "active") {
-        const activeVars = await pool.query(
-          "SELECT COUNT(*) as cnt FROM variants WHERE campaign_id = $1 AND is_active = true",
-          [campaignId]
-        );
-        if (parseInt(activeVars.rows[0]?.cnt || "0") >= 2) {
-          const recentVisitors = await pool.query(
-            "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen::timestamptz > NOW() - INTERVAL '24 hours'",
-            [campaignId]
-          );
-          if (parseInt(recentVisitors.rows[0]?.cnt || "0") > 0) {
-            return res.status(409).json({ error: "TEST_LOCKED", message: "Cannot generate variants while a test is actively running with visitors. End the current test first." });
-          }
-        }
-      }
-    }
+    // Test locking removed — users manage their own test lifecycle
+
 
     if (!campaignId || !type) {
       return res.status(400).json({ error: "campaignId and type are required" });
