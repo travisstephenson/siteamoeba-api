@@ -1282,6 +1282,11 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
+    // TEST LOCKING: prevent variant changes while test is running
+    if (campaign.status === "active") {
+      return res.status(409).json({ error: "TEST_LOCKED", message: "Cannot add variants while a test is running. End the current test first, then add new variants." });
+    }
+
     // persuasionTags can be passed directly (from AI generation) or will be auto-classified
     // Strip persuasionTags from validation since it comes as array but schema expects string
     const { persuasionTags: rawTags, ...bodyWithoutTags } = req.body;
@@ -1337,6 +1342,14 @@ export async function registerRoutes(server: Server, app: Express) {
     if (!campaign || campaign.userId !== req.userId) {
       return res.status(404).json({ error: "Not found" });
     }
+    // TEST LOCKING — only allow toggling is_active during active test (for emergency deactivation)
+    if (campaign.status === "active") {
+      const allowedKeys = Object.keys(req.body);
+      const onlyTogglingActive = allowedKeys.length === 1 && allowedKeys[0] === "isActive";
+      if (!onlyTogglingActive) {
+        return res.status(409).json({ error: "TEST_LOCKED", message: "Cannot edit variants while a test is running. End the current test first." });
+      }
+    }
     const updated = await storage.updateVariant(variant.id, req.body);
     res.json(updated);
   });
@@ -1347,6 +1360,10 @@ export async function registerRoutes(server: Server, app: Express) {
     const campaign = await storage.getCampaign(variant.campaignId);
     if (!campaign || campaign.userId !== req.userId) {
       return res.status(404).json({ error: "Not found" });
+    }
+    // TEST LOCKING
+    if (campaign.status === "active") {
+      return res.status(409).json({ error: "TEST_LOCKED", message: "Cannot delete variants while a test is running. End the current test first." });
     }
     await storage.deleteVariant(variant.id);
     res.json({ deleted: variant.id });
@@ -2951,6 +2968,15 @@ export async function registerRoutes(server: Server, app: Express) {
     if (!variantCreditCheck.ok) return res.status(402).json({ error: variantCreditCheck.errorMsg });
 
     const { campaignId, type, sectionId } = req.body;
+
+    // TEST LOCKING: prevent variant changes while test is running
+    if (campaignId) {
+      const campaign = await storage.getCampaign(campaignId);
+      if (campaign && campaign.status === "active") {
+        return res.status(409).json({ error: "TEST_LOCKED", message: "Cannot generate variants while a test is running. End the current test first." });
+      }
+    }
+
     if (!campaignId || !type) {
       return res.status(400).json({ error: "campaignId and type are required" });
     }
