@@ -11,6 +11,10 @@ import {
   CheckCircle2,
   Loader2,
   Tag,
+  Eye,
+  EyeOff,
+  Pencil,
+  Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -87,6 +91,7 @@ export default function VisualEditorPage() {
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const [viewMode, setViewMode] = useState<"desktop" | "mobile">("desktop");
+  const [previewVariantId, setPreviewVariantId] = useState<number | null>(null);
   const [selectedElement, setSelectedElement] = useState<ElementIdentity | null>(null);
   const [variantText, setVariantText] = useState("");
   const [styleOverrides, setStyleOverrides] = useState<StyleOverrides>({
@@ -119,16 +124,10 @@ export default function VisualEditorPage() {
     enabled: isAuthenticated && !isNaN(campaignId),
   });
 
-  // Only show variants that have a mutations field (visual editor variants)
-  const visualVariants = allVariants.filter((v) => {
-    if (!v.mutations) return false;
-    try {
-      const m = JSON.parse(v.mutations);
-      return !!m?.elementIdentity?.treePath;
-    } catch {
-      return false;
-    }
-  });
+  // Show all variants - both legacy and visual editor
+  const controlVariant = allVariants.find(v => v.isControl);
+  const challengerVariants = allVariants.filter(v => !v.isControl && v.isActive);
+  const inactiveVariants = allVariants.filter(v => !v.isControl && !v.isActive);
 
   // ---- postMessage listener ----
 
@@ -230,6 +229,36 @@ export default function VisualEditorPage() {
 
   function updateStyle(key: keyof StyleOverrides, value: string) {
     setStyleOverrides((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // ---- Preview variant in iframe ----
+
+  function sendPreviewToIframe(variant: Variant | null) {
+    if (!iframeRef.current?.contentWindow) return;
+    if (!variant || variant.isControl) {
+      // Reset to control view
+      iframeRef.current.contentWindow.postMessage({ type: "SA_RESET_VIEW" }, "*");
+      setPreviewVariantId(null);
+    } else {
+      // Apply variant text to iframe
+      let elementIdentity = null;
+      let styleOverridesData = null;
+      try {
+        const m = JSON.parse(variant.mutations || "{}");
+        elementIdentity = m.elementIdentity;
+        styleOverridesData = m.styleOverrides;
+      } catch {}
+      iframeRef.current.contentWindow.postMessage({
+        type: "SA_APPLY_VARIANT",
+        data: {
+          variantId: variant.id,
+          text: variant.text,
+          elementIdentity,
+          styleOverrides: styleOverridesData,
+        }
+      }, "*");
+      setPreviewVariantId(variant.id);
+    }
   }
 
   // ---- Iframe src ----
@@ -345,6 +374,56 @@ export default function VisualEditorPage() {
         >
           <ScrollArea className="flex-1">
             <div className="p-4 space-y-4">
+              {/* ── View Toggle: Control vs Variants ── */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-3.5 h-3.5 text-muted-foreground" />
+                  <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    Preview View
+                  </Label>
+                </div>
+                <div className="space-y-1.5">
+                  {/* Control button */}
+                  <button
+                    onClick={() => sendPreviewToIframe(null)}
+                    className={`w-full text-left rounded-lg border p-2.5 transition-colors ${
+                      previewVariantId === null
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:border-muted-foreground/30"
+                    }`}
+                    data-testid="button-preview-control"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-[10px]">Control</Badge>
+                      <span className="text-xs text-muted-foreground">Original page</span>
+                    </div>
+                  </button>
+                  {/* Challenger variants */}
+                  {challengerVariants.map((v, idx) => (
+                    <button
+                      key={v.id}
+                      onClick={() => sendPreviewToIframe(v)}
+                      className={`w-full text-left rounded-lg border p-2.5 transition-colors ${
+                        previewVariantId === v.id
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-muted-foreground/30"
+                      }`}
+                      data-testid={`button-preview-variant-${v.id}`}
+                    >
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge variant={previewVariantId === v.id ? "default" : "secondary"} className="text-[10px]">
+                          Variant {String.fromCharCode(65 + idx)}
+                        </Badge>
+                        <Eye className="w-3 h-3 text-muted-foreground" />
+                      </div>
+                      <p className="text-xs text-foreground leading-snug line-clamp-2">{v.text}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <Separator />
+
               {!selectedElement ? (
                 /* ── State A: nothing selected ── */
                 <div
@@ -601,54 +680,19 @@ export default function VisualEditorPage() {
                 </div>
               )}
 
-              {/* ── Saved Variants ── */}
-              {visualVariants.length > 0 && (
+              {/* ── All Variants Summary ── */}
+              {allVariants.length > 0 && (
                 <>
                   <Separator />
                   <div className="space-y-2">
                     <div className="flex items-center gap-2">
                       <Tag className="w-3.5 h-3.5 text-muted-foreground" />
                       <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                        Saved Visual Variants ({visualVariants.length})
+                        All Variants ({allVariants.length})
                       </Label>
                     </div>
-                    <div className="space-y-2" data-testid="list-saved-variants">
-                      {visualVariants.map((v) => {
-                        let parsedMutations: any = null;
-                        try {
-                          parsedMutations = JSON.parse(v.mutations!);
-                        } catch {}
-                        const tag = parsedMutations?.elementIdentity?.tagName ?? "?";
-                        return (
-                          <div
-                            key={v.id}
-                            className="rounded-lg border border-border bg-card p-3 space-y-1"
-                            data-testid={`card-visual-variant-${v.id}`}
-                          >
-                            <div className="flex items-center gap-2">
-                              <Badge variant="outline" className="text-[10px] font-mono px-1.5 py-0">
-                                {tag}
-                              </Badge>
-                              {!v.isActive && (
-                                <Badge variant="secondary" className="text-[10px]">
-                                  Inactive
-                                </Badge>
-                              )}
-                            </div>
-                            <p
-                              className="text-xs text-foreground leading-snug line-clamp-2"
-                              data-testid={`text-visual-variant-${v.id}`}
-                            >
-                              {v.text}
-                            </p>
-                            {parsedMutations?.elementIdentity?.treePath && (
-                              <p className="text-[10px] text-muted-foreground font-mono truncate">
-                                {parsedMutations.elementIdentity.treePath}
-                              </p>
-                            )}
-                          </div>
-                        );
-                      })}
+                    <div className="space-y-1.5 text-xs text-muted-foreground">
+                      <p>{controlVariant ? "1 control" : "No control"} · {challengerVariants.length} active challenger{challengerVariants.length !== 1 ? "s" : ""}{inactiveVariants.length > 0 ? ` · ${inactiveVariants.length} inactive` : ""}</p>
                     </div>
                   </div>
                 </>

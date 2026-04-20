@@ -8378,6 +8378,79 @@ function generateEmbedCode(baseUrl: string, campaign: any): string {
     var batch = events.splice(0, events.length);
     sendBatch(batch, timeOnPage);
   });
+  // Listen for preview messages from parent (visual editor)
+  var _originalTexts = {};
+  window.addEventListener('message', function(e) {
+    if (!e.data || !e.data.type) return;
+    if (e.data.type === 'SA_APPLY_VARIANT') {
+      var d = e.data.data;
+      if (!d || !d.text) return;
+      // Find the element by treePath or text fingerprint
+      var target = null;
+      if (d.elementIdentity && d.elementIdentity.treePath) {
+        try { target = document.querySelector(d.elementIdentity.treePath); } catch(ex) {}
+      }
+      // Fallback: find by tag + text match
+      if (!target && d.elementIdentity) {
+        var candidates = document.querySelectorAll(d.elementIdentity.tagName || '*');
+        var fp = (d.elementIdentity.textFingerprint || d.elementIdentity.originalText || '').toLowerCase().slice(0, 40);
+        for (var ci = 0; ci < candidates.length; ci++) {
+          if ((candidates[ci].innerText || '').toLowerCase().trim().indexOf(fp) === 0) {
+            target = candidates[ci]; break;
+          }
+        }
+      }
+      // If still no target, try to find any element matching the text
+      if (!target) {
+        var allEls = document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,span,li,button,a');
+        for (var ai = 0; ai < allEls.length; ai++) {
+          var elText = (allEls[ai].innerText || '').trim();
+          if (elText.length > 10 && d.text.toLowerCase().indexOf(elText.toLowerCase().slice(0, 20)) !== -1) {
+            target = allEls[ai]; break;
+          }
+        }
+      }
+      if (target) {
+        // Save original text for reset
+        var key = d.variantId || 'preview';
+        if (!_originalTexts[key]) _originalTexts[key] = { el: target, text: target.innerText };
+        // Find deepest single-child leaf
+        var leaf = target;
+        for (var dd = 0; dd < 5; dd++) {
+          var kids = [];
+          for (var ki = 0; ki < leaf.children.length; ki++) {
+            var ktag = leaf.children[ki].tagName.toUpperCase();
+            if (ktag !== 'SCRIPT' && ktag !== 'STYLE' && ktag !== 'BR') {
+              if ((leaf.children[ki].textContent || '').trim().length > 0) kids.push(leaf.children[ki]);
+            }
+          }
+          if (kids.length === 1) { leaf = kids[0]; } else break;
+        }
+        leaf.textContent = d.text;
+        if (d.styleOverrides) {
+          for (var sp in d.styleOverrides) {
+            if (d.styleOverrides[sp]) {
+              leaf.style[sp] = d.styleOverrides[sp];
+            }
+          }
+        }
+        target.style.outline = '2px solid #22c55e';
+        target.style.outlineOffset = '2px';
+      }
+    }
+    if (e.data.type === 'SA_RESET_VIEW') {
+      // Restore all original texts
+      for (var rk in _originalTexts) {
+        var entry = _originalTexts[rk];
+        if (entry && entry.el) {
+          entry.el.innerText = entry.text;
+          entry.el.style.outline = '';
+          entry.el.style.outlineOffset = '';
+        }
+      }
+      _originalTexts = {};
+    }
+  });
 })();
 </script>`;
 }
