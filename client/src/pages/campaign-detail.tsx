@@ -3307,11 +3307,13 @@ function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector, v
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedInline, setCopiedInline] = useState(false);
   const [showCode, setShowCode] = useState(!verified);
+  const [wpCacheMode, setWpCacheMode] = useState(false);
   const { toast } = useToast();
   const apiBase = getApiBaseUrl();
 
-  // data-no-optimize="1" prevents LiteSpeed/WP Rocket/Autoptimize from deferring this script
-  const scriptTagCode = `<script data-no-optimize="1" src="${apiBase}/api/widget/script/${campaignId}"></script>`;
+  const scriptTagCode = wpCacheMode
+    ? `<script data-no-optimize="1" data-cfasync="false" src="${apiBase}/api/widget/script/${campaignId}"></script>`
+    : `<script src="${apiBase}/api/widget/script/${campaignId}"></script>`;
 
   // Option 2: full inline code (for users who can't use external script tags)
   const inlineCode = generateEmbedCodeClient(apiBase, campaignId, headlineSelector, subheadlineSelector);
@@ -3374,6 +3376,18 @@ function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector, v
             <p className="text-xs text-muted-foreground mb-2">
               Single line — the widget loads directly from the server with behavioral tracking included.
             </p>
+            <label className="flex items-center gap-2 mb-3 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={wpCacheMode}
+                onChange={(e) => setWpCacheMode(e.target.checked)}
+                className="rounded border-border"
+                data-testid="checkbox-wp-cache"
+              />
+              <span className="text-xs text-muted-foreground">
+                Using WordPress with LiteSpeed, WP Rocket, or Autoptimize
+              </span>
+            </label>
             <div className="relative">
               <pre
                 className="bg-muted rounded-md p-4 text-xs font-mono overflow-x-auto text-foreground"
