@@ -2731,15 +2731,19 @@ export async function registerRoutes(server: Server, app: Express) {
         clearTimeout(fetchTimeout);
         rawHtml = await fetchResponse.text();
 
-        // Truncate for LLM
-        const truncated = rawHtml.length > 120000 ? rawHtml.substring(0, 120000) : rawHtml;
+        // Extract structured text (same as initial scan) — strips scripts/styles/tags
+        const headEnd = rawHtml.toLowerCase().indexOf("</head>");
+        const bodyHtml = headEnd > 0 ? rawHtml.slice(headEnd + 7) : rawHtml;
+        const titleMatch = rawHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
+        const titleText = titleMatch ? `Page title: ${titleMatch[1].trim()}\n\n` : "";
+        const pageText = (titleText + extractPageText(bodyHtml)).slice(0, 40000);
 
         // Call the LLM to re-scan using the provider-agnostic callLLM
         const scanPrompt = `You are a CRO (Conversion Rate Optimization) expert. Analyze this HTML page and identify testable sections. For each section, provide: id (kebab-case), label, purpose, selector (CSS), category (headline/subheadline/cta/body_copy/social_proof/guarantee/faq/other), currentText (the current text content), testPriority (1-10), testMethod (text_swap or html_swap). Return JSON array only.`;
 
         const raw = await callLLM(llmConfigResolved.config, [
           { role: "system", content: scanPrompt },
-          { role: "user", content: `URL: ${campaign.url}\n\nHTML:\n${truncated}` },
+          { role: "user", content: `URL: ${campaign.url}\n\nPage content:\n${pageText}` },
         ]);
 
         const jsonMatch = raw.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0];
