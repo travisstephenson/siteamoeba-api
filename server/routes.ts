@@ -4675,12 +4675,13 @@ export async function registerRoutes(server: Server, app: Express) {
 
     // Check credits
     const user = await storage.getUserById(campaign.userId);
+    // Check credits — but ALWAYS track visitors regardless
+    let creditExhausted = false;
     if (user) {
-      // 1 credit = 100 visitors. Check if the user's current count is on a 100-boundary
       const currentVisitors = await countCampaignVisitors(campaign.userId);
       if (Math.floor(currentVisitors / 100) >= user.creditsLimit) {
-        // Over limit — serve control variants only (no tracking)
-        return res.json({ visitorId, headline: null, subheadline: null, creditExhausted: true });
+        creditExhausted = true;
+        // Still track the visitor but don't serve variants
       }
     }
 
@@ -4770,8 +4771,9 @@ export async function registerRoutes(server: Server, app: Express) {
     const allTestSections = _testSectionsCache[campaignId] || await storage.getTestSectionsByCampaign(campaignId);
     _testSectionsCache[campaignId] = allTestSections;
 
-    const headlineVariants = await storage.getActiveVariantsByCampaign(campaignId, "headline");
-    const subheadlineVariants = await storage.getActiveVariantsByCampaign(campaignId, "subheadline");
+    // If credits exhausted, skip variant assignment but still create visitor for tracking
+    const headlineVariants = creditExhausted ? [] : await storage.getActiveVariantsByCampaign(campaignId, "headline");
+    const subheadlineVariants = creditExhausted ? [] : await storage.getActiveVariantsByCampaign(campaignId, "subheadline");
 
     // Respect traffic percentage for headline/subheadline sections too
     const headlineSection = allTestSections.find((s: any) => s.isActive && s.category === "headline");
@@ -4836,10 +4838,9 @@ export async function registerRoutes(server: Server, app: Express) {
       });
     }
 
-    // Check if there's anything to test at all
-    if (!hVariant && !sVariant && sectionPayloads.length === 0) {
-      return res.json({ visitorId, headline: null, subheadline: null });
-    }
+    // ALWAYS track visitors, even with no active tests.
+    // The pixel tracks attribution, behavior, and conversions regardless of variant testing.
+    const hasActiveTest = !!(hVariant || sVariant || sectionPayloads.length > 0);
 
     const utmSource   = (req.query.utm_source   as string) || null;
     const utmMedium   = (req.query.utm_medium   as string) || null;
@@ -4976,6 +4977,7 @@ export async function registerRoutes(server: Server, app: Express) {
       subheadline: await resolveVariantPayload(sVariant),
       sections: sectionPayloads.length > 0 ? sectionPayloads : undefined,
       campaignType: campaign.campaignType || "purchase",
+      creditExhausted: creditExhausted || undefined,
     });
 
     // Fire-and-forget anomaly detection (throttled to once per 5 min per campaign)
