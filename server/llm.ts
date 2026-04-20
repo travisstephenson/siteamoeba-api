@@ -98,6 +98,19 @@ export function resolveLLMConfig(opts: {
   const creditCost = OPERATION_CREDIT_COSTS[operation] || 1;
 
   // ---------------------------------------------------------------
+  // SCAN: ALWAYS uses platform key. Every user, every plan, every time.
+  // This is the first check so it can never be blocked by anything else.
+  // ---------------------------------------------------------------
+  if (operation === "scan" && platformKey) {
+    return {
+      config: { provider: PLATFORM_MODELS.fast.provider, apiKey: platformKey, model: PLATFORM_MODELS.fast.model },
+      useBrainData: false,
+      creditCost: isPaid ? creditCost : 0,
+      source: "platform",
+    };
+  }
+
+  // ---------------------------------------------------------------
   // PAID: platform key for everything, brain data included
   // ---------------------------------------------------------------
   if (isPaid && platformKey) {
@@ -112,7 +125,7 @@ export function resolveLLMConfig(opts: {
 
   // PAID fallback: platform key missing, use their BYOK if available
   if (isPaid && hasUserKey) {
-    const FAST_OPS: LLMOperation[] = ["scan", "classify", "observation"];
+    const FAST_OPS: LLMOperation[] = ["classify", "observation"];
     const forceFast = FAST_OPS.includes(operation);
     return {
       config: {
@@ -136,16 +149,6 @@ export function resolveLLMConfig(opts: {
   const PAID_ONLY_OPS: LLMOperation[] = ["chat", "counsel", "autopilot", "autopilot_learn", "observation"];
   if (!isPaid && PAID_ONLY_OPS.includes(operation)) {
     throw new Error("UPGRADE_REQUIRED");
-  }
-
-  // Scan uses platform key (onboarding: lets users set up before paying)
-  if (!isPaid && operation === "scan" && platformKey) {
-    return {
-      config: { provider: PLATFORM_MODELS.fast.provider, apiKey: platformKey, model: PLATFORM_MODELS.fast.model },
-      useBrainData: false,
-      creditCost: 0,
-      source: "platform",
-    };
   }
 
   // BYOK for variant generation, classification, and other allowed ops
