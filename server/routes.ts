@@ -2949,15 +2949,21 @@ export async function registerRoutes(server: Server, app: Express) {
         clearTimeout(fetchTimeout);
         rawHtml = await fetchResponse.text();
 
-        // Use EXACT same extraction + prompt as initial scan
+        // Same extraction + prompt as initial scan
         const headEnd = rawHtml.toLowerCase().indexOf("</head>");
         const bodyHtml = headEnd > 0 ? rawHtml.slice(headEnd + 7) : rawHtml;
         const titleMatch = rawHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
         const titleText = titleMatch ? `Page title: ${titleMatch[1].trim()}\n\n` : "";
-        const cleaned = (titleText + extractPageText(bodyHtml)).slice(0, 40000);
+        const extracted = titleText + extractPageText(bodyHtml);
+        // Cap at 20K chars — large pages (GHL 480+ headings) cause LLM timeouts at 40K
+        const cleaned = extracted.slice(0, 20000);
 
         const messages = buildPageScanPrompt(campaign.url, cleaned);
-        const rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 8000 });
+        // Wrap in a timeout — LLM can hang on very large pages
+        const rawResponse = await Promise.race([
+          callLLM(llmConfigResolved.config, messages, { maxTokens: 8000 }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("LLM call timed out after 90s")), 90000)),
+        ]);
 
         // Same JSON parsing as initial scan
         let newSections: any[] = [];
