@@ -1278,7 +1278,21 @@ export async function registerRoutes(server: Server, app: Express) {
 
   // ============== VISUAL EDITOR PROXY ==============
 
-  app.get("/api/campaigns/:id/editor-proxy", requireAuth, async (req: Request, res: Response) => {
+  // Editor proxy accepts auth via ?token= query param (iframes can't send headers)
+  app.get("/api/campaigns/:id/editor-proxy", async (req: Request, res: Response) => {
+    // Auth via query param for iframe usage
+    const queryToken = req.query.token as string;
+    if (queryToken) {
+      try {
+        const jwt = await import("jsonwebtoken");
+        const decoded = jwt.default.verify(queryToken, process.env.JWT_SECRET || "") as any;
+        req.userId = decoded.userId;
+      } catch {
+        return res.status(401).json({ error: "Invalid token" });
+      }
+    } else if (!req.userId) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
     const campaign = await storage.getCampaign(paramId(req.params.id));
     if (!campaign || campaign.userId !== req.userId) {
       return res.status(404).json({ error: "Campaign not found" });
@@ -1445,11 +1459,28 @@ export async function registerRoutes(server: Server, app: Express) {
       }
       const html = await fetchResp.text();
       const bridgeScript = generateClickSelectBridge(campaign.id);
-      const modified = html.includes('</body>')
-        ? html.replace('</body>', bridgeScript + '</body>')
-        : html + bridgeScript;
+      // Inject <base> tag so relative URLs (CSS, JS, images) resolve to the original domain
+      const baseUrl = new URL(campaign.url);
+      const baseTag = `<base href="${baseUrl.origin}/">`;
+      let modified = html;
+      // Insert <base> right after <head>
+      if (modified.includes('<head>')) {
+        modified = modified.replace('<head>', '<head>' + baseTag);
+      } else if (modified.includes('<head ')) {
+        modified = modified.replace(/<head[^>]*>/, '$&' + baseTag);
+      } else {
+        modified = baseTag + modified;
+      }
+      // Strip any existing X-Frame-Options meta tags from the page
+      modified = modified.replace(/<meta[^>]*http-equiv=["']X-Frame-Options["'][^>]*>/gi, '');
+      // Inject bridge script
+      modified = modified.includes('</body>')
+        ? modified.replace('</body>', bridgeScript + '</body>')
+        : modified + bridgeScript;
+      // Allow framing — this is our own editor, not a third-party embed
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      res.removeHeader('X-Frame-Options');
+      res.setHeader('Content-Security-Policy', 'frame-ancestors *');
       res.send(modified);
     } catch (err: any) {
       res.status(502).json({ error: "Failed to proxy campaign URL: " + (err.message || String(err)) });

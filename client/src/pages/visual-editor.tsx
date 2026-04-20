@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
-import { apiRequest, queryClient, API_BASE } from "@/lib/queryClient";
+import { apiRequest, queryClient, API_BASE, getAuthToken } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { Campaign, Variant } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
@@ -70,9 +70,9 @@ function parsePx(value: string): string {
   return value?.replace("px", "") ?? "";
 }
 
-function buildProxyUrl(campaignId: number): string {
-  const base = API_BASE.startsWith("__") ? "" : API_BASE;
-  return `${base}/api/campaigns/${campaignId}/editor-proxy`;
+function buildProxyUrl(campaignId: number, token: string): string {
+  // Use Railway directly to bypass Cloudflare's X-Frame-Options blocking
+  return `https://siteamoeba-api-production.up.railway.app/api/campaigns/${campaignId}/editor-proxy?token=${encodeURIComponent(token)}`;
 }
 
 // ---- Main Component ----
@@ -234,7 +234,8 @@ export default function VisualEditorPage() {
 
   // ---- Iframe src ----
 
-  const iframeSrc = !isNaN(campaignId) ? buildProxyUrl(campaignId) : "";
+  const token = getAuthToken() || "";
+  const iframeSrc = !isNaN(campaignId) && token ? buildProxyUrl(campaignId, token) : "";
 
   // ---- Render ----
 
