@@ -6117,8 +6117,50 @@ export default function CampaignDetailPage() {
             {showSections && (
               <Card>
                 <CardContent className="pt-4 space-y-2">
-                  <h3 className="text-sm font-semibold">Scanned Sections</h3>
-                  <p className="text-xs text-muted-foreground">Toggle sections on/off for testing. Only active sections can have variants.</p>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold">Scanned Sections</h3>
+                      <p className="text-xs text-muted-foreground">Toggle sections on/off for testing. Rescan to find more.</p>
+                    </div>
+                    <Button
+                      variant="outline" size="sm" className="h-7 text-xs gap-1.5"
+                      disabled={rescanLoading}
+                      onClick={async () => {
+                        setRescanLoading(true);
+                        try {
+                          const res = await apiRequest("POST", `/api/campaigns/${campaignId}/rescan`);
+                          const data = await res.json();
+                          if (data.jobId) {
+                            // Poll for completion
+                            const poll = setInterval(async () => {
+                              try {
+                                const sr = await apiRequest("GET", `/api/scan-status/${data.jobId}`);
+                                const status = await sr.json();
+                                if (status.status === "done") {
+                                  clearInterval(poll);
+                                  setRescanLoading(false);
+                                  toast({ title: "Rescan complete", description: `Found ${status.sections?.length || 0} sections.` });
+                                  queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "test-sections"] });
+                                  queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] });
+                                } else if (status.status === "error") {
+                                  clearInterval(poll);
+                                  setRescanLoading(false);
+                                  toast({ title: "Rescan failed", description: status.error || "Unknown error", variant: "destructive" });
+                                }
+                              } catch { /* keep polling */ }
+                            }, 3000);
+                            setTimeout(() => { clearInterval(poll); setRescanLoading(false); }, 120000);
+                          }
+                        } catch (err: any) {
+                          setRescanLoading(false);
+                          toast({ title: "Rescan failed", description: err.message, variant: "destructive" });
+                        }
+                      }}
+                      data-testid="button-rescan-sections"
+                    >
+                      {rescanLoading ? <><Loader2 className="w-3 h-3 animate-spin" /> Scanning...</> : <><RefreshCw className="w-3 h-3" /> Rescan Page</>}
+                    </Button>
+                  </div>
                   {allSections.map((s: any) => (
                     <div key={s.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
                       <div>
