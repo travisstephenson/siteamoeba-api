@@ -3310,8 +3310,8 @@ function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector, v
   const { toast } = useToast();
   const apiBase = getApiBaseUrl();
 
-  // Inline loader format — immune to LiteSpeed Cache, WP Rocket, Autoptimize deferring
-  const scriptTagCode = `<script>(function(){var s=document.createElement('script');s.src='${apiBase}/api/widget/script/${campaignId}';s.async=true;document.head.appendChild(s);})();</script>`;
+  // data-no-optimize="1" prevents LiteSpeed/WP Rocket/Autoptimize from deferring this script
+  const scriptTagCode = `<script data-no-optimize="1" src="${apiBase}/api/widget/script/${campaignId}"></script>`;
 
   // Option 2: full inline code (for users who can't use external script tags)
   const inlineCode = generateEmbedCodeClient(apiBase, campaignId, headlineSelector, subheadlineSelector);

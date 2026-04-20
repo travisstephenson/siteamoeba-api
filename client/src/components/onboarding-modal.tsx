@@ -84,7 +84,7 @@ function PlatformGrid({ items }: { items: { platform: string; instruction: strin
   );
 }
 
-const CAMPAIGN_PIXEL = `<script>(function(){var s=document.createElement('script');s.src='https://api.siteamoeba.com/api/widget/script/YOUR_CAMPAIGN_ID';s.async=true;document.head.appendChild(s);})();</script>`;
+const CAMPAIGN_PIXEL = `<script data-no-optimize="1" src="https://api.siteamoeba.com/api/widget/script/YOUR_CAMPAIGN_ID"></script>`;
 
 const STEPS = [
   {
