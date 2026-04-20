@@ -3310,8 +3310,8 @@ function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector, v
   const { toast } = useToast();
   const apiBase = getApiBaseUrl();
 
-  // Option 1: single-line script src tag
-  const scriptTagCode = `<script src="${apiBase}/api/widget/script/${campaignId}"></script>`;
+  // Inline loader format — immune to LiteSpeed Cache, WP Rocket, Autoptimize deferring
+  const scriptTagCode = `<script>(function(){var s=document.createElement('script');s.src='${apiBase}/api/widget/script/${campaignId}';s.async=true;document.head.appendChild(s);})();</script>`;
 
   // Option 2: full inline code (for users who can't use external script tags)
   const inlineCode = generateEmbedCodeClient(apiBase, campaignId, headlineSelector, subheadlineSelector);
