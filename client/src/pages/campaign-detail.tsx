@@ -5616,6 +5616,16 @@ export default function CampaignDetailPage() {
           <Button
             variant="outline"
             size="sm"
+            onClick={() => navigate(`/campaigns/${campaignId}/visual-editor`)}
+            data-testid="button-visual-editor"
+            className="gap-1.5"
+          >
+            <MousePointerClick className="w-3.5 h-3.5" />
+            Visual Editor
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => setShowRestartDialog(true)}
             data-testid="button-restart-test"
             className="gap-1.5"

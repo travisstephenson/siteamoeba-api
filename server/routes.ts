@@ -1276,6 +1276,186 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json(await storage.getVariantsByCampaign(campaign.id));
   });
 
+  // ============== VISUAL EDITOR PROXY ==============
+
+  app.get("/api/campaigns/:id/editor-proxy", requireAuth, async (req: Request, res: Response) => {
+    const campaign = await storage.getCampaign(paramId(req.params.id));
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+
+    function generateClickSelectBridge(campaignId: number): string {
+      return `<script>
+(function() {
+  'use strict';
+  var _SA_CAMPAIGN_ID = ${campaignId};
+  var _selectedEl = null;
+  var _hoverLabel = null;
+
+  function isTextLeaf(el) {
+    if (!el || !el.tagName) return false;
+    var tag = el.tagName.toUpperCase();
+    var skipTags = ['SCRIPT','STYLE','SVG','IMG','VIDEO','AUDIO','IFRAME','NOSCRIPT','HEAD','META','LINK','INPUT','TEXTAREA','SELECT','BUTTON'];
+    if (skipTags.indexOf(tag) !== -1) return false;
+    var text = (el.innerText || el.textContent || '').trim();
+    if (text.length < 3) return false;
+    var childEls = Array.from(el.children).filter(function(c) {
+      return (c.innerText || c.textContent || '').trim().length > 3;
+    });
+    return childEls.length === 0;
+  }
+
+  function getTreePath(el) {
+    var parts = [];
+    var cur = el;
+    while (cur && cur !== document.body && cur.tagName) {
+      var tag = cur.tagName.toLowerCase();
+      var parent = cur.parentElement;
+      if (parent) {
+        var siblings = Array.from(parent.children).filter(function(c) { return c.tagName === cur.tagName; });
+        if (siblings.length > 1) {
+          var idx = siblings.indexOf(cur) + 1;
+          tag += ':nth-of-type(' + idx + ')';
+        }
+      }
+      parts.unshift(tag);
+      cur = cur.parentElement;
+    }
+    return 'body > ' + parts.join(' > ');
+  }
+
+  function getComputedStyleData(el) {
+    var cs = window.getComputedStyle(el);
+    return {
+      color: cs.color,
+      fontSize: cs.fontSize,
+      fontWeight: cs.fontWeight,
+      fontFamily: cs.fontFamily,
+      lineHeight: cs.lineHeight,
+      letterSpacing: cs.letterSpacing,
+      textTransform: cs.textTransform,
+      fontStyle: cs.fontStyle
+    };
+  }
+
+  function showHoverLabel(el) {
+    removeHoverLabel();
+    _hoverLabel = document.createElement('div');
+    _hoverLabel.id = '_sa_hover_label';
+    _hoverLabel.style.cssText = 'position:fixed;background:#2563eb;color:#fff;font:bold 11px/1 monospace;padding:2px 6px;border-radius:3px;z-index:2147483647;pointer-events:none;';
+    _hoverLabel.textContent = el.tagName.toUpperCase();
+    document.body.appendChild(_hoverLabel);
+
+    function posLabel() {
+      var rect = el.getBoundingClientRect();
+      _hoverLabel.style.top = Math.max(0, rect.top - 20) + 'px';
+      _hoverLabel.style.left = rect.left + 'px';
+    }
+    posLabel();
+  }
+
+  function removeHoverLabel() {
+    var old = document.getElementById('_sa_hover_label');
+    if (old) old.remove();
+    _hoverLabel = null;
+  }
+
+  function clearSelected() {
+    if (_selectedEl) {
+      _selectedEl.style.outline = '';
+      _selectedEl.style.outlineOffset = '';
+      var lbl = document.getElementById('_sa_sel_label');
+      if (lbl) lbl.remove();
+      _selectedEl = null;
+    }
+  }
+
+  function markSelected(el) {
+    clearSelected();
+    _selectedEl = el;
+    el.style.outline = '2px solid #2563eb';
+    el.style.outlineOffset = '2px';
+    var lbl = document.createElement('div');
+    lbl.id = '_sa_sel_label';
+    lbl.style.cssText = 'position:fixed;background:#2563eb;color:#fff;font:bold 11px/1 monospace;padding:2px 6px;border-radius:3px;z-index:2147483647;pointer-events:none;';
+    lbl.textContent = el.tagName.toUpperCase();
+    document.body.appendChild(lbl);
+    var rect = el.getBoundingClientRect();
+    lbl.style.top = Math.max(0, rect.top - 20) + 'px';
+    lbl.style.left = rect.left + 'px';
+  }
+
+  document.addEventListener('mouseover', function(e) {
+    var el = e.target;
+    if (!el || el === _selectedEl) return;
+    if (isTextLeaf(el)) {
+      el.style.outline = '2px dashed #2563eb';
+      el.style.outlineOffset = '2px';
+      showHoverLabel(el);
+    }
+  });
+
+  document.addEventListener('mouseout', function(e) {
+    var el = e.target;
+    if (!el || el === _selectedEl) return;
+    if (el.style && el.style.outline === '2px dashed #2563eb') {
+      el.style.outline = '';
+      el.style.outlineOffset = '';
+    }
+    removeHoverLabel();
+  });
+
+  document.addEventListener('click', function(e) {
+    var el = e.target;
+    if (!isTextLeaf(el)) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    markSelected(el);
+
+    var rect = el.getBoundingClientRect();
+    var data = {
+      tagName: el.tagName.toUpperCase(),
+      textContent: (el.innerText || el.textContent || '').trim(),
+      treePath: getTreePath(el),
+      computedStyles: getComputedStyleData(el),
+      parentInfo: el.parentElement ? getTreePath(el.parentElement) : '',
+      outerHTML: (el.outerHTML || '').substring(0, 200),
+      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
+    };
+
+    window.parent.postMessage({ type: 'SA_ELEMENT_SELECTED', data: data }, '*');
+  }, true);
+
+  console.log('[SiteAmoeba] Visual editor bridge loaded for campaign ' + _SA_CAMPAIGN_ID);
+})();
+<\/script>`;
+    }
+
+    try {
+      const fetchResp = await fetch(campaign.url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; SiteAmoeba/1.0)',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!fetchResp.ok) {
+        return res.status(502).json({ error: `Failed to fetch campaign URL: ${fetchResp.status} ${fetchResp.statusText}` });
+      }
+      const html = await fetchResp.text();
+      const bridgeScript = generateClickSelectBridge(campaign.id);
+      const modified = html.includes('</body>')
+        ? html.replace('</body>', bridgeScript + '</body>')
+        : html + bridgeScript;
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+      res.send(modified);
+    } catch (err: any) {
+      res.status(502).json({ error: "Failed to proxy campaign URL: " + (err.message || String(err)) });
+    }
+  });
+
   app.post("/api/campaigns/:id/variants", requireAuth, async (req: Request, res: Response) => {
     const campaign = await storage.getCampaign(paramId(req.params.id));
     if (!campaign || campaign.userId !== req.userId) {

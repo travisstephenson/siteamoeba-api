@@ -124,6 +124,8 @@ export const variants = pgTable("variants", {
   displayIssue: boolean("display_issue").default(false),
   displayIssueReason: text("display_issue_reason"),
   displayIssueAt: text("display_issue_at"),
+  // Visual editor mutations — JSON describing element targeting and style overrides
+  mutations: text("mutations"),
 });
 
 export const insertVariantSchema = createInsertSchema(variants).omit({
