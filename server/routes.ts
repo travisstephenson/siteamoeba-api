@@ -1473,7 +1473,7 @@ export async function registerRoutes(server: Server, app: Express) {
       const hasActiveTest = parseInt(activeVars.rows[0]?.cnt || "0") >= 2;
       if (hasActiveTest) {
         const recentVisitors = await pool.query(
-          "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen > NOW() - INTERVAL '24 hours'",
+          "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen::timestamptz > NOW() - INTERVAL '24 hours'",
           [campaign.id]
         );
         const isCollectingData = parseInt(recentVisitors.rows[0]?.cnt || "0") > 0;
@@ -1549,7 +1549,7 @@ export async function registerRoutes(server: Server, app: Express) {
         );
         if (parseInt(activeVars.rows[0]?.cnt || "0") >= 2) {
           const recentVisitors = await pool.query(
-            "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen > NOW() - INTERVAL '24 hours'",
+            "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen::timestamptz > NOW() - INTERVAL '24 hours'",
             [campaign.id]
           );
           if (parseInt(recentVisitors.rows[0]?.cnt || "0") > 0) {
@@ -1577,7 +1577,7 @@ export async function registerRoutes(server: Server, app: Express) {
       );
       if (parseInt(activeVars.rows[0]?.cnt || "0") >= 2) {
         const recentVisitors = await pool.query(
-          "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen > NOW() - INTERVAL '24 hours'",
+          "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen::timestamptz > NOW() - INTERVAL '24 hours'",
           [campaign.id]
         );
         if (parseInt(recentVisitors.rows[0]?.cnt || "0") > 0) {
@@ -3199,7 +3199,7 @@ export async function registerRoutes(server: Server, app: Express) {
         );
         if (parseInt(activeVars.rows[0]?.cnt || "0") >= 2) {
           const recentVisitors = await pool.query(
-            "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen > NOW() - INTERVAL '24 hours'",
+            "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen::timestamptz > NOW() - INTERVAL '24 hours'",
             [campaignId]
           );
           if (parseInt(recentVisitors.rows[0]?.cnt || "0") > 0) {
