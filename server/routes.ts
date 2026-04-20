@@ -1568,6 +1568,19 @@ export async function registerRoutes(server: Server, app: Express) {
 
     const variantData: any = { ...parsed.data };
 
+    // Auto-assign testSectionId if missing — find the first active section matching this type
+    if (!variantData.testSectionId) {
+      try {
+        const matchingSections = await pool.query(
+          `SELECT id FROM test_sections WHERE campaign_id = $1 AND category = $2 AND is_active = true ORDER BY id LIMIT 1`,
+          [campaign.id, variantData.type || 'headline']
+        );
+        if (matchingSections.rows.length > 0) {
+          variantData.testSectionId = matchingSections.rows[0].id;
+        }
+      } catch {}
+    }
+
     // Sanitize variant text (preserve allowed HTML for colored/styled headlines)
     if (typeof variantData.text === "string") {
       variantData.text = sanitizeInput(variantData.text);
