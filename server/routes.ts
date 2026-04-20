@@ -2954,10 +2954,11 @@ export async function registerRoutes(server: Server, app: Express) {
         const bodyHtml = headEnd > 0 ? rawHtml.slice(headEnd + 7) : rawHtml;
         const titleMatch = rawHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
         const titleText = titleMatch ? `Page title: ${titleMatch[1].trim()}\n\n` : "";
-        const pageText = (titleText + extractPageText(bodyHtml)).slice(0, 40000);
+        // Cap at 12K chars — large pages (GHL) can have 400+ headings which overwhelms the LLM
+        const pageText = (titleText + extractPageText(bodyHtml)).slice(0, 12000);
 
-        // Call the LLM to re-scan using the provider-agnostic callLLM
-        const scanPrompt = `You are a CRO (Conversion Rate Optimization) expert. Analyze this HTML page and identify testable sections. For each section, provide: id (kebab-case), label, purpose, selector (CSS), category (headline/subheadline/cta/body_copy/social_proof/guarantee/faq/other), currentText (the current text content), testPriority (1-10), testMethod (text_swap or html_swap). Return JSON array only.`;
+        // Focused rescan prompt — only identify the top 8-10 most important testable sections
+        const scanPrompt = `You are a CRO expert. Analyze this page and identify the 8-10 MOST IMPORTANT testable text sections (headline, subheadline, CTA, key body copy). Focus on above-the-fold and high-impact sections only. For each, provide: id (kebab-case), label, purpose, selector (CSS if inferable, otherwise empty string), category (headline/subheadline/cta/body_copy/social_proof/guarantee/faq/other), currentText (exact text), testPriority (1-10), testMethod (text_swap). Return a JSON array only, no markdown.`;
 
         const raw = await callLLM(llmConfigResolved.config, [
           { role: "system", content: scanPrompt },
