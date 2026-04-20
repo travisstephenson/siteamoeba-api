@@ -3408,6 +3408,28 @@ export async function registerRoutes(server: Server, app: Express) {
       isControl: true,
     } as any);
 
+    // Update test_sections.current_text to match the winning variant
+    // This makes the "original text from scan" reflect the new baseline
+    // and prevents false mismatch detection
+    try {
+      const winnerPlainText = winningVariant.text.replace(/<[^>]*>/g, '').trim();
+      if (winnerPlainText && winningVariant.testSectionId) {
+        await pool.query(
+          `UPDATE test_sections SET current_text = $1, mismatch_detected = false WHERE id = $2`,
+          [winnerPlainText, winningVariant.testSectionId]
+        );
+      } else {
+        // Fallback: update any section matching this type for this campaign
+        await pool.query(
+          `UPDATE test_sections SET current_text = $1, mismatch_detected = false
+           WHERE campaign_id = $2 AND category = $3`,
+          [winnerPlainText, campaign.id, sectionType]
+        );
+      }
+    } catch (e) {
+      console.warn("[declare-winner] Failed to update test_sections.current_text:", e);
+    }
+
     // === TEST LESSON: Auto-generate and store a lesson from this result ===
     // Only generate a lesson if there's a meaningful comparison (winner vs loser stats available)
     let lesson: any = null;
@@ -3418,7 +3440,9 @@ export async function registerRoutes(server: Server, app: Express) {
 
         const winnerCvr = winnerStats.conversionRate;
         const loserCvr = controlStats.conversionRate;
-        const liftPct = loserCvr > 0 ? ((winnerCvr - loserCvr) / loserCvr) * 100 : 0;
+        const liftPct = loserCvr > 0
+          ? ((winnerCvr - loserCvr) / loserCvr) * 100
+          : (winnerCvr > 0 ? 100 : 0); // If loser had 0% and winner has conversions, that's a 100% lift
         const sampleSize = winnerStats.impressions + controlStats.impressions;
 
         // Parse persuasion tags
@@ -3540,7 +3564,9 @@ export async function registerRoutes(server: Server, app: Express) {
     // Build test result summary for celebration UI
     const winnerCvr = winnerStats?.conversionRate ?? 0;
     const controlCvr = controlStats?.conversionRate ?? 0;
-    const liftPctFinal = controlCvr > 0 ? ((winnerCvr - controlCvr) / controlCvr) * 100 : 0;
+    const liftPctFinal = controlCvr > 0
+      ? ((winnerCvr - controlCvr) / controlCvr) * 100
+      : (winnerCvr > 0 ? 100 : 0);
     const totalSample = (winnerStats?.impressions ?? 0) + (controlStats?.impressions ?? 0);
 
     res.json({
@@ -7194,7 +7220,7 @@ ${observationText}`;
         `SELECT tl.*, c.name as campaign_name, c.url as page_url
          FROM test_lessons tl
          JOIN campaigns c ON c.id = tl.campaign_id
-         WHERE tl.campaign_id = ANY($1) AND tl.lift_percent > 0
+         WHERE tl.campaign_id = ANY($1)
          ORDER BY tl.created_at DESC`,
         [campaignIds]
       );
