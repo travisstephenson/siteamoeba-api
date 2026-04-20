@@ -163,45 +163,26 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       return;
     }
 
-    // === LEAF-NODE TEXT REPLACEMENT ===
-    // PRINCIPLE: Only change text. Never change font weight, color, size, or family.
-    // Find the deepest text-containing element and replace ONLY its text.
-    // This preserves all parent/sibling element structure and CSS-based styling.
+    // === FULL ELEMENT TEXT REPLACEMENT ===
+    // PRINCIPLE: Replace ALL text in the matched element. Never partially inject.
+    // For CTAs only: drill into nested text child (GHL buttons are deeply nested).
+    // For everything else: set textContent on the matched element directly.
+    // This replaces ALL child spans/text nodes cleanly with the new text.
     //
-    // For a structure like:
-    //   <h2><span style="color:gold; font-family:Playfair">Christian Mom Reveals:</span></h2>
-    // We change the text inside the <span>, preserving the span and all its styles.
+    // We do NOT drill into child spans for non-CTA elements because:
+    // - GHL pages split headings into multiple spans for color/styling
+    // - Drilling into one span replaces only a fragment, leaving siblings intact
+    // - The variant text is meant to replace the ENTIRE section, not a fragment
 
     var target = el;
 
-    // For CTAs, drill into the nested text child
+    // For CTAs only, drill into the nested text child
     if (category === "cta") {
       target = findTextTarget(el);
-    } else {
-      // Find the deepest single-text child element.
-      // If the element has ONE child element that contains all the text, drill into it.
-      // This handles: <h1><span class="styled">Text</span></h1>
-      // But NOT: <div><span>A</span><span>B</span></div> (multiple children = stop at div)
-      var depth = 0;
-      while (depth < 5) {
-        var childEls = [];
-        for (var ci = 0; ci < target.children.length; ci++) {
-          var ch = target.children[ci];
-          var tag = (ch.tagName || "").toLowerCase();
-          if (tag === "script" || tag === "style" || tag === "svg" || tag === "img" || tag === "br") continue;
-          if ((ch.textContent || "").trim().length > 0) childEls.push(ch);
-        }
-        // If there's exactly ONE text-bearing child element, drill into it
-        if (childEls.length === 1) {
-          target = childEls[0];
-          depth++;
-        } else {
-          break; // Multiple children or no children — this is our target
-        }
-      }
     }
 
-    // Replace ONLY the text content of the target leaf
+    // Replace the full text content — this destroys all child elements
+    // but that's correct because the variant text replaces the entire section
     target.textContent = text;
 
     // Apply explicit style overrides ONLY if specified (from visual editor)
@@ -313,7 +294,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       var anyTokens = (fingerprints[0] || "").trim().toLowerCase().split(/ +/)
         .filter(function(w) { return w.length > 3; }).slice(0, 3);
       if (anyTokens.length > 0) {
-        var allEls = document.querySelectorAll("h1,h2,h3,h4,p,button,a,span,div");
+        var allEls = document.querySelectorAll("h1,h2,h3,h4,h5,h6,p,button,a,li,blockquote,figcaption");
         for (var ai = 0; ai < allEls.length; ai++) {
           if (allEls[ai].children.length > 5) continue; // skip complex containers
           var t = (allEls[ai].textContent || "").trim().toLowerCase();
