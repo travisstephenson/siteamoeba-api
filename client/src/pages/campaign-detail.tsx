@@ -1296,6 +1296,7 @@ function AIVariantGenerator({
           <ManualAddVariantForm
             campaignId={campaignId}
             type={type}
+            sectionId={sectionId}
             onAdded={() => { setShowManual(false); onAdded(); }}
             onCancel={() => setShowManual(false)}
           />
@@ -1317,11 +1318,13 @@ type AddVariantValues = z.infer<typeof addVariantSchema>;
 function ManualAddVariantForm({
   campaignId,
   type,
+  sectionId,
   onAdded,
   onCancel,
 }: {
   campaignId: number;
   type: string;
+  sectionId?: number | null;
   onAdded: () => void;
   onCancel?: () => void;
 }) {
@@ -1340,6 +1343,7 @@ function ManualAddVariantForm({
         isControl: false,
         isActive: true,
         campaignId,
+        testSectionId: sectionId || null,
       });
       return res.json();
     },
