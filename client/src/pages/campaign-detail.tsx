@@ -2450,6 +2450,7 @@ interface SectionDropoffData {
 }
 
 function SectionDropoffPanel({ campaignId }: { campaignId: number }) {
+  const [expanded, setExpanded] = useState(false);
   const { data, isLoading } = useQuery<SectionDropoffData>({
     queryKey: ["/api/campaigns", campaignId, "section-dropoff"],
     queryFn: async () => {
@@ -2482,19 +2483,24 @@ function SectionDropoffPanel({ campaignId }: { campaignId: number }) {
   return (
     <Card data-testid="card-section-dropoff">
       <CardContent className="pt-5 pb-5 space-y-4">
-        {/* Header */}
-        <div className="flex items-center gap-2.5">
+        {/* Header — clickable to expand/collapse */}
+        <div
+          className="flex items-center gap-2.5 cursor-pointer select-none"
+          onClick={() => setExpanded(v => !v)}
+        >
           <div className="p-2 rounded-lg" style={{ background: "hsl(220 80% 55% / 0.1)" }}>
             <ArrowDown className="w-4 h-4" style={{ color: "hsl(220 80% 55%)" }} />
           </div>
-          <div>
+          <div className="flex-1">
             <h3 className="text-sm font-semibold">Section Drop-off</h3>
             <p className="text-xs text-muted-foreground">
               Where visitors stop scrolling ({data.totalVisitors?.toLocaleString()} sessions)
             </p>
           </div>
+          <ChevronRight className={`w-4 h-4 text-muted-foreground transition-transform ${expanded ? "rotate-90" : ""}`} />
         </div>
 
+        {expanded && <>
         {/* Recommendation callout */}
         {recommendation && (
           <div
@@ -2592,6 +2598,7 @@ function SectionDropoffPanel({ campaignId }: { campaignId: number }) {
             Converters reached
           </div>
         </div>
+        </>}
       </CardContent>
     </Card>
   );
