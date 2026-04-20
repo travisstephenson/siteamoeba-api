@@ -157,86 +157,63 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   //     Setting textContent on the element replaces ALL child nodes cleanly.
   //     Do NOT drill into child spans — that would put the new text inside a colored span
   //     (e.g. the orange "Offer-Ad Loop" span) instead of replacing the whole headline.
-  function applyTextToElement(el, text, testMethod, category) {
+  function applyTextToElement(el, text, testMethod, category, styleOverrides) {
     if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
       el.innerHTML = text;
       return;
     }
+
+    // === LEAF-NODE TEXT REPLACEMENT ===
+    // PRINCIPLE: Only change text. Never change font weight, color, size, or family.
+    // Find the deepest text-containing element and replace ONLY its text.
+    // This preserves all parent/sibling element structure and CSS-based styling.
+    //
+    // For a structure like:
+    //   <h2><span style="color:gold; font-family:Playfair">Christian Mom Reveals:</span></h2>
+    // We change the text inside the <span>, preserving the span and all its styles.
+
+    var target = el;
+
+    // For CTAs, drill into the nested text child
     if (category === "cta") {
-      // Buttons have deeply nested text in GHL — find the actual text child
-      var target = findTextTarget(el);
-      target.textContent = text;
-      return;
-    }
-    // === PRESERVE ALL VISUAL STYLES ===
-    // Page builders (GHL, Wix, WordPress Elementor, ClickFunnels) put text inside
-    // <span style="color: white; font-family: ..."> or similar styled children.
-    // When we set textContent, ALL child nodes (spans, strongs) are destroyed,
-    // and the text falls back to whatever CSS applies to the bare parent element.
-    // On GHL pages, the parent H1 might get its font from CSS classes, but font-size,
-    // color, font-family are often on the INNER span — which we're about to destroy.
-    // Solution: capture ALL key visual properties BEFORE the swap from both the element
-    // itself AND its styled children, then explicitly re-apply them after replacement.
-    var savedStyles = {};
-    var STYLE_PROPS = ["color", "fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing", "textTransform", "textAlign"];
-    try {
-      var elCS = window.getComputedStyle(el);
-
-      // For COLOR: use the color of the FIRST text content in the element.
-      // The first word is almost always the primary/dominant color.
-      // Accent-colored spans ("<span style='color:gold'>Seven Jobs</span>") come later
-      // and should not override the primary color when we replace the full text.
-      var dominantColor = elCS.color || "";
-      // Walk the child nodes to find what color the first text renders in
-      var firstTextNode = null;
-      var walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
-      while (walker.nextNode()) {
-        if ((walker.currentNode.textContent || "").trim().length > 0) {
-          firstTextNode = walker.currentNode;
-          break;
+      target = findTextTarget(el);
+    } else {
+      // Find the deepest single-text child element.
+      // If the element has ONE child element that contains all the text, drill into it.
+      // This handles: <h1><span class="styled">Text</span></h1>
+      // But NOT: <div><span>A</span><span>B</span></div> (multiple children = stop at div)
+      var depth = 0;
+      while (depth < 5) {
+        var childEls = [];
+        for (var ci = 0; ci < target.children.length; ci++) {
+          var ch = target.children[ci];
+          var tag = (ch.tagName || "").toLowerCase();
+          if (tag === "script" || tag === "style" || tag === "svg" || tag === "img" || tag === "br") continue;
+          if ((ch.textContent || "").trim().length > 0) childEls.push(ch);
         }
-      }
-      if (firstTextNode && firstTextNode.parentElement) {
-        dominantColor = window.getComputedStyle(firstTextNode.parentElement).color || dominantColor;
-      }
-
-      // For OTHER properties: inner styled child is the best source for font properties
-      // (GHL/Elementor often put font-family on spans, not on the heading element)
-      var styledChild = el.querySelector("span[style], strong[style], em[style], b[style], span, strong, em, b, i") || el;
-      var childCS = (styledChild !== el) ? window.getComputedStyle(styledChild) : elCS;
-
-      for (var p = 0; p < STYLE_PROPS.length; p++) {
-        var prop = STYLE_PROPS[p];
-        if (prop === "color") {
-          savedStyles[prop] = dominantColor;
+        // If there's exactly ONE text-bearing child element, drill into it
+        if (childEls.length === 1) {
+          target = childEls[0];
+          depth++;
         } else {
-          // For non-color props: prefer child value (font-size, font-family often on inner spans)
-          var childVal = childCS[prop] || "";
-          var elVal = elCS[prop] || "";
-          savedStyles[prop] = childVal || elVal;
+          break; // Multiple children or no children — this is our target
         }
       }
-    } catch(e) {}
+    }
 
-    // Replace the entire element's content
-    el.textContent = text;
+    // Replace ONLY the text content of the target leaf
+    target.textContent = text;
 
-    // Re-apply all saved styles to the element itself
-    try {
-      var afterCS = window.getComputedStyle(el);
-      for (var r = 0; r < STYLE_PROPS.length; r++) {
-        var rProp = STYLE_PROPS[r];
-        var saved = savedStyles[rProp];
-        if (!saved) continue;
-        // Only apply if the value actually changed after the textContent replacement
-        // (avoids unnecessary inline styles that could conflict with responsive CSS)
-        var afterVal = afterCS[rProp] || "";
-        if (saved !== afterVal) {
-          var cssProp = rProp.replace(/([A-Z])/g, '-$1').toLowerCase();
-          el.style.setProperty(cssProp, saved);
+    // Apply explicit style overrides ONLY if specified (from visual editor)
+    // This is the ONLY way styles get changed — never automatic.
+    if (styleOverrides && typeof styleOverrides === "object") {
+      for (var sp in styleOverrides) {
+        if (styleOverrides.hasOwnProperty(sp) && styleOverrides[sp]) {
+          var cssPropName = sp.replace(/([A-Z])/g, '-$1').toLowerCase();
+          target.style.setProperty(cssPropName, styleOverrides[sp]);
         }
       }
-    } catch(e) {}
+    }
   }
 
   // === HELPER: Apply variant text to a section ===
