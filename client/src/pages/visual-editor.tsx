@@ -19,7 +19,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -104,6 +103,9 @@ export default function VisualEditorPage() {
   const [previewVariantId, setPreviewVariantId] = useState<number | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState<string[]>([]);
+  const [toolbarColor, setToolbarColor] = useState("#000000");
+  const [mobileFontSize, setMobileFontSize] = useState("");
+  const editorRef = useRef<HTMLDivElement>(null);
   const [styleOverrides, setStyleOverrides] = useState<StyleOverrides>({
     color: "",
     fontWeight: "",
@@ -140,12 +142,51 @@ export default function VisualEditorPage() {
 
   // ---- postMessage listener ----
 
+  // Only update editor innerHTML when a new element is selected (not on every edit)
+  useEffect(() => {
+    if (editorRef.current && selectedElement) {
+      editorRef.current.innerHTML = selectedElement.textContent;
+    }
+  }, [selectedElement]);
+
+  // Rich text editor helpers
+  function execFormat(command: string, value?: string) {
+    document.execCommand(command, false, value);
+    if (editorRef.current) {
+      setVariantText(editorRef.current.innerHTML);
+    }
+  }
+
+  function setSelectionFontSize(size: string) {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (range.collapsed) return;
+    try {
+      const span = document.createElement("span");
+      span.style.fontSize = size;
+      range.surroundContents(span);
+    } catch {
+      // surroundContents fails on partial selections across multiple nodes — use insertHTML fallback
+      document.execCommand("insertHTML", false, `<span style="font-size:${size}">${sel.toString()}</span>`);
+    }
+    if (editorRef.current) setVariantText(editorRef.current.innerHTML);
+  }
+
+  function selectAiSuggestion(text: string) {
+    setVariantText(text);
+    if (editorRef.current) {
+      editorRef.current.innerHTML = text;
+    }
+  }
+
   const handleMessage = useCallback(
     (event: MessageEvent) => {
       if (!event.data || event.data.type !== "SA_ELEMENT_SELECTED") return;
       const el: ElementIdentity = event.data.data;
       setSelectedElement(el);
       setVariantText(el.textContent);
+      setMobileFontSize("");
       setAiSuggestions([]);
       setStyleOverrides({
         color: el.computedStyles.color || "",
@@ -235,6 +276,7 @@ export default function VisualEditorPage() {
         styleOverrides: Object.fromEntries(
           Object.entries(styleOverrides).filter(([, v]) => v !== "" && v !== "none" && v !== "normal")
         ),
+        mobileFontSize: mobileFontSize || null,
       };
       const res = await apiRequest("POST", `/api/campaigns/${campaignId}/variants`, {
         type: "headline",
@@ -264,6 +306,7 @@ export default function VisualEditorPage() {
   function handleCancel() {
     setSelectedElement(null);
     setVariantText("");
+    setMobileFontSize("");
     setAiSuggestions([]);
     setStyleOverrides({ color: "", fontWeight: "", fontSize: "", lineHeight: "", fontStyle: "normal", textTransform: "none", letterSpacing: "" });
   }
@@ -429,7 +472,7 @@ export default function VisualEditorPage() {
                         AI Suggestions — click to use
                       </Label>
                       {aiSuggestions.map((s, i) => (
-                        <button key={i} onClick={() => setVariantText(s)}
+                        <button key={i} onClick={() => selectAiSuggestion(s)}
                           className={`w-full text-left rounded-md border px-3 py-2 text-xs leading-relaxed transition-colors ${
                             variantText === s ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
                           }`}>
@@ -439,13 +482,81 @@ export default function VisualEditorPage() {
                     </div>
                   )}
 
-                  {/* Variant text */}
+                  {/* Variant text — rich text editor */}
                   <div className="space-y-1.5">
                     <Label className="text-xs font-semibold text-foreground uppercase tracking-wide">
                       Variant Text
                     </Label>
-                    <Textarea value={variantText} onChange={(e) => setVariantText(e.target.value)}
-                      placeholder="Enter your variant text…" className="text-sm resize-none min-h-[80px]" />
+                    {/* Toolbar */}
+                    <div className="flex items-center gap-1 p-1 rounded-md border border-border bg-muted/30">
+                      <button
+                        onMouseDown={(e) => { e.preventDefault(); execFormat("bold"); }}
+                        className="h-7 w-7 rounded flex items-center justify-center hover:bg-muted text-xs font-bold"
+                        title="Bold"
+                      >B</button>
+                      <button
+                        onMouseDown={(e) => { e.preventDefault(); execFormat("italic"); }}
+                        className="h-7 w-7 rounded flex items-center justify-center hover:bg-muted text-xs italic"
+                        title="Italic"
+                      >I</button>
+                      <button
+                        onMouseDown={(e) => { e.preventDefault(); execFormat("underline"); }}
+                        className="h-7 w-7 rounded flex items-center justify-center hover:bg-muted text-xs underline"
+                        title="Underline"
+                      >U</button>
+                      <div className="w-px h-5 bg-border mx-0.5" />
+                      <div className="relative">
+                        <input
+                          type="color"
+                          value={toolbarColor}
+                          onChange={(e) => {
+                            setToolbarColor(e.target.value);
+                            execFormat("foreColor", e.target.value);
+                          }}
+                          className="w-7 h-7 rounded border border-border cursor-pointer bg-transparent"
+                          title="Text Color"
+                        />
+                      </div>
+                      <div className="w-px h-5 bg-border mx-0.5" />
+                      <select
+                        onChange={(e) => {
+                          if (e.target.value) setSelectionFontSize(e.target.value);
+                          e.target.value = "";
+                        }}
+                        className="h-7 text-xs rounded border border-border bg-background px-1"
+                        title="Font Size"
+                        defaultValue=""
+                      >
+                        <option value="" disabled>Size</option>
+                        {["14px","16px","18px","20px","24px","28px","32px","36px","40px","48px"].map(s => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {/* Contenteditable editor */}
+                    <div
+                      ref={editorRef}
+                      contentEditable
+                      suppressContentEditableWarning
+                      className="min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring"
+                      onInput={() => {
+                        if (editorRef.current) setVariantText(editorRef.current.innerHTML);
+                      }}
+                    />
+                  </div>
+
+                  {/* Mobile Font Size */}
+                  <div className="flex items-center gap-3">
+                    <Label className="text-xs w-28 shrink-0">Mobile Font Size</Label>
+                    <div className="flex items-center gap-1.5 flex-1">
+                      <Input
+                        value={mobileFontSize}
+                        onChange={(e) => setMobileFontSize(e.target.value)}
+                        placeholder="e.g. 24"
+                        className="text-xs h-8"
+                      />
+                      <span className="text-xs text-muted-foreground shrink-0">px</span>
+                    </div>
                   </div>
 
                   <Separator />

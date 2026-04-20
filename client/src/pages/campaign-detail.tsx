@@ -5467,6 +5467,7 @@ export default function CampaignDetailPage() {
   const [showAnomalyPanel, setShowAnomalyPanel] = useState(false);
   const [showNoAIModal, setShowNoAIModal] = useState(false);
   const [rescanLoading, setRescanLoading] = useState(false);
+  const [showSections, setShowSections] = useState(false);
   const userPlan = user?.plan ?? "free";
   const canRunTests = userPlan !== "free" || !!user?.llmProvider;
   const { toast } = useToast();
@@ -5517,6 +5518,26 @@ export default function CampaignDetailPage() {
       return res.json();
     },
     enabled: isAuthenticated && !isNaN(campaignId),
+  });
+
+  const { data: allSections = [] } = useQuery({
+    queryKey: ["/api/campaigns", campaignId, "test-sections"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/campaigns/${campaignId}/test-sections`);
+      return res.json();
+    },
+    enabled: isAuthenticated && !isNaN(campaignId),
+  });
+
+  const toggleSection = useMutation({
+    mutationFn: async (sectionId: number) => {
+      const res = await apiRequest("PATCH", `/api/test-sections/${sectionId}/toggle`);
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "test-sections"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "sections"] });
+    },
   });
 
   const handleRefresh = () => {
@@ -6079,6 +6100,43 @@ export default function CampaignDetailPage() {
         <div ref={visitorFeedRef}>
           <VisitorFeedPanel campaignId={campaignId} campaignType={stats?.campaignType} forceExpand={scrollToFeed} />
         </div>
+
+        {/* Manage Sections — toggle active/inactive */}
+        {testSections.length > 0 && (
+          <div className="space-y-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs gap-1.5"
+              onClick={() => setShowSections((v) => !v)}
+              data-testid="button-manage-sections"
+            >
+              <ToggleLeft className="w-3.5 h-3.5" />
+              {showSections ? "Hide Sections" : "Manage Sections"}
+            </Button>
+            {showSections && (
+              <Card>
+                <CardContent className="pt-4 space-y-2">
+                  <h3 className="text-sm font-semibold">Scanned Sections</h3>
+                  <p className="text-xs text-muted-foreground">Toggle sections on/off for testing. Only active sections can have variants.</p>
+                  {allSections.map((s: any) => (
+                    <div key={s.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
+                      <div>
+                        <p className="text-sm font-medium">{s.label}</p>
+                        <p className="text-xs text-muted-foreground">{s.category}</p>
+                      </div>
+                      <Switch
+                        checked={s.isActive ?? s.is_active ?? false}
+                        onCheckedChange={() => toggleSection.mutate(s.id)}
+                        data-testid={`switch-section-${s.id}`}
+                      />
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        )}
 
         {/* Variant sections — dynamic (scanner campaigns) or legacy (old campaigns) */}
         {testSections.length > 0 ? (

@@ -3297,6 +3297,30 @@ export async function registerRoutes(server: Server, app: Express) {
     res.status(201).json(section);
   });
 
+  // GET /api/campaigns/:id/test-sections — list all test sections (including inactive)
+  app.get("/api/campaigns/:id/test-sections", requireAuth, async (req: Request, res: Response) => {
+    const campaign = await storage.getCampaign(paramId(req.params.id));
+    if (!campaign || campaign.userId !== req.userId) return res.status(404).json({ error: "Not found" });
+    const sections = await storage.getTestSectionsByCampaign(campaign.id);
+    res.json(sections);
+  });
+
+  // PATCH /api/test-sections/:id/toggle — toggle a test section active/inactive
+  app.patch("/api/test-sections/:id/toggle", requireAuth, async (req: Request, res: Response) => {
+    const sectionId = paramId(req.params.id);
+    const section = await pool.query("SELECT * FROM test_sections WHERE id = $1", [sectionId]);
+    if (section.rows.length === 0) return res.status(404).json({ error: "Section not found" });
+
+    const s = section.rows[0];
+    const campaign = await storage.getCampaign(s.campaign_id);
+    if (!campaign || campaign.userId !== req.userId) return res.status(404).json({ error: "Not found" });
+
+    const newActive = !s.is_active;
+    await pool.query("UPDATE test_sections SET is_active = $1 WHERE id = $2", [newActive, sectionId]);
+
+    res.json({ id: sectionId, isActive: newActive });
+  });
+
   // POST /api/campaigns/:id/rescan — re-scan the page and update test sections
   // Used when a user makes changes to their page and needs to refresh the scan data.
   // Reuses the scan-page job system but also updates existing sections with new text/selectors.
