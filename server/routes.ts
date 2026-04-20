@@ -2949,24 +2949,30 @@ export async function registerRoutes(server: Server, app: Express) {
         clearTimeout(fetchTimeout);
         rawHtml = await fetchResponse.text();
 
-        // Extract structured text (same as initial scan) — strips scripts/styles/tags
+        // Use EXACT same extraction + prompt as initial scan
         const headEnd = rawHtml.toLowerCase().indexOf("</head>");
         const bodyHtml = headEnd > 0 ? rawHtml.slice(headEnd + 7) : rawHtml;
         const titleMatch = rawHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
         const titleText = titleMatch ? `Page title: ${titleMatch[1].trim()}\n\n` : "";
-        // Cap at 12K chars — large pages (GHL) can have 400+ headings which overwhelms the LLM
-        const pageText = (titleText + extractPageText(bodyHtml)).slice(0, 12000);
+        const cleaned = (titleText + extractPageText(bodyHtml)).slice(0, 40000);
 
-        // Focused rescan prompt — only identify the top 8-10 most important testable sections
-        const scanPrompt = `You are a CRO expert. Analyze this page and identify the 8-10 MOST IMPORTANT testable text sections (headline, subheadline, CTA, key body copy). Focus on above-the-fold and high-impact sections only. For each, provide: id (kebab-case), label, purpose, selector (CSS if inferable, otherwise empty string), category (headline/subheadline/cta/body_copy/social_proof/guarantee/faq/other), currentText (exact text), testPriority (1-10), testMethod (text_swap). Return a JSON array only, no markdown.`;
+        const messages = buildPageScanPrompt(campaign.url, cleaned);
+        const rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 8000 });
 
-        const raw = await callLLM(llmConfigResolved.config, [
-          { role: "system", content: scanPrompt },
-          { role: "user", content: `URL: ${campaign.url}\n\nPage content:\n${pageText}` },
-        ]);
-
-        const jsonMatch = raw.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0];
-        const newSections = jsonMatch ? JSON.parse(jsonMatch) : [];
+        // Same JSON parsing as initial scan
+        let newSections: any[] = [];
+        try {
+          const firstBrace = rawResponse.indexOf("{");
+          if (firstBrace === -1) throw new Error("No JSON");
+          const lastBrace = rawResponse.lastIndexOf("}");
+          const jsonStr = rawResponse.substring(firstBrace, lastBrace + 1);
+          const parsed = JSON.parse(jsonStr);
+          newSections = parsed.sections || parsed.testSections || [];
+        } catch {
+          // Fallback: try array extraction
+          const jsonMatch = rawResponse.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0];
+          newSections = jsonMatch ? JSON.parse(jsonMatch) : [];
+        }
 
         if (newSections.length === 0) {
           scanJobs.set(jobId, { status: "error", error: "Scan found no sections", createdAt: Date.now() });
