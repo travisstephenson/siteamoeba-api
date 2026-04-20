@@ -1306,17 +1306,46 @@ export async function registerRoutes(server: Server, app: Express) {
   var _selectedEl = null;
   var _hoverLabel = null;
 
-  function isTextLeaf(el) {
+  var SKIP_TAGS = ['SCRIPT','STYLE','SVG','IMG','VIDEO','AUDIO','IFRAME','NOSCRIPT','HEAD','META','LINK','INPUT','TEXTAREA','SELECT'];
+  var INLINE_TAGS = ['SPAN','STRONG','EM','B','I','A','U','MARK','SUB','SUP','SMALL','S','DEL','INS','ABBR','FONT'];
+  var BLOCK_TEXT_TAGS = ['H1','H2','H3','H4','H5','H6','P','LI','BLOCKQUOTE','FIGCAPTION','LABEL','TD','TH','CAPTION','DT','DD','BUTTON'];
+
+  // Is this element a meaningful text container?
+  // True if: has text AND (no children, OR all children are inline styling wrappers)
+  function isSelectableText(el) {
     if (!el || !el.tagName) return false;
     var tag = el.tagName.toUpperCase();
-    var skipTags = ['SCRIPT','STYLE','SVG','IMG','VIDEO','AUDIO','IFRAME','NOSCRIPT','HEAD','META','LINK','INPUT','TEXTAREA','SELECT','BUTTON'];
-    if (skipTags.indexOf(tag) !== -1) return false;
+    if (SKIP_TAGS.indexOf(tag) !== -1) return false;
     var text = (el.innerText || el.textContent || '').trim();
     if (text.length < 3) return false;
-    var childEls = Array.from(el.children).filter(function(c) {
-      return (c.innerText || c.textContent || '').trim().length > 3;
-    });
-    return childEls.length === 0;
+    // If no child elements, it's a simple text node — selectable
+    if (el.children.length === 0) return true;
+    // If all children are inline tags (span, strong, em, etc.), this is a text block with styled fragments
+    var allInline = true;
+    for (var i = 0; i < el.children.length; i++) {
+      var childTag = el.children[i].tagName.toUpperCase();
+      if (INLINE_TAGS.indexOf(childTag) === -1 && childTag !== 'BR') {
+        allInline = false;
+        break;
+      }
+    }
+    return allInline;
+  }
+
+  // Walk UP from a clicked element to find the best text container
+  // e.g., clicking a <span> inside an <h1> should select the <h1>
+  function findBestContainer(el) {
+    var cur = el;
+    var best = null;
+    var depth = 0;
+    while (cur && cur !== document.body && depth < 8) {
+      if (isSelectableText(cur)) best = cur;
+      // Stop walking up at block-level text containers (H1, P, etc.)
+      if (best && BLOCK_TEXT_TAGS.indexOf(cur.tagName.toUpperCase()) !== -1) return best;
+      cur = cur.parentElement;
+      depth++;
+    }
+    return best;
   }
 
   function getTreePath(el) {
@@ -1399,29 +1428,34 @@ export async function registerRoutes(server: Server, app: Express) {
     lbl.style.left = rect.left + 'px';
   }
 
+  var _lastHovered = null;
   document.addEventListener('mouseover', function(e) {
-    var el = e.target;
-    if (!el || el === _selectedEl) return;
-    if (isTextLeaf(el)) {
-      el.style.outline = '2px dashed #2563eb';
-      el.style.outlineOffset = '2px';
-      showHoverLabel(el);
+    var el = findBestContainer(e.target);
+    if (!el || el === _selectedEl || el === _lastHovered) return;
+    if (_lastHovered && _lastHovered !== _selectedEl) {
+      _lastHovered.style.outline = '';
+      _lastHovered.style.outlineOffset = '';
     }
+    _lastHovered = el;
+    el.style.outline = '2px dashed #2563eb';
+    el.style.outlineOffset = '2px';
+    showHoverLabel(el);
   });
 
   document.addEventListener('mouseout', function(e) {
-    var el = e.target;
-    if (!el || el === _selectedEl) return;
-    if (el.style && el.style.outline === '2px dashed #2563eb') {
+    var el = findBestContainer(e.target);
+    if (!el) return;
+    if (el === _lastHovered && el !== _selectedEl) {
       el.style.outline = '';
       el.style.outlineOffset = '';
+      _lastHovered = null;
     }
     removeHoverLabel();
   });
 
   document.addEventListener('click', function(e) {
-    var el = e.target;
-    if (!isTextLeaf(el)) return;
+    var el = findBestContainer(e.target);
+    if (!el) return;
     e.preventDefault();
     e.stopPropagation();
 
