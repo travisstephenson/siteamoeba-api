@@ -3446,6 +3446,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
     // Fetch the live page
     let pageText = "";
+    let rawPageHtml = "";
     let fetchOk = false;
     try {
       const ctrl = new AbortController();
@@ -3456,9 +3457,9 @@ export async function registerRoutes(server: Server, app: Express) {
       });
       clearTimeout(t);
       if (resp.ok) {
-        const rawHtml = await resp.text();
-        const headEnd = rawHtml.toLowerCase().indexOf("</head>");
-        const bodyHtml = headEnd > 0 ? rawHtml.slice(headEnd + 7) : rawHtml;
+        rawPageHtml = await resp.text();
+        const headEnd = rawPageHtml.toLowerCase().indexOf("</head>");
+        const bodyHtml = headEnd > 0 ? rawPageHtml.slice(headEnd + 7) : rawPageHtml;
         pageText = extractPageText(bodyHtml);
         fetchOk = true;
       }
@@ -3485,11 +3486,21 @@ export async function registerRoutes(server: Server, app: Express) {
         checks.push({ name: "Element found", status: "warning", detail: "No text fingerprint stored for this section. Re-scan the page to capture current content." });
       }
 
-      // Check 2: Pixel is installed
-      if (pageText.toLowerCase().includes("siteamoeba") || pageText.toLowerCase().includes("api.siteamoeba.com")) {
+      // Check 2: Pixel is installed (check RAW HTML, not extracted text — script tags are stripped during extraction)
+      const htmlLower = rawPageHtml.toLowerCase();
+      if (htmlLower.includes("siteamoeba") || htmlLower.includes("api.siteamoeba.com") || htmlLower.includes("/api/widget/script/")) {
         checks.push({ name: "Pixel installed", status: "ok", detail: "SiteAmoeba tracking pixel detected on the page." });
       } else {
-        checks.push({ name: "Pixel installed", status: "warning", detail: "SiteAmoeba pixel not detected. Make sure the pixel script is installed for tracking to work." });
+        // Also check if visitors are being tracked (pixel might be loaded dynamically)
+        const recentVisitors = await pool.query(
+          "SELECT COUNT(*) as cnt FROM visitors WHERE campaign_id = $1 AND first_seen::timestamptz > NOW() - INTERVAL '24 hours'",
+          [campaign.id]
+        );
+        if (parseInt(recentVisitors.rows[0]?.cnt || "0") > 0) {
+          checks.push({ name: "Pixel installed", status: "ok", detail: "Tracking pixel active — visitors are being recorded." });
+        } else {
+          checks.push({ name: "Pixel installed", status: "warning", detail: "SiteAmoeba pixel not detected in page source. Make sure the pixel script is installed for tracking to work." });
+        }
       }
     }
 
