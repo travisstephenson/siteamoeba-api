@@ -35,6 +35,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   // Generate new ID if none found
   if (!vid) {
     vid = "v_" + Math.random().toString(36).substr(2, 9) + "_" + Date.now();
+    vidStore = "gen";
   }
 
   // CHECK URL: If this page was reached with ?sa_vid= in the URL, adopt that ID.
@@ -721,7 +722,13 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       .catch(function(e) { console.warn("SiteAmoeba preview: fetch error", e); });
   } else {
     // NORMAL MODE: standard variant assignment
-    var assignUrl = API + "/api/widget/assign?vid=" + vid + "&cid=" + CID + "&ref=" + encodeURIComponent(document.referrer) + (fp ? "&fp=" + fp : "");
+    // Include fingerprint ONLY when the browser could not supply a persistent vid
+    // (localStorage/sessionStorage/cookie all failed). When storage works, each visit
+    // has its own unique sa_vid — using fingerprint on top of that collapses many distinct
+    // users who share a canvas/GPU/OS signature (e.g. Facebook WebView on iPhone) into
+    // one visitor row, which destroys unique-visitor counts and attribution.
+    var shouldSendFp = (vidStore === "none" || vidStore === "gen"); // gen = freshly generated
+    var assignUrl = API + "/api/widget/assign?vid=" + vid + "&cid=" + CID + "&ref=" + encodeURIComponent(document.referrer) + (shouldSendFp && fp ? "&fp=" + fp : "");
     if (utmParams.utm_source)   assignUrl += "&utm_source="   + encodeURIComponent(utmParams.utm_source);
     if (utmParams.utm_medium)   assignUrl += "&utm_medium="   + encodeURIComponent(utmParams.utm_medium);
     if (utmParams.utm_campaign) assignUrl += "&utm_campaign=" + encodeURIComponent(utmParams.utm_campaign);

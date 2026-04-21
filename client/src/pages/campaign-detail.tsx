@@ -3185,19 +3185,38 @@ function VisitorFeedPanel({ campaignId, campaignType, forceExpand }: { campaignI
                             {isLeadGen ? "✓" : "$"}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-sm font-medium">{isLeadGen ? "Opted In" : `$${v.revenue}`}</span>
                               <span className="text-xs text-muted-foreground">{timeAgo(v.convertedAt)}</span>
+                              {v.customerEmail && (
+                                <span className="text-[10px] text-muted-foreground truncate max-w-[180px]" title={v.customerEmail}>{v.customerEmail}</span>
+                              )}
+                              {(v as any).unattributed && (
+                                <Badge variant="outline" className="text-[9px] py-0 border-amber-400/60 text-amber-600 dark:text-amber-400" title="Sale recorded from payment provider but no visitor match — still counted in totals">
+                                  Unattributed
+                                </Badge>
+                              )}
+                              {(v as any).saleSource && (v as any).saleSource !== 'pixel' && (
+                                <Badge variant="secondary" className="text-[9px] py-0" title={`Source: ${(v as any).saleSource}`}>
+                                  {(v as any).saleSource === 'stripe_account' || (v as any).saleSource === 'stripe_webhook' ? 'Stripe'
+                                    : (v as any).saleSource === 'gohighlevel' ? 'GHL'
+                                    : (v as any).saleSource === 'whop' ? 'Whop'
+                                    : (v as any).saleSource}
+                                </Badge>
+                              )}
                             </div>
                             <div className="text-[10px] text-muted-foreground truncate flex items-center gap-1">
-                              {v.headlineIsControl
-                                ? <span>Control headline</span>
-                                : <span style={{ color: 'hsl(160 84% 39%)' }} className="font-medium">Challenger headline</span>
-                              }
+                              {v.headlineVariant ? (
+                                v.headlineIsControl
+                                  ? <span>Control headline</span>
+                                  : <span style={{ color: 'hsl(160 84% 39%)' }} className="font-medium">Challenger headline</span>
+                              ) : (
+                                <span className="italic">No variant match</span>
+                              )}
                               {!v.subheadlineIsControl && v.subheadlineVariant && (
                                 <span style={{ color: 'hsl(160 84% 39%)' }} className="font-medium">· Challenger sub</span>
                               )}
-                              <span>· {v.device}</span>
+                              {v.device && <span>· {v.device}</span>}
                             </div>
                           </div>
                           {isExpanded ? (

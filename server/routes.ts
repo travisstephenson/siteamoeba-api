@@ -1928,18 +1928,45 @@ export async function registerRoutes(server: Server, app: Express) {
       }
     }
 
-    // FINAL GATE: Only attribute revenue to charges we can tie to a tracked visitor.
-    // No fallbacks, no guessing. If we can't match it to someone who hit the pixel,
-    // it doesn't count. This is the core principle: we only show what we can prove.
-    if (!matchedCampaignId || !matchedVisitorId) {
-      console.log(`[stripe-poll] UNATTRIBUTED: $${amount} from ${customerEmail || 'no-email'} — no visitor match found, skipping`);
-      try {
-        await pool.query(
-          `INSERT INTO rejected_charges (user_id, charge_id, reason) VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`,
-          [userId, externalId, `unattributed: no visitor match for ${customerEmail || 'unknown'} $${amount}`]
+    // NO CHARGE IS EVER DROPPED. If we saw the sale, we record it.
+    // When we can't match to a visitor/campaign, we still create a revenue_event
+    // — attributed to the user's most recently active campaign (for visibility)
+    // and marked as unattributed in the feed. Dashboard totals MUST match Stripe.
+    if (!matchedCampaignId) {
+      // Find the user's most recently active campaign (by latest visitor or most recent creation)
+      const fallbackCampaign = await pool.query(
+        `SELECT c.id FROM campaigns c
+         LEFT JOIN visitors v ON v.campaign_id = c.id
+         WHERE c.user_id = $1 AND c.is_active = true
+         GROUP BY c.id
+         ORDER BY MAX(COALESCE(v.first_seen::timestamptz, c.created_at::timestamptz)) DESC NULLS LAST
+         LIMIT 1`,
+        [userId]
+      );
+      if (fallbackCampaign.rows.length > 0) {
+        matchedCampaignId = fallbackCampaign.rows[0].id;
+        console.log(`[stripe-poll] Unattributed charge $${amount} — recording against most-active campaign C${matchedCampaignId}`);
+      } else {
+        // No active campaigns at all — fall back to ANY campaign for this user
+        const anyCampaign = await pool.query(
+          `SELECT id FROM campaigns WHERE user_id = $1 ORDER BY id DESC LIMIT 1`,
+          [userId]
         );
-      } catch (e) { /* non-fatal */ }
-      return false;
+        if (anyCampaign.rows.length > 0) {
+          matchedCampaignId = anyCampaign.rows[0].id;
+        } else {
+          // Literally no campaigns exist for this user — only then do we skip
+          console.log(`[stripe-poll] User ${userId} has no campaigns, cannot record $${amount}`);
+          try {
+            await pool.query(
+              `INSERT INTO rejected_charges (user_id, charge_id, reason) VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`,
+              [userId, externalId, `no campaigns exist: ${customerEmail || 'unknown'} $${amount}`]
+            );
+          } catch (e) { /* non-fatal */ }
+          return false;
+        }
+      }
+      // matchedVisitorId remains null/undefined — revenue_event will record with NULL visitor_id
     }
 
     // Backfill email on visitor + set customer chain + mark converted
@@ -2152,24 +2179,36 @@ export async function registerRoutes(server: Server, app: Express) {
               }
             }
 
-            // No more fallbacks — GHL transactions MUST match by email or time proximity.
-            // We never blindly assign GHL revenue to random visitors.
-
-            // Strict: must have BOTH campaign and visitor
-            if (!matchedCampaignId || !matchedVisitorId) {
-              console.log(`[ghl-poll] UNATTRIBUTED: $${amount} from ${customerEmail || 'no-email'} — skipping`);
-              try {
-                await pool.query(
-                  `INSERT INTO rejected_charges (user_id, charge_id, reason) VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`,
-                  [u.id, externalId, `ghl_unattributed: email=${customerEmail || 'none'} amount=$${amount}`]
-                );
-              } catch {}
-              continue;
+            // NO SALE IS EVER DROPPED. Record every GHL transaction we see.
+            // If we can't match to a campaign, fall back to the user's most-active campaign.
+            if (!matchedCampaignId) {
+              const fallback = await pool.query(
+                `SELECT c.id FROM campaigns c
+                 LEFT JOIN visitors v ON v.campaign_id = c.id
+                 WHERE c.user_id = $1 AND c.is_active = true
+                 GROUP BY c.id
+                 ORDER BY MAX(COALESCE(v.first_seen::timestamptz, c.created_at::timestamptz)) DESC NULLS LAST
+                 LIMIT 1`,
+                [u.id]
+              );
+              if (fallback.rows.length > 0) {
+                matchedCampaignId = fallback.rows[0].id;
+                console.log(`[ghl-poll] Unattributed $${amount} — recording against most-active campaign C${matchedCampaignId}`);
+              } else {
+                const any = await pool.query(`SELECT id FROM campaigns WHERE user_id = $1 ORDER BY id DESC LIMIT 1`, [u.id]);
+                if (any.rows.length > 0) matchedCampaignId = any.rows[0].id;
+                else {
+                  console.log(`[ghl-poll] User ${u.id} has no campaigns, cannot record $${amount}`);
+                  try { await pool.query(`INSERT INTO rejected_charges (user_id, charge_id, reason) VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`, [u.id, externalId, `no campaigns: email=${customerEmail || 'none'} $${amount}`]); } catch {}
+                  continue;
+                }
+              }
+              // matchedVisitorId stays null — event still records, shows as unattributed in feed
             }
 
-            // Create revenue event
+            // Create revenue event — visitorId may be null for unattributed charges
             await storage.addRevenueEvent({
-              visitorId: matchedVisitorId,
+              visitorId: matchedVisitorId || undefined,
               campaignId: matchedCampaignId,
               source: "gohighlevel",
               eventType: "purchase",
@@ -2180,11 +2219,11 @@ export async function registerRoutes(server: Server, app: Express) {
               metadata: JSON.stringify({ ghl_txn_id: txn._id || txn.id, product: txn.entitySourceName || '' }),
             });
 
-            // Mark visitor converted if not already
+            // Mark visitor converted if not already (only if we matched one)
             if (matchedVisitorId) {
               const visitor = await storage.getVisitor(matchedVisitorId);
               if (visitor && !visitor.converted) {
-                await storage.markConverted(matchedVisitorId, externalId, amount);
+                await storage.markConverted(matchedVisitorId, externalId, amount, customerEmail || undefined);
               }
             }
 
@@ -2206,6 +2245,96 @@ export async function registerRoutes(server: Server, app: Express) {
   setInterval(pollGhlTransactions, 90 * 1000);
   setTimeout(pollGhlTransactions, 15000);
 
+  // ============== PLAN SYNC (auto-downgrade on subscription end) ==============
+  // Every hour, reconcile every user's plan with their Stripe subscription state.
+  // If subscription is canceled and current_period_end has passed, drop to free.
+  // If subscription is active on a different price ID than users.plan implies, update plan.
+  // This removes the need to manually downgrade users after a cancellation or plan change.
+  async function syncUserPlansFromStripe() {
+    try {
+      const stripeKey = process.env.STRIPE_SECRET_KEY;
+      if (!stripeKey) return;
+      const stripeClient = new Stripe(stripeKey);
+
+      // Map of Stripe price IDs → our internal plan name.
+      // Build dynamically from Stripe's active recurring prices so we stay in sync
+      // without hard-coding IDs.
+      const priceToPlan: Record<string, string> = {};
+      try {
+        const prices = await stripeClient.prices.list({ active: true, limit: 100 });
+        for (const p of prices.data) {
+          if (!p.recurring || !p.nickname) continue;
+          const nick = p.nickname.toLowerCase();
+          if (nick.includes('autopilot')) priceToPlan[p.id] = 'autopilot';
+          else if (nick.includes('business')) priceToPlan[p.id] = 'business';
+          else if (nick.includes('pro')) priceToPlan[p.id] = 'pro';
+        }
+      } catch (err: any) {
+        console.error('[plan-sync] Could not list prices:', err.message);
+        return;
+      }
+
+      // Users with a recorded subscription
+      const usersWithSubs = await pool.query(
+        `SELECT id, email, plan, stripe_subscription_id FROM users WHERE stripe_subscription_id IS NOT NULL AND stripe_subscription_id != ''`
+      );
+
+      for (const u of usersWithSubs.rows) {
+        try {
+          const sub = await stripeClient.subscriptions.retrieve(u.stripe_subscription_id);
+          let targetPlan: string = u.plan;
+
+          // If subscription has been canceled and the access period already ended, drop to free
+          const nowSec = Math.floor(Date.now() / 1000);
+          const accessEnded =
+            sub.status === 'canceled' ||
+            (sub.cancel_at && sub.cancel_at <= nowSec) ||
+            (sub.current_period_end && sub.current_period_end <= nowSec &&
+             (sub.status === 'incomplete_expired' || sub.status === 'unpaid'));
+
+          if (accessEnded) {
+            targetPlan = 'free';
+          } else if (sub.status === 'active' || sub.status === 'trialing' || sub.status === 'past_due') {
+            // Read the active price — lets us catch silent upgrades/downgrades too
+            const priceId = sub.items?.data?.[0]?.price?.id;
+            if (priceId && priceToPlan[priceId]) {
+              targetPlan = priceToPlan[priceId];
+            }
+          }
+
+          if (targetPlan !== u.plan) {
+            // Update plan + matching credits/campaigns limits
+            const planLimits: Record<string, { credits: number; campaigns: number }> = {
+              free: { credits: 10, campaigns: 1 },
+              pro: { credits: 50, campaigns: 3 },
+              business: { credits: 200, campaigns: 10 },
+              autopilot: { credits: 1000, campaigns: 50 },
+            };
+            const limits = planLimits[targetPlan] || planLimits.free;
+            await pool.query(
+              `UPDATE users SET plan = $1, credits_limit = $2, campaigns_limit = $3 WHERE id = $4`,
+              [targetPlan, limits.credits, limits.campaigns, u.id]
+            );
+            console.log(`[plan-sync] User ${u.id} (${u.email}): ${u.plan} → ${targetPlan} (stripe status=${sub.status}, cancel_at=${sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : 'none'})`);
+          }
+        } catch (subErr: any) {
+          // If Stripe says the subscription doesn't exist anymore, drop to free
+          if (subErr?.code === 'resource_missing' && u.plan !== 'free') {
+            await pool.query(`UPDATE users SET plan = 'free', credits_limit = 10, campaigns_limit = 1 WHERE id = $1`, [u.id]);
+            console.log(`[plan-sync] User ${u.id} (${u.email}): subscription gone → free`);
+          } else {
+            console.error(`[plan-sync] User ${u.id} error:`, subErr.message);
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error('[plan-sync] Fatal:', err.message);
+    }
+  }
+
+  // Run every hour + 30s after startup
+  setInterval(syncUserPlansFromStripe, 60 * 60 * 1000);
+  setTimeout(syncUserPlansFromStripe, 30 * 1000);
 
   // ============== TRAFFIC INTELLIGENCE ==============
 
@@ -4651,19 +4780,33 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(400).json({ error: "Missing vid or cid" });
     }
 
-    // Fingerprint recovery: if this visitor ID is new but we have a fingerprint,
-    // look up a prior visitor with the same fingerprint to preserve variant assignment
-    // across sessions (catches Safari ITP resets, private browsing, etc.)
+    // Fingerprint recovery — ONLY when the widget explicitly asks for it (vidStore was
+    // 'none' or 'gen', meaning the browser had no persistent storage to supply a vid).
+    // The widget now only sends &fp= in that narrow case. When it does send fp, we
+    // additionally require the submitted vid to NOT already exist in the DB — otherwise
+    // we keep the submitted vid and let this be a fresh row. This prevents collapsing
+    // distinct users (Facebook WebView, shared hardware) who happen to share a canvas
+    // signature into a single visitor record.
     if (fingerprint) {
       try {
-        const fpMatch = await pool.query(
-          `SELECT id FROM visitors WHERE fingerprint = $1 AND campaign_id = $2 ORDER BY first_seen DESC LIMIT 1`,
-          [fingerprint, campaignId]
+        // If the incoming vid already exists, don't do fingerprint recovery — just use it.
+        const existingVisitor = await pool.query(
+          `SELECT id FROM visitors WHERE id = $1 LIMIT 1`,
+          [visitorId]
         );
-        if (fpMatch.rows.length > 0) {
-          const recoveredId = fpMatch.rows[0].id;
-          // Use the recovered visitor ID instead of the fresh random one
-          visitorId = recoveredId;
+        if (existingVisitor.rows.length === 0) {
+          // Fresh vid AND widget requested fingerprint recovery — look up a recent prior visitor.
+          // Tighten the window to 24h so stale fingerprints don't forever collapse distinct users.
+          const fpMatch = await pool.query(
+            `SELECT id FROM visitors
+             WHERE fingerprint = $1 AND campaign_id = $2
+               AND first_seen::timestamptz > NOW() - INTERVAL '24 hours'
+             ORDER BY first_seen DESC LIMIT 1`,
+            [fingerprint, campaignId]
+          );
+          if (fpMatch.rows.length > 0) {
+            visitorId = fpMatch.rows[0].id;
+          }
         }
       } catch(e) { /* fingerprint column may not exist yet, ignore */ }
     }

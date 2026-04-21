@@ -1356,18 +1356,24 @@ class StorageImpl implements IStorage {
   }
 
   async getVisitorFeed(campaignId: number, limit: number = 20): Promise<any> {
-    // Get 5 most recent conversions with their variant info
+    // Live Activity sources EVERY recorded sale from revenue_events — whether attributed
+    // to a visitor or not. Any sale we saw (Stripe webhook, GHL poll, pixel convert)
+    // must surface here. No data is ever dropped because it failed an attribution join.
+    // If a sale has a matched visitor, we enrich with their variant/device info.
+    // If it doesn't, we still show the sale with source, email, amount, and timestamp.
     const conversionsResult = await pool.query(
       `SELECT
-        v.id as visitor_id,
-        v.converted,
-        v.converted_at,
-        v.revenue,
+        re.visitor_id as visitor_id,
+        true as converted,
+        re.created_at as converted_at,
+        re.amount as revenue,
         v.user_agent,
         v.referrer,
         v.first_seen,
-        v.customer_email,
+        COALESCE(re.customer_email, v.customer_email) as customer_email,
         COALESCE(v.traffic_source, 'direct') as traffic_source,
+        re.source as sale_source,
+        re.external_id,
         hv.text as headline_variant,
         hv.is_control as headline_is_control,
         hv.id as headline_variant_id,
@@ -1377,22 +1383,30 @@ class StorageImpl implements IStorage {
         vs.max_scroll_depth,
         vs.time_on_page,
         vs.click_count,
-        vs.sections_viewed
-       FROM visitors v
+        vs.sections_viewed,
+        CASE WHEN v.id IS NULL THEN true ELSE false END as unattributed
+       FROM revenue_events re
+       LEFT JOIN visitors v ON v.id = re.visitor_id
        LEFT JOIN variants hv ON hv.id = v.headline_variant_id
        LEFT JOIN variants sv ON sv.id = v.subheadline_variant_id
-       LEFT JOIN visitor_sessions vs ON vs.visitor_id = v.id AND vs.campaign_id = v.campaign_id
-       WHERE v.campaign_id = $1 AND v.converted = true
-       ORDER BY v.converted_at DESC
-       LIMIT 5`,
+       LEFT JOIN visitor_sessions vs ON vs.visitor_id = v.id AND vs.campaign_id = re.campaign_id
+       WHERE re.campaign_id = $1 AND re.event_type = 'purchase'
+       ORDER BY re.created_at DESC
+       LIMIT 10`,
       [campaignId]
     );
 
-    // Get aggregate summary: total visitors, buyers, avg scroll for each
+    // Get aggregate summary: total visitors, buyers, avg scroll for each.
+    // total_buyers counts DISTINCT purchase events from revenue_events (plus any
+    // converted visitors without events) so rejected/unattributed sales still count.
     const summaryResult = await pool.query(
       `SELECT
         COUNT(*) as total_visitors,
-        COUNT(CASE WHEN v.converted = true THEN 1 END) as total_buyers,
+        GREATEST(
+          COUNT(CASE WHEN v.converted = true THEN 1 END),
+          (SELECT COUNT(*) FROM revenue_events
+             WHERE campaign_id = $1 AND event_type = 'purchase' AND amount > 0)
+        ) as total_buyers,
         ROUND(AVG(CASE WHEN v.converted = true THEN vs.max_scroll_depth END)) as buyer_avg_scroll,
         ROUND(AVG(CASE WHEN v.converted = false THEN vs.max_scroll_depth END)) as visitor_avg_scroll,
         ROUND(AVG(CASE WHEN v.converted = true THEN vs.time_on_page END)) as buyer_avg_time,
@@ -1450,7 +1464,7 @@ class StorageImpl implements IStorage {
         else if (ua.includes("tablet") || ua.includes("ipad")) device = "tablet";
       }
       return {
-        visitorId: r.visitor_id,
+        visitorId: r.visitor_id || r.external_id || 'unattributed',
         device,
         maxScrollDepth: parseInt(r.max_scroll_depth) || 0,
         timeOnPage: parseInt(r.time_on_page) || 0,
@@ -1458,11 +1472,12 @@ class StorageImpl implements IStorage {
         sectionsViewed: r.sections_viewed ? (() => { try { return JSON.parse(r.sections_viewed); } catch { return []; } })() : [],
         converted: r.converted || false,
         convertedAt: r.converted_at || null,
-        // Use sum of all revenue_events for this visitor (captures upsells)
-        // Fallback chain: visitor-matched revenue → email-matched revenue → visitors.revenue → 0
-        revenue: visitorRevMap[r.visitor_id]
+        // Revenue: for rows sourced from revenue_events, r.revenue IS the event amount.
+        // For visitor-sourced rows, fall back to aggregated map.
+        revenue: (r.revenue != null && !isNaN(parseFloat(r.revenue))) ? parseFloat(r.revenue)
+          : visitorRevMap[r.visitor_id]
           || (r.customer_email ? emailRevMap[r.customer_email.toLowerCase()] : 0)
-          || (r.revenue ? parseFloat(r.revenue) : 0),
+          || 0,
         createdAt: r.first_seen,
         headlineVariant: r.headline_variant || null,
         headlineIsControl: r.headline_is_control || false,
@@ -1471,6 +1486,9 @@ class StorageImpl implements IStorage {
         referrer: r.referrer || null,
         trafficSource: r.traffic_source || 'direct',
         customerEmail: r.customer_email || null,
+        saleSource: r.sale_source || null,   // stripe_account, gohighlevel, pixel, whop, etc.
+        unattributed: r.unattributed === true,
+        externalId: r.external_id || null,
       };
     };
 
