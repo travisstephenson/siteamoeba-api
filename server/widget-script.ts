@@ -1094,7 +1094,33 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       // The correct dedup is based on DOM ancestry: if any of my ancestors is already
       // in the section map, I'm a nested child and should be skipped. Previous key-based
       // dedup collided across unrelated sections with similar position/height.
-      var candidates = document.querySelectorAll("section, [class*='section'], [role='region'], main > div, .container > div, #content > div, [class*='block'], [class*='row']");
+      //
+      // Candidate selectors must cover all major page builders:
+      //   - Plain HTML: <section>, [role='region']
+      //   - Generic: [class*='section'], [class*='row'], [class*='block']
+      //   - Elementor: [class*='elementor-section'], [class*='elementor-widget']
+      //   - GHL / HighLevel: [id^='section-'], [id^='row-']
+      //   - Divi / WPBakery: [class*='et_pb_section'], [class*='vc_row']
+      //   - Generic WordPress: main > div, .container > div
+      var candidates = document.querySelectorAll([
+        "section",
+        "[class*='section']",
+        "[role='region']",
+        "main > div",
+        ".container > div",
+        "#content > div",
+        "[class*='block']",
+        "[class*='row']",
+        "[class*='elementor-section']",
+        "[class*='elementor-widget']",
+        "[class*='et_pb_section']",
+        "[class*='vc_row']",
+        "[class*='brz-section']",
+        "[id^='section-']",
+        "[id^='row-']",
+        "[data-section]",
+        "[data-element-type]"
+      ].join(", "));
       var map = [];
       var accepted = []; // actual DOM elements we've accepted
       candidates.forEach(function(el) {
@@ -1115,11 +1141,21 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           if (el.contains(accepted[b])) return;
         }
 
+        // QUALITY GATE: require either a heading or meaningful text/form to count as a real section.
+        // Skip anonymous wrapper divs that page builders insert for layout only — they don't
+        // represent a distinct "section" for drop-off analysis.
+        var heading = el.querySelector("h1, h2, h3, h4");
+        var headingText = heading ? (heading.innerText || "").substring(0, 100).trim() : "";
+        var hasMeaningfulContent = !!headingText || !!el.querySelector("form, input[type='email'], blockquote, video, iframe[src*='youtube'], iframe[src*='vimeo'], iframe[src*='wistia']");
+        // Fallback: must have at least 60 chars of visible text to count
+        if (!hasMeaningfulContent) {
+          var sampleText = (el.innerText || "").trim();
+          if (sampleText.length < 60) return;
+        }
+
         accepted.push(el);
         var offsetPct = Math.round(absTop / pageH * 100);
         var label = classifyEl(el);
-        var heading = el.querySelector("h1, h2, h3, h4");
-        var headingText = heading ? (heading.innerText || "").substring(0, 100).trim() : "";
         map.push({
           idx: map.length,
           offsetPct: offsetPct,
