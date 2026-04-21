@@ -4147,6 +4147,28 @@ export async function registerRoutes(server: Server, app: Express) {
               updated++;
               if (textChanged) {
                 changedSections.push({ id: ex.id, sectionId: ns.id, label: ns.label, oldText: ex.current_text, newText: ns.currentText });
+                // CRITICAL: keep the control variant in sync with the section's current_text.
+                // If the user edits their landing page between scans, the previous control
+                // row is stale and will make the widget serve outdated copy — exactly the
+                // C17 bug where the dashboard showed "12 AI Prompts..." while the live page
+                // said "Give Me 2 Hours...". The contract is: current_text IS the control.
+                try {
+                  const normalizedText = (ns.currentText || "").slice(0, 2000);
+                  const updateRes = await pool.query(
+                    `UPDATE variants
+                        SET text = $1
+                      WHERE test_section_id = $2
+                        AND is_control = true
+                        AND text IS DISTINCT FROM $1
+                      RETURNING id`,
+                    [normalizedText, ex.id]
+                  );
+                  if (updateRes.rowCount && updateRes.rowCount > 0) {
+                    console.log(`[rescan] C${campaignId} section ${ex.id}: synced ${updateRes.rowCount} control variant(s) to new page text`);
+                  }
+                } catch (syncErr) {
+                  console.warn(`[rescan] C${campaignId} section ${ex.id}: control sync failed:`, (syncErr as any)?.message);
+                }
               }
             } else {
               // Text/selector unchanged but we still want to backfill metadata

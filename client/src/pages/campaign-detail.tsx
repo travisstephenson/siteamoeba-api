@@ -4268,14 +4268,17 @@ function TestSectionCard({
               );
             })()}
 
-            {/* Control text from scan */}
+            {/* Page text — what the live page currently says (as of last scan).
+                Renamed from "Control" to avoid confusion with the actual control
+                variant card below, which has its own stats and can drift if the
+                page was changed but the control variant wasn't re-synced. */}
             {section.currentText && (
               <div className="mb-4 p-3 rounded-lg bg-muted/40 border border-border">
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <Badge variant="outline" className="text-xs gap-1">
-                    <Shield className="w-2.5 h-2.5" /> Control
+                    <Shield className="w-2.5 h-2.5" /> Live Page Text
                   </Badge>
-                  <span className="text-xs text-muted-foreground">Original text from scan</span>
+                  <span className="text-xs text-muted-foreground">Last captured by scan</span>
                   {/* Word count for body copy */}
                   {(section.category === "body_copy" || section.category === "hero_journey") && (() => {
                     const wc = section.currentText.replace(/<[^>]*>/g, " ").trim().split(/\s+/).filter(Boolean).length;
