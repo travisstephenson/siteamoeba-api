@@ -1141,16 +1141,31 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           if (el.contains(accepted[b])) return;
         }
 
-        // QUALITY GATE: require either a heading or meaningful text/form to count as a real section.
-        // Skip anonymous wrapper divs that page builders insert for layout only — they don't
-        // represent a distinct "section" for drop-off analysis.
+        // QUALITY GATE: only count sections with a CLEAR anchor point — a heading,
+        // an interactive element (form/button/CTA), or embedded media. Every other
+        // div is just layout plumbing and adds noise to the drop-off chart.
+        //
+        // Rationale: Alberto's Elementor page has dozens of image-wrapped divs, text
+        // paragraphs, and divider columns. Counting each as a section produces a wall
+        // of 'content' drop-off entries that tells the user nothing. We want the
+        // drop-off chart to reflect PURPOSEFUL sections — the ones a copywriter would
+        // recognize as distinct steps in the page's argument.
         var heading = el.querySelector("h1, h2, h3, h4");
         var headingText = heading ? (heading.innerText || "").substring(0, 100).trim() : "";
-        var hasMeaningfulContent = !!headingText || !!el.querySelector("form, input[type='email'], blockquote, video, iframe[src*='youtube'], iframe[src*='vimeo'], iframe[src*='wistia']");
-        // Fallback: must have at least 60 chars of visible text to count
-        if (!hasMeaningfulContent) {
+        var anchorEl = el.querySelector(
+          "form, input[type='email'], input[type='text'], blockquote, video, " +
+          "iframe[src*='youtube'], iframe[src*='vimeo'], iframe[src*='wistia'], iframe[src*='vidyard'], " +
+          "button, a.button, a.btn, [class*='button'], [class*='cta'], [class*='buy'], [class*='order']"
+        );
+        var isBigEnough = rect.height >= 250; // Large standalone sections can count even without heading
+
+        if (!headingText && !anchorEl && !isBigEnough) return;
+
+        // Extra filter: if we have neither heading nor anchor, the text must be
+        // substantial (>= 200 chars) to count. Small dividers/captions are noise.
+        if (!headingText && !anchorEl) {
           var sampleText = (el.innerText || "").trim();
-          if (sampleText.length < 60) return;
+          if (sampleText.length < 200) return;
         }
 
         accepted.push(el);
