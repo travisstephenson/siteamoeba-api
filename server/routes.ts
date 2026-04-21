@@ -5016,7 +5016,7 @@ export async function registerRoutes(server: Server, app: Express) {
     const attributionCampaignId = visitor?.campaignId ?? opts.pixelCampaignId;
     const resolvedVisitorId = visitor?.id ?? opts.vid;
 
-    // Mark first conversion on the visitor record — also store email for Stripe attribution
+    // Mark first conversion on the visitor record — also store email for Stripe attribution.
     // Storing the email lets us match ALL future Stripe charges (OTOs, upsells)
     // from the same customer back to this original campaign, without any additional pixels.
     if (visitor && !visitor.converted) {
@@ -5026,6 +5026,17 @@ export async function registerRoutes(server: Server, app: Express) {
       await pool.query(
         `UPDATE visitors SET revenue = COALESCE(revenue, 0) + $1 WHERE id = $2`,
         [opts.amount, resolvedVisitorId]
+      );
+    }
+
+    // ALWAYS backfill email on the visitor if we received one and the field is empty.
+    // This fixes the case where a visitor converted before we captured email, then later
+    // pings with email — without this, Stripe charges for the same customer would reject.
+    if (opts.customerEmail && resolvedVisitorId) {
+      await pool.query(
+        `UPDATE visitors SET customer_email = $1
+         WHERE id = $2 AND (customer_email IS NULL OR customer_email = '')`,
+        [opts.customerEmail, resolvedVisitorId]
       );
     }
 

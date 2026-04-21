@@ -1179,19 +1179,64 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   // submitted on the page — handles GHL inline AJAX success,
   // redirect-based funnels, and any other form framework.
   // ============================================================
-  function autoConvert() {
+  function autoConvert(email) {
     if (!vid) return;
     var img = new Image();
-    img.src = API + "/api/widget/convert?vid=" + encodeURIComponent(vid) + "&cid=" + CID;
+    var url = API + "/api/widget/convert?vid=" + encodeURIComponent(vid) + "&cid=" + CID;
+    if (email) url += "&email=" + encodeURIComponent(email);
+    img.src = url;
+  }
+
+  // Extract email value from a form's email-like input (returns empty string if none)
+  function extractFormEmail(form) {
+    if (!form || !form.querySelector) return "";
+    var input = form.querySelector('input[type="email"]')
+             || form.querySelector('input[name*="email" i]')
+             || form.querySelector('input[id*="email" i]')
+             || form.querySelector('input[placeholder*="email" i]');
+    var val = input && input.value ? String(input.value).trim() : "";
+    // Basic sanity check — contains @ and a dot after it
+    if (val && val.indexOf("@") > 0 && val.indexOf(".", val.indexOf("@")) > 0) return val;
+    return "";
+  }
+
+  // Capture from ANY email input on the page (for success-pattern detection paths
+  // that don't have a form reference handy). Prefers inputs inside forms.
+  function grabPageEmail() {
+    try {
+      var inputs = document.querySelectorAll('input[type="email"], input[name*="email" i], input[id*="email" i]');
+      for (var i = 0; i < inputs.length; i++) {
+        var val = inputs[i].value ? String(inputs[i].value).trim() : "";
+        if (val && val.indexOf("@") > 0 && val.indexOf(".", val.indexOf("@")) > 0) return val;
+      }
+    } catch(e) {}
+    return "";
   }
 
   function initLeadTracking() {
     var convertFired = false;
+    var capturedEmail = ""; // remember whatever the user typed, even before submit
+
+    // Passive email capture — every input/change on any email field stashes the value.
+    // This survives cases where the form is AJAX-submitted and the DOM is wiped before
+    // autoConvert fires, or where the success-pattern observer fires after the form is gone.
+    document.addEventListener("input", function(e) {
+      var t = e.target;
+      if (!t || t.tagName !== "INPUT") return;
+      var type = (t.type || "").toLowerCase();
+      var name = (t.name || "").toLowerCase();
+      var id = (t.id || "").toLowerCase();
+      if (type === "email" || name.indexOf("email") !== -1 || id.indexOf("email") !== -1) {
+        var v = String(t.value || "").trim();
+        if (v && v.indexOf("@") > 0 && v.indexOf(".", v.indexOf("@")) > 0) {
+          capturedEmail = v;
+        }
+      }
+    }, true);
 
     // 1. Listen for standard form submit events
     document.addEventListener("submit", function(e) {
       if (convertFired) return;
-      // Only fire for forms that look like opt-in forms (have an email field)
       var form = e.target;
       if (!form) return;
       var hasEmail = form.querySelector && (
@@ -1200,11 +1245,13 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         form.querySelector('input[placeholder*="email"]')
       );
       if (!hasEmail) return;
+      // Grab the email NOW before any AJAX wipes the form
+      var submitEmail = extractFormEmail(form) || capturedEmail;
       // Wait 2s for AJAX submission to complete, then fire
       setTimeout(function() {
         if (!convertFired) {
           convertFired = true;
-          autoConvert();
+          autoConvert(submitEmail);
         }
       }, 2000);
     }, true);
@@ -1227,7 +1274,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           if (!window._saBaselineText || window._saBaselineText.indexOf(successPatterns[i]) === -1) {
             convertFired = true;
             observer.disconnect();
-            autoConvert();
+            autoConvert(capturedEmail || grabPageEmail());
             return;
           }
         }
