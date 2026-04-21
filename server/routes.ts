@@ -5369,29 +5369,38 @@ export async function registerRoutes(server: Server, app: Express) {
     const headlineVariants = creditExhausted ? [] : await storage.getActiveVariantsByCampaign(campaignId, "headline");
     const subheadlineVariants = creditExhausted ? [] : await storage.getActiveVariantsByCampaign(campaignId, "subheadline");
 
-    // Respect traffic percentage for headline/subheadline sections too
-    const headlineSection = allTestSections.find((s: any) => s.isActive && s.category === "headline");
+    // CRITICAL: test_sections.is_active is the authoritative ON/OFF switch for each test.
+    // If a section is inactive (toggle OFF in the dashboard), we NEVER serve a challenger
+    // for that section — even if orphaned variants with is_active=true exist in the DB.
+    // Previously the only check was traffic percentage, which let inactive-section
+    // variants still get served (Travis saw this on C17: all 5 sections OFF in the UI,
+    // but variant 519 was getting 335 visitors and 8 conversions because the section
+    // activation gate was missing here).
+    const headlineSection    = allTestSections.find((s: any) => s.isActive && s.category === "headline");
     const subheadlineSection = allTestSections.find((s: any) => s.isActive && s.category === "subheadline");
-    const headlineTrafficPct = (headlineSection as any)?.trafficPercentage ?? 100;
-    const subheadlineTrafficPct = (subheadlineSection as any)?.trafficPercentage ?? 100;
-    const inHeadlinePool = Math.random() * 100 < headlineTrafficPct;
-    const inSubheadlinePool = Math.random() * 100 < subheadlineTrafficPct;
+    const headlineSectionActive    = !!headlineSection;
+    const subheadlineSectionActive = !!subheadlineSection;
 
-    const headlineControl      = headlineVariants.find((v: any) => v.isControl);
-    const subheadlineControl   = subheadlineVariants.find((v: any) => v.isControl);
-    const headlineChallengers  = headlineVariants.filter((v: any) => !v.isControl);
+    const headlineTrafficPct    = (headlineSection as any)?.trafficPercentage ?? 100;
+    const subheadlineTrafficPct = (subheadlineSection as any)?.trafficPercentage ?? 100;
+    const inHeadlinePool    = headlineSectionActive    && Math.random() * 100 < headlineTrafficPct;
+    const inSubheadlinePool = subheadlineSectionActive && Math.random() * 100 < subheadlineTrafficPct;
+
+    const headlineControl        = headlineVariants.find((v: any) => v.isControl);
+    const subheadlineControl     = subheadlineVariants.find((v: any) => v.isControl);
+    const headlineChallengers    = headlineVariants.filter((v: any) => !v.isControl);
     const subheadlineChallengers = subheadlineVariants.filter((v: any) => !v.isControl);
 
-    // trafficPct = % of visitors who see a CHALLENGER (not control).
-    // If the visitor is NOT in the challenger pool, they see the control variant.
-    // This makes 10% mean "10% of visitors see a challenger" — intuitive.
+    // Variant picking: challenger requires BOTH an active section AND a challenger pool hit.
+    // When the section is OFF, we return the control variant (no DOM changes) so tracking
+    // still records the visitor but no test runs.
     const hVariant = headlineVariants.length > 0
-      ? (headlineChallengers.length > 0 && inHeadlinePool
+      ? (headlineSectionActive && headlineChallengers.length > 0 && inHeadlinePool
           ? headlineChallengers[Math.floor(Math.random() * headlineChallengers.length)]
           : (headlineControl || headlineVariants[0]))
       : null;
     const sVariant = subheadlineVariants.length > 0
-      ? (subheadlineChallengers.length > 0 && inSubheadlinePool
+      ? (subheadlineSectionActive && subheadlineChallengers.length > 0 && inSubheadlinePool
           ? subheadlineChallengers[Math.floor(Math.random() * subheadlineChallengers.length)]
           : (subheadlineControl || subheadlineVariants[0]))
       : null;
