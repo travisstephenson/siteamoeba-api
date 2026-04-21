@@ -31,6 +31,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, queryClient, API_BASE, getAuthToken } from "@/lib/queryClient";
+import { useActiveTests } from "@/hooks/use-active-tests";
 import { useToast } from "@/hooks/use-toast";
 import type { Campaign, Variant } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
@@ -149,44 +150,14 @@ export default function VisualEditorPage() {
     enabled: isAuthenticated && !isNaN(campaignId),
   });
 
-  // Fetch the test sections so we can determine which section a variant belongs to
-  // AND whether that section is actually toggled ON. A challenger that isn't linked to
-  // an ACTIVE section should NOT show up as a 'live variant' in the editor.
-  const { data: testSections = [] } = useQuery<any[]>({
-    queryKey: ["/api/campaigns", campaignId, "test-sections"],
-    queryFn: async () => {
-      const res = await apiRequest("GET", `/api/campaigns/${campaignId}/test-sections`);
-      return res.json();
-    },
-    enabled: isAuthenticated && !isNaN(campaignId),
-  });
-
-  // Build a quick lookup of which sections are currently active
-  const activeSectionIds = new Set(
-    (testSections || []).filter((s: any) => s.isActive).map((s: any) => s.id)
-  );
-
-  // Only surface challengers that (a) are active in the DB AND (b) belong to a section
-  // the user has toggled ON in the dashboard. Previously, orphaned is_active variants
-  // showed up in the editor as 'Active Test' even when every section toggle was OFF.
-  const activeChallengers = allVariants.filter(v =>
-    !v.isControl && v.isActive && isRealVariant(v) &&
-    v.testSectionId && activeSectionIds.has(v.testSectionId)
-  );
-
-  // Group challengers BY SECTION so the panel shows distinct tests separately
-  // (instead of labeling a body-copy variant and a headline variant as 'A' and 'B').
-  const challengersBySection = activeChallengers.reduce((acc: Record<number, { section: any; challengers: Variant[] }>, v) => {
-    const sid = v.testSectionId as number;
-    if (!acc[sid]) {
-      const section = (testSections || []).find((s: any) => s.id === sid);
-      acc[sid] = { section, challengers: [] };
-    }
-    acc[sid].challengers.push(v);
-    return acc;
-  }, {});
-  const activeSectionGroups = Object.values(challengersBySection);
-  const hasActiveTest = activeSectionGroups.length > 0;
+  // CANONICAL source of truth for what tests are running.
+  // See server/active-tests.ts for the single-source logic.
+  const { data: activeTestState } = useActiveTests(campaignId);
+  const activeSectionGroups = (activeTestState?.liveSections || []).map((s) => ({
+    section: s,
+    challengers: s.challengers,
+  }));
+  const hasActiveTest = activeTestState?.isLive === true;
 
   // ---- postMessage listener ----
 
@@ -276,14 +247,16 @@ export default function VisualEditorPage() {
 
       // FALLBACK: variants created by scan/autopilot (not the visual editor) have
       // mutations = []. Without elementIdentity the iframe has nothing to target.
-      // Derive it from the test section's CSS selector + control text (same signals
-      // the widget uses at runtime) so the preview still works.
+      // Derive it from the live section's CSS selector + control text (from the
+      // canonical active-tests state).
       if (!elementIdentity) {
-        const section = (testSections || []).find((s: any) => s.id === variant.testSectionId);
+        const section = activeTestState?.liveSections.find((s) => s.id === variant.testSectionId);
         if (section) {
           elementIdentity = {
-            selector: section.selector || (variant.type === "headline" ? "h1" : variant.type === "subheadline" ? "h2" : undefined),
-            currentText: section.currentText || "",
+            // The bridge looks for `treePath` — map our selector into that key
+            treePath: section.selector || (variant.type === "headline" ? "h1" : variant.type === "subheadline" ? "h2" : undefined),
+            textFingerprint: section.currentText || "",
+            originalText: section.currentText || "",
             tagName: (variant.type === "headline" ? "H1" : variant.type === "subheadline" ? "H2" : "DIV"),
           };
         }

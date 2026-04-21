@@ -10,6 +10,7 @@ import { callLLM, resolveLLMConfig } from "./llm";
 import { runCounsel, runPostMortem } from "./counsel";
 import { encryptApiKey, decryptApiKey } from "./encryption";
 import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildSectionGenerationPrompt, buildClassificationPrompt, buildPageScanPrompt, buildFrameworkAnalysisPrompt, buildBrainChatPrompt, buildTestLessonPrompt, buildCROReportPrompt, type GenerationContext } from "./prompts";
+import { getActiveTestState, reconcileVariantsOnSectionToggle } from "./active-tests";
 import { getBrainPageAuditKnowledge, getRelevantTestLessons } from "./brain-selector";
 import { getNetworkIntelligence, refreshNetworkIntelligence } from "./network-intelligence";
 import { getCROKnowledge } from "./brain-cro-knowledge";
@@ -1603,6 +1604,28 @@ export async function registerRoutes(server: Server, app: Express) {
       const baseUrl = new URL(campaign.url);
       const baseTag = `<base href="${baseUrl.origin}/">`;
       let modified = html;
+
+      // CRITICAL: strip the live SiteAmoeba widget from the proxied HTML.
+      // Otherwise the widget runs inside the iframe, assigns a variant to the
+      // 'visitor' (us), and swaps the H1/sub/etc before the bridge captures the
+      // original text. Clicking 'Control' in the editor then resets to the
+      // variant text (because the bridge thinks that IS the original), and
+      // clicking a text element to edit it creates a new variant based on the
+      // already-swapped text. The editor must ALWAYS see the true control HTML.
+      modified = modified.replace(
+        /<script[^>]*src=["'][^"']*siteamoeba[^"']*widget\/script[^"']*["'][^>]*><\/script>/gi,
+        '<!-- SiteAmoeba widget stripped for visual editor -->'
+      );
+      modified = modified.replace(
+        /<script[^>]*>[\s\S]*?api\.siteamoeba\.com\/api\/widget[\s\S]*?<\/script>/gi,
+        '<!-- SiteAmoeba widget stripped for visual editor -->'
+      );
+      // Some cache plugins (LiteSpeed, WP Rocket) rewrite <script src=> into
+      // <script type="litespeed/javascript" data-src=>. Strip those too.
+      modified = modified.replace(
+        /<script[^>]*type=["']litespeed\/javascript["'][^>]*data-src=["'][^"']*siteamoeba[^"']*["'][^>]*><\/script>/gi,
+        '<!-- SiteAmoeba widget (litespeed-deferred) stripped for visual editor -->'
+      );
       // Insert <base> right after <head>
       if (modified.includes('<head>')) {
         modified = modified.replace('<head>', '<head>' + baseTag);
@@ -3928,7 +3951,24 @@ export async function registerRoutes(server: Server, app: Express) {
     const newActive = !s.is_active;
     await pool.query("UPDATE test_sections SET is_active = $1 WHERE id = $2", [newActive, sectionId]);
 
-    res.json({ id: sectionId, isActive: newActive });
+    // Integrity guard: toggling OFF cascades to variants so the widget can't
+    // accidentally serve them. Keeps the DB clean — never a case where
+    // variants.is_active = true while their parent section is inactive.
+    const reconciled = await reconcileVariantsOnSectionToggle(sectionId, newActive);
+
+    res.json({ id: sectionId, isActive: newActive, variantsDeactivated: reconciled.updatedCount });
+  });
+
+  // GET /api/campaigns/:id/active-tests — CANONICAL source of truth.
+  // Every UI surface that asks 'what tests are running' must use this endpoint.
+  // Do NOT replicate the activation logic client-side. See server/active-tests.ts.
+  app.get("/api/campaigns/:id/active-tests", requireAuth, async (req: Request, res: Response) => {
+    const campaign = await storage.getCampaign(paramId(req.params.id));
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    const state = await getActiveTestState(campaign.id);
+    res.json(state);
   });
 
   // POST /api/campaigns/:id/rescan — re-scan the page and update test sections
