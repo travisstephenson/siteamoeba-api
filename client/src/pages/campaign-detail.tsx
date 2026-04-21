@@ -5668,16 +5668,7 @@ export default function CampaignDetailPage() {
               )}
             </Button>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate(`/campaigns/${campaignId}/visual-editor`)}
-            data-testid="button-visual-editor"
-            className="gap-1.5"
-          >
-            <MousePointerClick className="w-3.5 h-3.5" />
-            Visual Editor
-          </Button>
+          {/* Visual Editor removed — disabled until a stable version is rebuilt */}
           <Button
             variant="outline"
             size="sm"

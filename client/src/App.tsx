@@ -19,7 +19,6 @@ import SettingsPage from "@/pages/settings";
 import ReferralsPage from "@/pages/referrals";
 import AdminPage from "@/pages/admin";
 import TrafficPage from "@/pages/traffic";
-import VisualEditorPage from "@/pages/visual-editor";
 import NotFound from "@/pages/not-found";
 
 const sidebarStyle = {
@@ -62,7 +61,6 @@ function AppRouter() {
       {/* Standalone full-page routes — no sidebar */}
       <Route path="/auth" component={AuthPage} />
       <Route path="/admin" component={AdminPage} />
-      <Route path="/campaigns/:id/visual-editor" component={VisualEditorPage} />
       {/* All other routes — with sidebar */}
       <Route component={SidebarLayout} />
     </Switch>
