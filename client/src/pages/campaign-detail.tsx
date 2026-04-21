@@ -66,6 +66,7 @@ import {
   Activity,
   ArrowDown,
   AlertTriangle,
+  Info as InfoIcon,
 } from "lucide-react";
 import {
   Breadcrumb,
@@ -4268,17 +4269,33 @@ function TestSectionCard({
               );
             })()}
 
-            {/* Page text — what the live page currently says (as of last scan).
-                Renamed from "Control" to avoid confusion with the actual control
-                variant card below, which has its own stats and can drift if the
-                page was changed but the control variant wasn't re-synced. */}
-            {section.currentText && (
-              <div className="mb-4 p-3 rounded-lg bg-muted/40 border border-border">
+            {/* Live-page / SiteAmoeba-control header card.
+                Two modes:
+                  • If the control variant's text === section.currentText: we call it
+                    "Live Page Text" because control = page (normal case).
+                  • If they differ: the user previously promoted a winner that now
+                    serves as the control WITHOUT changing the underlying page.
+                    In that case we call it "Current SiteAmoeba Control" and show
+                    a callout explaining why the dashboard text differs from the page. */}
+            {section.currentText && (() => {
+              // Reuse the controlVariant already resolved for this section above.
+              // "hasPromotedWinner" means the served control text deliberately
+              // differs from the live page (e.g. a challenger was kept on as the
+              // new control after a test ended). When false, control = page.
+              const liveText = (section.currentText || "").trim();
+              const controlText = (controlVariant?.text || "").trim();
+              const hasPromotedWinner =
+                !!controlVariant && !!liveText && !!controlText && liveText !== controlText;
+              return (
+              <div className={`mb-4 p-3 rounded-lg border ${hasPromotedWinner ? "bg-primary/5 border-primary/30" : "bg-muted/40 border-border"}`}>
                 <div className="flex items-center gap-2 mb-1 flex-wrap">
                   <Badge variant="outline" className="text-xs gap-1">
-                    <Shield className="w-2.5 h-2.5" /> Live Page Text
+                    <Shield className="w-2.5 h-2.5" />
+                    {hasPromotedWinner ? "Current SiteAmoeba Control" : "Live Page Text"}
                   </Badge>
-                  <span className="text-xs text-muted-foreground">Last captured by scan</span>
+                  <span className="text-xs text-muted-foreground">
+                    {hasPromotedWinner ? "Served by SiteAmoeba — different from your live page" : "Last captured by scan"}
+                  </span>
                   {/* Word count for body copy */}
                   {(section.category === "body_copy" || section.category === "hero_journey") && (() => {
                     const wc = section.currentText.replace(/<[^>]*>/g, " ").trim().split(/\s+/).filter(Boolean).length;
@@ -4318,8 +4335,28 @@ function TestSectionCard({
                 ) : (
                   <div className="text-sm text-foreground leading-relaxed">{renderCopyText(section.currentText)}</div>
                 )}
+                {/* Promoted-winner explainer. Only shown when the control variant
+                    text deliberately diverges from the live page (winner kept on).
+                    Tells the user WHY and shows both values so nothing is hidden. */}
+                {hasPromotedWinner && (
+                  <div className="mt-2 pt-2 border-t border-primary/20 text-xs space-y-1">
+                    <div className="flex items-start gap-1.5 text-primary/80">
+                      <InfoIcon className="w-3 h-3 mt-0.5 shrink-0" />
+                      <span>
+                        SiteAmoeba is serving a previous winner as the control. Your live page still reads differently.
+                      </span>
+                    </div>
+                    <div className="text-muted-foreground pl-[18px]">
+                      Live page: <span className="text-foreground">“{liveText.slice(0, 120)}{liveText.length > 120 ? "…" : ""}”</span>
+                    </div>
+                    <div className="text-muted-foreground pl-[18px]">
+                      Served control: <span className="text-foreground">“{controlText.slice(0, 120)}{controlText.length > 120 ? "…" : ""}”</span>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
+              );
+            })()}
 
             {/* Existing variants */}
             {statsLoading ? (

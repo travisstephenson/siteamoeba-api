@@ -4147,24 +4147,36 @@ export async function registerRoutes(server: Server, app: Express) {
               updated++;
               if (textChanged) {
                 changedSections.push({ id: ex.id, sectionId: ns.id, label: ns.label, oldText: ex.current_text, newText: ns.currentText });
-                // CRITICAL: keep the control variant in sync with the section's current_text.
-                // If the user edits their landing page between scans, the previous control
-                // row is stale and will make the widget serve outdated copy — exactly the
-                // C17 bug where the dashboard showed "12 AI Prompts..." while the live page
-                // said "Give Me 2 Hours...". The contract is: current_text IS the control.
+                // Keep the control variant in sync — but ONLY when the control was
+                // still matching the OLD page text. If the user has deliberately
+                // "promoted a winner" (a challenger that became the new control
+                // without them editing their live page), the control variant text
+                // will already be different from the old page text, and we must
+                // leave it alone.
+                //
+                //   Case A: control.text === old current_text
+                //            → drift was accidental (user edited the page)
+                //            → sync control to new current_text
+                //   Case B: control.text !== old current_text
+                //            → user intentionally set a different control
+                //              (e.g. "keep the winner serving as control")
+                //            → don't touch
                 try {
-                  const normalizedText = (ns.currentText || "").slice(0, 2000);
+                  const newText = (ns.currentText || "").slice(0, 2000);
+                  const oldText = (ex.current_text || "");
                   const updateRes = await pool.query(
                     `UPDATE variants
                         SET text = $1
                       WHERE test_section_id = $2
                         AND is_control = true
-                        AND text IS DISTINCT FROM $1
+                        AND text = $3
                       RETURNING id`,
-                    [normalizedText, ex.id]
+                    [newText, ex.id, oldText]
                   );
                   if (updateRes.rowCount && updateRes.rowCount > 0) {
-                    console.log(`[rescan] C${campaignId} section ${ex.id}: synced ${updateRes.rowCount} control variant(s) to new page text`);
+                    console.log(`[rescan] C${campaignId} section ${ex.id}: synced ${updateRes.rowCount} control variant(s) from old page text to new page text`);
+                  } else {
+                    console.log(`[rescan] C${campaignId} section ${ex.id}: control variant left intact (promoted-winner case — text already diverged from old page text)`);
                   }
                 } catch (syncErr) {
                   console.warn(`[rescan] C${campaignId} section ${ex.id}: control sync failed:`, (syncErr as any)?.message);
