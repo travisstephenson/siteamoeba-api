@@ -1216,14 +1216,14 @@ function CampaignWizard({
 
                 <div className="relative">
                   <pre className="bg-muted rounded-md p-4 text-xs font-mono overflow-x-auto text-foreground">
-{`<script>(function(){var s=document.createElement('script');s.src='https://api.siteamoeba.com/api/widget/script/${createdCampaignId}';s.async=true;s.setAttribute('data-cfasync','false');s.setAttribute('data-no-optimize','1');document.head.appendChild(s);})();</script>`}
+{`<script src="https://api.siteamoeba.com/api/widget/script/${createdCampaignId}"></script>`}
                   </pre>
                   <Button
                     size="icon"
                     variant="ghost"
                     className="absolute top-2 right-2"
                     onClick={() => {
-                      navigator.clipboard.writeText(`<script>(function(){var s=document.createElement('script');s.src='https://api.siteamoeba.com/api/widget/script/${createdCampaignId}';s.async=true;s.setAttribute('data-cfasync','false');s.setAttribute('data-no-optimize','1');document.head.appendChild(s);})();</script>`);
+                      navigator.clipboard.writeText(`<script src="https://api.siteamoeba.com/api/widget/script/${createdCampaignId}"></script>`);
                       setPixelCopied(true);
                       setTimeout(() => setPixelCopied(false), 2000);
                     }}

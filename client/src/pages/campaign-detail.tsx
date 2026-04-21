@@ -3307,16 +3307,15 @@ function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector, v
   const [copiedScript, setCopiedScript] = useState(false);
   const [copiedInline, setCopiedInline] = useState(false);
   const [showCode, setShowCode] = useState(!verified);
-  const [wpCacheMode, setWpCacheMode] = useState(false);
   const { toast } = useToast();
   const apiBase = getApiBaseUrl();
 
-  // Inline loader format — immune to LiteSpeed/WP Rocket/Autoptimize/Cloudflare Rocket Loader.
-  // These cache/optimize plugins scan HTML for <script src> tags and rewrite/defer them
-  // (LiteSpeed turns `src` into `data-src` + `type="litespeed/javascript"` which the browser never runs).
-  // By creating the script element at runtime inside an IIFE, there is nothing to rewrite at HTML-parse time.
-  const loaderAttrs = wpCacheMode ? ' data-no-optimize="1" data-cfasync="false"' : '';
-  const scriptTagCode = `<script${loaderAttrs}>(function(){var s=document.createElement('script');s.src='${apiBase}/api/widget/script/${campaignId}';s.async=true;s.setAttribute('data-cfasync','false');s.setAttribute('data-no-optimize','1');document.head.appendChild(s);})();</script>`;
+  // KNOWN-WORKING FORMAT: plain <script src> tag.
+  // This is the pixel format that tracked 1,764 visitors across Alberto's campaigns
+  // between Apr 14 and Apr 20 16:59 UTC. Every variation tried after that hour
+  // (inline IIFE loader, data-no-optimize attrs, WP checkbox) produced zero real
+  // traffic. Do not change this line without side-by-side evidence it works.
+  const scriptTagCode = `<script src="${apiBase}/api/widget/script/${campaignId}"></script>`;
 
   // Option 2: full inline code (for users who can't use external script tags)
   const inlineCode = generateEmbedCodeClient(apiBase, campaignId, headlineSelector, subheadlineSelector);
@@ -3379,18 +3378,6 @@ function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector, v
             <p className="text-xs text-muted-foreground mb-2">
               Single line — the widget loads directly from the server with behavioral tracking included.
             </p>
-            <label className="flex items-center gap-2 mb-3 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={wpCacheMode}
-                onChange={(e) => setWpCacheMode(e.target.checked)}
-                className="rounded border-border"
-                data-testid="checkbox-wp-cache"
-              />
-              <span className="text-xs text-muted-foreground">
-                Using WordPress with LiteSpeed, WP Rocket, or Autoptimize
-              </span>
-            </label>
             <div className="relative">
               <pre
                 className="bg-muted rounded-md p-4 text-xs font-mono overflow-x-auto text-foreground"
