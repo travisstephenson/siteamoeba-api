@@ -3571,16 +3571,17 @@ export async function registerRoutes(server: Server, app: Express) {
     try {
       if (!scanSections || scanSections.length === 0) return;
 
-      // Platform key, always
-      const platformKey = process.env.PLATFORM_OPENAI_KEY || process.env.OPENAI_API_KEY;
+      // Platform Anthropic key — every system-owned LLM call on SiteAmoeba should use
+      // Anthropic (Travis's directive). OpenAI key is reserved for DALL-E image gen only.
+      const platformKey = process.env.PLATFORM_ANTHROPIC_KEY;
       if (!platformKey) {
-        console.warn(`[framework-analysis] No platform OpenAI key; skipping C${campaignId}`);
+        console.warn(`[framework-analysis] No platform Anthropic key; skipping C${campaignId}`);
         return;
       }
 
       const messages = buildFrameworkAnalysisPrompt(url, pageText, scanSections, pageGoal, niche);
       const content = await callLLM(
-        { provider: "openai", apiKey: platformKey, model: "gpt-4o-mini" },
+        { provider: "anthropic", apiKey: platformKey, model: "claude-3-5-haiku-20241022" },
         messages,
         { maxTokens: 4000 }
       );
