@@ -6283,10 +6283,16 @@ export default function CampaignDetailPage() {
         <WebhookSection campaignId={campaignId} />
       </div>
 
-      {/* Brain Chat floating panel */}
+      {/* Brain Chat floating panel.
+          llmConfigured rules:
+            - Paid plan → always configured (uses platform Anthropic key).
+            - Free plan → needs BYOK to chat (server still enforces, but we gate UX early).
+          Previously this ONLY checked user.llmProvider, which blocked every paid
+          user who hadn't set BYOK from using Brain Chat — even though their plan
+          entitles them to platform-key access. */}
       <BrainChat
         campaignId={campaignId}
-        llmConfigured={!!user?.llmProvider}
+        llmConfigured={(user?.plan && user.plan !== 'free') || !!user?.llmProvider}
         userPlan={user?.plan || 'free'}
       />
     </div>
