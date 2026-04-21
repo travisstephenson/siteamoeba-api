@@ -31,7 +31,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { apiRequest, queryClient, API_BASE, getAuthToken } from "@/lib/queryClient";
-import { useActiveTests } from "@/hooks/use-active-tests";
+import { useActiveTests, invalidateActiveTests } from "@/hooks/use-active-tests";
 import { useToast } from "@/hooks/use-toast";
 import type { Campaign, Variant } from "@shared/schema";
 import { useAuth } from "@/hooks/use-auth";
@@ -299,9 +299,36 @@ export default function VisualEditorPage() {
 
   // ---- Save variant mutation ----
 
+  // Match the clicked element to a known test_section so we can link the saved
+  // variant to the right section (and use the correct category). Falls back to
+  // category inference from the tag when no matching section is found.
+  function inferSectionAndCategory(): { testSectionId: number | null; category: string } {
+    if (!selectedElement) return { testSectionId: null, category: "headline" };
+    const liveSections = activeTestState?.liveSections || [];
+    // 1) Match by exact treePath / selector
+    const bySelector = liveSections.find((s) => s.selector && s.selector === selectedElement.treePath);
+    if (bySelector) return { testSectionId: bySelector.id, category: bySelector.category };
+    // 2) Match by text fingerprint (first 40 chars, case-insensitive)
+    const fp = (selectedElement.textContent || "").toLowerCase().replace(/\s+/g, " ").trim().slice(0, 40);
+    if (fp) {
+      const byText = liveSections.find((s) =>
+        (s.currentText || "").toLowerCase().replace(/\s+/g, " ").trim().includes(fp)
+      );
+      if (byText) return { testSectionId: byText.id, category: byText.category };
+    }
+    // 3) Fallback category by tag
+    const tag = (selectedElement.tagName || "").toUpperCase();
+    const inferredCategory = tag === "H1" ? "headline"
+      : tag === "H2" ? "subheadline"
+      : (tag === "BUTTON" || tag === "A") ? "cta"
+      : "body_copy";
+    return { testSectionId: null, category: inferredCategory };
+  }
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!selectedElement) throw new Error("No element selected");
+      const { testSectionId, category } = inferSectionAndCategory();
       const mutations = {
         elementIdentity: {
           tagName: selectedElement.tagName,
@@ -316,9 +343,9 @@ export default function VisualEditorPage() {
         mobileFontSize: mobileFontSize || null,
       };
       const res = await apiRequest("POST", `/api/campaigns/${campaignId}/variants`, {
-        type: "headline",
+        type: category,
         text: variantText,
-        testSectionId: null,
+        testSectionId,
         mutations: JSON.stringify(mutations),
       });
       if (!res.ok) {
@@ -327,9 +354,15 @@ export default function VisualEditorPage() {
       }
       return res.json();
     },
-    onSuccess: () => {
-      toast({ title: "Variant saved", description: "Your variant has been created." });
-      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "variants"] });
+    onSuccess: (result) => {
+      const { testSectionId } = inferSectionAndCategory();
+      const whereMsg = testSectionId
+        ? "It's now in your campaign dashboard under that section."
+        : "It's saved, but not linked to an active test section yet. Pick a section on the campaign dashboard to activate it.";
+      toast({ title: "Variant saved", description: whereMsg });
+      // Invalidate every cache that depends on test state so the campaign dashboard
+      // and the editor panel both refresh instantly.
+      invalidateActiveTests(queryClient, campaignId);
       refetchVariants();
       handleCancel();
     },
@@ -376,18 +409,24 @@ export default function VisualEditorPage() {
         },
         newImageUrl: imageUrl,
       };
+      const { testSectionId } = inferSectionAndCategory();
       const res = await apiRequest("POST", `/api/campaigns/${campaignId}/variants`, {
         type: "image",
         text: imageUrl,
-        testSectionId: null,
+        testSectionId,
         mutations: JSON.stringify(mutations),
       });
       if (!res.ok) {
         const errData = await res.json();
         throw new Error(errData.error || "Failed to save");
       }
-      toast({ title: "Image variant saved", description: "Your image variant has been created." });
-      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "variants"] });
+      toast({
+        title: "Image variant saved",
+        description: testSectionId
+          ? "It's now in your campaign dashboard."
+          : "Saved, but not linked to an active test section yet.",
+      });
+      invalidateActiveTests(queryClient, campaignId);
       handleCancel();
     } catch (err: any) {
       toast({ title: "Save failed", description: err.message, variant: "destructive" });
