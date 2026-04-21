@@ -3583,7 +3583,7 @@ export async function registerRoutes(server: Server, app: Express) {
       const content = await callLLM(
         { provider: "anthropic", apiKey: platformKey, model: "claude-haiku-4-5-20251001" },
         messages,
-        { maxTokens: 4000 }
+        { maxTokens: 8000 }  // Framework analysis output can run 5-7KB for 20+ section pages
       );
 
       if (!content) {
@@ -3591,15 +3591,28 @@ export async function registerRoutes(server: Server, app: Express) {
         return;
       }
 
-      // Strip any markdown code fences the model may wrap around the JSON
-      const cleaned = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/g, "").trim();
+      // Strip markdown code fences if present, then try to parse.
+      // If the response got truncated mid-JSON (max_tokens hit), attempt a best-effort
+      // salvage by extracting the longest valid JSON prefix.
+      let cleaned = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/g, "").trim();
 
-      let parsed;
+      let parsed: any = null;
       try {
         parsed = JSON.parse(cleaned);
       } catch (e: any) {
-        console.warn(`[framework-analysis] JSON parse failed for C${campaignId}: ${e.message}`);
-        return;
+        // Salvage: try to find the last closing brace that makes a valid object
+        for (let cut = cleaned.lastIndexOf("}"); cut > 0; cut = cleaned.lastIndexOf("}", cut - 1)) {
+          try {
+            parsed = JSON.parse(cleaned.substring(0, cut + 1));
+            console.log(`[framework-analysis] C${campaignId}: salvaged truncated JSON (cut at ${cut}/${cleaned.length})`);
+            break;
+          } catch { /* keep trying earlier positions */ }
+          if (cut < 100) break;
+        }
+        if (!parsed) {
+          console.warn(`[framework-analysis] JSON parse failed for C${campaignId}: ${e.message}. First 200 chars: ${cleaned.substring(0, 200)}`);
+          return;
+        }
       }
 
       // Basic shape validation — require at least section_analysis array
