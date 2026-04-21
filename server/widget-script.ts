@@ -116,7 +116,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       for (var i = 0; i < pairs.length; i++) {
         var pair = pairs[i].split("=");
         if (pair.length === 2 && keys.indexOf(pair[0]) !== -1) {
-          params[pair[0]] = decodeURIComponent(pair[1].replace(/\\+/g, " "));
+          params[pair[0]] = decodeURIComponent(pair[1].replace(/\\\+/g, " "));
         }
       }
     }
@@ -160,7 +160,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   //     (e.g. the orange "Offer-Ad Loop" span) instead of replacing the whole headline.
   function applyTextToElement(el, text, testMethod, category, styleOverrides) {
     // IMAGE VARIANT: swap src attribute when text is an image URL
-    if (text && (text.startsWith('http://') || text.startsWith('https://') || text.startsWith('/')) && text.match(/\.(jpg|jpeg|png|gif|webp|svg)(\?|$)/i)) {
+    if (text && (text.startsWith('http://') || text.startsWith('https://') || text.startsWith('/')) && text.match(/\\.(jpg|jpeg|png|gif|webp|svg)(\\?|$)/i)) {
       var imgEl = (el.tagName && el.tagName.toUpperCase() === 'IMG') ? el : el.querySelector('img');
       if (imgEl) {
         if (!imgEl.style.width) imgEl.style.width = imgEl.offsetWidth + 'px';
@@ -178,7 +178,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       el.src = text;
       return;
     }
-    if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
+    if (testMethod === "html_swap" || /<[a-z][\\s\\S]*>/i.test(text)) {
       el.innerHTML = text;
       return;
     }
@@ -377,8 +377,8 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     if (allElements.length > 0 && controlText) {
       var pageText = "";
       for (var pt = 0; pt < allElements.length; pt++) pageText += " " + (allElements[pt].textContent || "");
-      pageText = pageText.trim().toLowerCase().replace(/\s+/g, " ");
-      var ctrlText = (controlText || "").trim().toLowerCase().replace(/\s+/g, " ");
+      pageText = pageText.trim().toLowerCase().replace(/\\s+/g, " ");
+      var ctrlText = (controlText || "").trim().toLowerCase().replace(/\\s+/g, " ");
       // Tokenize and check overlap
       var ctrlTokens = ctrlText.split(" ").filter(function(w) { return w.length > 3; });
       var matchCount = 0;
@@ -538,7 +538,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     if (!text) return;
     var el = document.querySelector(tagName);
     if (!el) return;
-    if (testMethod === "html_swap" || /<[a-z][\s\S]*>/i.test(text)) {
+    if (testMethod === "html_swap" || /<[a-z][\\s\\S]*>/i.test(text)) {
       el.innerHTML = text;
     } else {
       el.textContent = text;
@@ -574,7 +574,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   // === PREVIEW MODE DETECTION ===
   // If URL has ?sa_preview=VARIANT_ID, skip normal assignment and apply that specific variant.
   // This lets the dashboard show an accurate preview on the ACTUAL live page.
-  var previewMatch = window.location.search.match(/[?&]sa_preview=(\\d+)/);
+  var previewMatch = window.location.search.match(/[?&]sa_preview=(\\\d+)/);
   var previewToken = (window.location.search.match(/[?&]sa_token=([^&]+)/) || [])[1] || "";
   var isPreviewMode = !!previewMatch;
 
@@ -976,10 +976,10 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         social_proof: /social.?proof|as.?seen|logo|trust|partner/i,
         testimonials: /testimonial|review|what.?people|customer.?say|success.?stor/i,
         case_study: /case.?study|result|outcome/i,
-        pricing: /pricing|price.?table|price.?card|plan.?card|plan.?tier|\btier\b|\bcost\b|checkout/i,
+        pricing: /pricing|price.?table|price.?card|plan.?card|plan.?tier|\\btier\\b|\\bcost\\b|checkout/i,
         guarantee: /guarantee|refund|money.?back|risk.?free|no.?risk/i,
-        faq: /faq|question|ask|q\s*&\s*a/i,
-        cta: /cta|call.?to.?action|sign.?up|register|get.?started|buy.?now|\border.?now\b|enroll/i,
+        faq: /faq|question|ask|q\\s*&\\s*a/i,
+        cta: /cta|call.?to.?action|sign.?up|register|get.?started|buy.?now|\\border.?now\\b|enroll/i,
         about: /about|who.?we|our.?story|our.?mission|founder|team/i,
         bonus: /bonus|extra|free.?gift|included/i,
         scarcity: /limited|hurry|expir|countdown|urgent|only.*left/i,
@@ -1022,7 +1022,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         if (hasVideo && /watch|play|video|see how/i.test(headingText)) return "video";
 
         // FAQ
-        if (/faq|frequently asked|common question|q\s*[&+]\s*a/i.test(headingText)) return "faq";
+        if (/faq|frequently asked|common question|q\\s*[&+]\\s*a/i.test(headingText)) return "faq";
         if (/faq|frequently asked/i.test(bodyText) && bodyText.split("?").length >= 3) return "faq";
 
         // Testimonials / social proof
@@ -1030,7 +1030,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         if (hasStars) return "testimonials";
         if (/testimonial|what (people|clients|customers|members|users) (say|think|are saying)/i.test(headingText)) return "testimonials";
         if (/\u201c|\u201d|\u2018|\u2019/i.test(bodyText) && bodyText.split(/\u201c|\u201d/).length >= 3) return "testimonials";
-        if (/satisfied|happy (customer|client)|success stor|real results|people trust|\d+[,.]?\d*\s*(customer|client|user|member|review)/i.test(bodyText)) return "social_proof";
+        if (/satisfied|happy (customer|client)|success stor|real results|people trust|\\d+[,.]?\\d*\\s*(customer|client|user|member|review)/i.test(bodyText)) return "social_proof";
 
         // Guarantee / risk reversal
         if (/guarantee|money.?back|risk.?free|refund|no.?risk|100%.?(satisfaction|guaranteed)/i.test(headingText)) return "guarantee";
@@ -1038,7 +1038,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
 
         // Pricing / offer
         if (/pricing|how much|investment|regular price|today.?s price|one.?time|payment plan|choose your plan/i.test(headingText)) return "pricing";
-        if (/\$\d+.*\$\d+|regular price.*\$|was \$.*now \$/i.test(bodyText)) return "pricing";
+        if (/\$\\d+.*\$\\d+|regular price.*\$|was \$.*now \$/i.test(bodyText)) return "pricing";
 
         // Bonus
         if (/bonus|free gift|also (get|include|receive)|extra|throw in/i.test(headingText)) return "bonus";
@@ -1053,7 +1053,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
 
         // Solution / how it works
         if (/how (it|this) works|the (solution|answer|method|system|secret|process)|introducing|here'?s (how|what|why)/i.test(headingText)) return "solution";
-        if (/step \d|step.?by.?step|module \d|phase \d|pillar \d/i.test(bodyText)) return "solution";
+        if (/step \\d|step.?by.?step|module \\d|phase \\d|pillar \\d/i.test(bodyText)) return "solution";
 
         // Benefits / features / what you get
         if (/what you (get|receive|learn|discover)|inside|everything (you get|included)|feature|benefit|here'?s what/i.test(headingText)) return "benefits";
@@ -1062,7 +1062,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         if (/about (me|us|the)|who (we|i) (am|are)|my (story|mission|journey)|meet (your|the)|founder/i.test(headingText)) return "about";
 
         // Scarcity / urgency  
-        if (/limited|hurry|expir|countdown|only \d+ (left|spot|seat)|act (now|fast|today)|don't (wait|miss)/i.test(headingText)) return "scarcity";
+        if (/limited|hurry|expir|countdown|only \\d+ (left|spot|seat)|act (now|fast|today)|don't (wait|miss)/i.test(headingText)) return "scarcity";
 
         // Hero — first section with a prominent heading
         var rect = el.getBoundingClientRect();
