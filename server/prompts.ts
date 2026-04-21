@@ -481,7 +481,9 @@ PERSUASION METADATA — fill these for EVERY section (this is how we stop treati
 - framework: Which copywriting framework slot this section occupies:
   * PAS | AIDA | hero_journey | product_launch_formula | storybrand | offer_stack | trust_stack | cta_ladder
 
-- angle: A SHORT (under 25 words) strategic sentence explaining the essence of what this element does for the reader. Example: "Positions the reader as a 'beginner' so their imposter syndrome becomes permission to buy."
+- angle: A SHORT (under 20 words) strategic sentence explaining the essence of what this element does for the reader. Example: "Positions the reader as a 'beginner' so their imposter syndrome becomes permission to buy."
+
+CRITICAL: persuasionRole, funnelStage, psychologicalLever, framework, and angle are MANDATORY fields on every section. Never omit them. If you're unsure, choose the nearest valid enum value — never leave blank, never invent new values. These power the platform's coaching and attribution — missing them breaks the system.
 
 Rules of thumb so you don't cargo-cult this:
 - If two H1s exist, they are NOT both hero_promise. The first, biggest one is hero_promise; the second is probably outcome_promise or section_header.

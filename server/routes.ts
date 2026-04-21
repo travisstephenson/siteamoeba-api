@@ -3776,7 +3776,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
     let rawResponse: string;
     try {
-      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 8000 });
+      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 12000 });
     } catch (err: any) {
       console.error("Page scan LLM call failed:", err);
       scanJobs.set(jobId, { status: "error", error: err.message || "AI provider error. Check your API key and credits in Settings.", createdAt: Date.now() }); return;
@@ -4071,10 +4071,16 @@ export async function registerRoutes(server: Server, app: Express) {
 
         const messages = buildPageScanPrompt(campaign.url, cleaned);
         // Wrap in a timeout — LLM can hang on very large pages
+        // Bumped from 8000 → 12000 tokens so enriched persuasion metadata doesn't
+        // get truncated on 20+ section pages. Each section's angle/role fields add ~80 chars.
         const rawResponse = await Promise.race([
-          callLLM(llmConfigResolved.config, messages, { maxTokens: 8000 }),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("LLM call timed out after 90s")), 90000)),
+          callLLM(llmConfigResolved.config, messages, { maxTokens: 12000 }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("LLM call timed out after 120s")), 120000)),
         ]);
+
+        // Quick observability: log the first chunk of raw output so we can see
+        // what the LLM actually returned when a field ends up null downstream.
+        console.log(`[rescan] C${campaignId} LLM raw first 400 chars:`, rawResponse.slice(0, 400));
 
         // Same JSON parsing as initial scan
         let newSections: any[] = [];
