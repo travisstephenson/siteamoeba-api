@@ -3581,7 +3581,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
       const messages = buildFrameworkAnalysisPrompt(url, pageText, scanSections, pageGoal, niche);
       const content = await callLLM(
-        { provider: "anthropic", apiKey: platformKey, model: "claude-3-5-haiku-20241022" },
+        { provider: "anthropic", apiKey: platformKey, model: "claude-haiku-4-5-20251001" },
         messages,
         { maxTokens: 4000 }
       );
