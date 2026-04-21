@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useLocation } from "wouter";
-import { User as UserIcon, Mail, Calendar, CreditCard, Trash2, Sparkles, Eye, EyeOff, Check, FlaskConical, Coins, MessageSquarePlus, Plug, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp, Copy, Zap, Loader2, ShoppingBag, Building2, Webhook, ExternalLink } from "lucide-react";
+import { User as UserIcon, Mail, Calendar, CreditCard, Trash2, Sparkles, Eye, EyeOff, Check, FlaskConical, Coins, MessageSquarePlus, Plug, CheckCircle2, AlertTriangle, ChevronDown, ChevronUp, Copy, Zap, Loader2, ShoppingBag, Building2, Webhook, ExternalLink, DollarSign, X, HelpCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1255,6 +1255,217 @@ function IntegrationsCard({ userId, webhookSecret, user }: { userId?: number; we
   );
 }
 
+function UnattributedSalesCard() {
+  const { toast } = useToast();
+  const [expanded, setExpanded] = useState(false);
+  const [selectedCampaign, setSelectedCampaign] = useState<Record<string, string>>({});
+  const [applyToAll, setApplyToAll] = useState<Record<string, boolean>>({});
+
+  const { data, isLoading } = useQuery<{
+    charges: any[];
+    summary: { pending: number; attributed: number; dismissed: number; pending_revenue: number };
+    campaigns: { id: number; name: string; url: string; isActive: boolean }[];
+  }>({
+    queryKey: ["/api/settings/unattributed-sales"],
+    queryFn: async () => {
+      const r = await apiRequest("GET", "/api/settings/unattributed-sales");
+      return r.json();
+    },
+  });
+
+  const attributeMutation = useMutation({
+    mutationFn: async (vars: { chargeId: string; campaignId: number; applyToAll: boolean }) => {
+      const r = await apiRequest("POST", "/api/settings/unattributed-sales/attribute", vars);
+      return r.json();
+    },
+    onSuccess: (res) => {
+      toast({
+        title: res.attributedCount > 1
+          ? `Attributed ${res.attributedCount} charges ($${res.attributedRevenue})`
+          : `Charge attributed${res.learningRuleSaved ? " — future same-description charges will auto-route" : ""}`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/unattributed-sales"] });
+    },
+    onError: (e: any) => toast({ title: "Failed to attribute", description: e?.message, variant: "destructive" }),
+  });
+
+  const dismissMutation = useMutation({
+    mutationFn: async (vars: { id: number; applyToAll: boolean }) => {
+      const r = await apiRequest("POST", `/api/settings/unattributed-sales/${vars.id}/dismiss`, { applyToAll: vars.applyToAll });
+      return r.json();
+    },
+    onSuccess: (res) => {
+      toast({ title: res.dismissedCount > 1 ? `Dismissed ${res.dismissedCount} charges` : "Charge dismissed" });
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/unattributed-sales"] });
+    },
+    onError: (e: any) => toast({ title: "Failed to dismiss", description: e?.message, variant: "destructive" }),
+  });
+
+  const pending = (data?.charges || []).filter((c) => !c.dismissed && !c.attributed_campaign_id);
+  const handled = (data?.charges || []).filter((c) => c.dismissed || c.attributed_campaign_id);
+  const summary = data?.summary || { pending: 0, attributed: 0, dismissed: 0, pending_revenue: 0 };
+
+  const fmtTime = (s: string) => {
+    if (!s) return "";
+    const d = new Date(s);
+    return d.toLocaleDateString() + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-3 cursor-pointer select-none" onClick={() => setExpanded(!expanded)}>
+        <CardTitle className="text-sm font-semibold flex items-center gap-2">
+          <DollarSign className="w-4 h-4" />
+          Unattributed Sales
+          {summary.pending > 0 && (
+            <Badge variant="secondary" className="ml-2 text-[10px] bg-amber-500/15 text-amber-600 border-amber-500/30 border">
+              {summary.pending} pending · ${Number(summary.pending_revenue).toFixed(0)}
+            </Badge>
+          )}
+          <span className="ml-auto">
+            {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
+          </span>
+        </CardTitle>
+        <CardDescription className="text-xs">
+          Stripe and GoHighLevel charges we couldn't link to a pixel-tracked visitor. Tag each one to a campaign (we'll auto-route future same-description charges) or dismiss it as not yours.
+        </CardDescription>
+      </CardHeader>
+      {expanded && (
+        <CardContent className="space-y-3">
+          {isLoading ? (
+            <Skeleton className="h-32 w-full" />
+          ) : pending.length === 0 && handled.length === 0 ? (
+            <div className="text-xs text-muted-foreground italic py-4 text-center">
+              No unattributed sales. All your charges are either pixel-tracked or manually handled.
+            </div>
+          ) : (
+            <>
+              {pending.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
+                    Pending review ({pending.length})
+                  </div>
+                  {pending.map((c) => {
+                    const desc = c.description || "(no description)";
+                    const siblingCount = pending.filter((p) => p.description === c.description).length;
+                    const key = String(c.id);
+                    return (
+                      <div key={c.id} className="rounded-lg border p-3 space-y-2 bg-muted/20">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 text-sm flex-wrap">
+                              <span className="font-semibold">${Number(c.amount || 0).toFixed(2)}</span>
+                              {c.customer_email && (
+                                <span className="text-xs text-muted-foreground truncate max-w-[220px]" title={c.customer_email}>
+                                  {c.customer_email}
+                                </span>
+                              )}
+                              <Badge variant="secondary" className="text-[9px] py-0">{c.source === "gohighlevel" ? "GHL" : "Stripe"}</Badge>
+                              {c.charge_date && (
+                                <span className="text-[10px] text-muted-foreground">{fmtTime(c.charge_date)}</span>
+                              )}
+                            </div>
+                            <div className="text-xs mt-1" title={desc}>
+                              <span className="text-muted-foreground">Product: </span>
+                              <span className="truncate inline-block max-w-full align-bottom">{desc}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 pt-1">
+                          <Select
+                            value={selectedCampaign[key] || ""}
+                            onValueChange={(v) => setSelectedCampaign({ ...selectedCampaign, [key]: v })}
+                          >
+                            <SelectTrigger className="h-8 text-xs flex-1 min-w-[180px]">
+                              <SelectValue placeholder="Attribute to campaign…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {(data?.campaigns || []).map((cam) => (
+                                <SelectItem key={cam.id} value={String(cam.id)}>
+                                  {cam.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+
+                          {siblingCount > 1 && (
+                            <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
+                              <input
+                                type="checkbox"
+                                checked={!!applyToAll[key]}
+                                onChange={(e) => setApplyToAll({ ...applyToAll, [key]: e.target.checked })}
+                                className="rounded"
+                              />
+                              Apply to all {siblingCount} same-product charges
+                            </label>
+                          )}
+
+                          <Button
+                            size="sm"
+                            className="h-8 text-xs"
+                            disabled={!selectedCampaign[key] || attributeMutation.isPending}
+                            onClick={() =>
+                              attributeMutation.mutate({
+                                chargeId: c.charge_id,
+                                campaignId: parseInt(selectedCampaign[key]),
+                                applyToAll: !!applyToAll[key],
+                              })
+                            }
+                          >
+                            <Check className="w-3 h-3 mr-1" /> Attribute
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-8 text-xs text-muted-foreground"
+                            disabled={dismissMutation.isPending}
+                            onClick={() => dismissMutation.mutate({ id: c.id, applyToAll: !!applyToAll[key] })}
+                          >
+                            <X className="w-3 h-3 mr-1" /> Not mine
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {handled.length > 0 && (
+                <details className="pt-2">
+                  <summary className="text-[11px] text-muted-foreground cursor-pointer uppercase tracking-wide font-medium">
+                    Already handled ({handled.length})
+                  </summary>
+                  <div className="space-y-1 pt-2">
+                    {handled.slice(0, 50).map((c) => (
+                      <div key={c.id} className="text-xs flex items-center gap-2 py-1 text-muted-foreground">
+                        <span className="font-mono">${Number(c.amount || 0).toFixed(2)}</span>
+                        <span className="truncate flex-1" title={c.description}>{c.description || "(no description)"}</span>
+                        {c.attributed_campaign_name ? (
+                          <Badge variant="outline" className="text-[9px] py-0">{c.attributed_campaign_name}</Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-[9px] py-0 text-muted-foreground">Dismissed</Badge>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+
+              <div className="text-[10px] text-muted-foreground flex items-start gap-1.5 pt-2 border-t">
+                <HelpCircle className="w-3 h-3 mt-0.5 shrink-0" />
+                <span>
+                  When you attribute a charge, we remember the product description and auto-route future charges with that same description. Dismissing with "Apply to all" saves a rule so we'll silently skip future charges for that product (useful for consulting fees, syndicate seats, etc. that shouldn't be campaign sales).
+                </span>
+              </div>
+            </>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
 export default function SettingsPage() {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const [, navigate] = useLocation();
@@ -1387,6 +1598,9 @@ export default function SettingsPage() {
           webhookSecret={(user as any)?.webhookSecret}
           user={user}
         />
+
+        {/* Unattributed Sales — manual attribution + learning rules */}
+        <UnattributedSalesCard />
 
         {/* Testing Settings */}
         <TestingSettingsCard

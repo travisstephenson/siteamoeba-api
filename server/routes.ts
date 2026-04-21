@@ -1864,12 +1864,31 @@ export async function registerRoutes(server: Server, app: Express) {
     let matchedCampaignId: number | null = null;
     let matchedVisitorId: string | null = null;
 
-    // ATTRIBUTION WATERFALL — find the right campaign FIRST, then a visitor if possible.
-    // A sale belongs to whichever campaign its PRODUCT was sold from. Visitor match is
-    // additional enrichment, not a gate.
+    // ATTRIBUTION WATERFALL — find the right campaign FIRST, then a visitor (required to surface).
+
+    // 0. PRODUCT MAP (user's explicit rule): if the user has manually attributed OR dismissed
+    //    a previous charge with this exact description, honor that decision.
+    //    - campaign_id NOT NULL → auto-attribute future same-description charges
+    //    - campaign_id IS NULL → user said 'not mine' — skip without parking
+    if (chargeDesc) {
+      const pmExact = await pool.query(
+        `SELECT campaign_id FROM product_map
+         WHERE user_id = $1 AND LOWER(description_pattern) = LOWER($2)
+         LIMIT 1`,
+        [userId, chargeDesc]
+      );
+      if (pmExact.rows.length > 0) {
+        if (pmExact.rows[0].campaign_id == null) {
+          console.log(`[stripe-poll] Product map says 'not mine' for "${chargeDesc.substring(0, 40)}" — silently skipping`);
+          return false;
+        }
+        matchedCampaignId = pmExact.rows[0].campaign_id;
+        console.log(`[stripe-poll] Product map exact match → C${matchedCampaignId}`);
+      }
+    }
 
     // 1. Customer chain: this Stripe customer bought from us before — use that campaign
-    if (stripeCustomerId) {
+    if (!matchedCampaignId && stripeCustomerId) {
       const cc = await pool.query("SELECT campaign_id FROM customer_campaigns WHERE user_id = $1 AND stripe_customer_id = $2 LIMIT 1", [userId, stripeCustomerId]);
       if (cc.rows.length > 0) matchedCampaignId = cc.rows[0].campaign_id;
     }
@@ -1971,19 +1990,29 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     // THE PIXEL IS THE GATE. If no pixel-tracked visitor can be tied to this charge,
-    // the sale is not ours to attribute. We show ONLY what we can prove via:
-    //   - a stripe_customer we already saw convert on our pixel
-    //   - an email that matches a pixel-converted visitor
-    //   - a pixel conversion in time proximity
-    //   - a funnel step name match AS LONG AS a visitor from that campaign exists nearby
-    // If none of those, park it in rejected_charges and do NOT surface it.
+    // the sale is not ours to attribute automatically. Park it in rejected_charges
+    // with full context so the user can manually route it in Settings → Unattributed
+    // Sales. Their manual attribution writes a product_map rule and this same
+    // description will auto-route next time.
     if (!matchedCampaignId || !matchedVisitorId) {
-      console.log(`[stripe-poll] UNATTRIBUTED: $${amount} email=${customerEmail || 'none'} desc="${chargeDesc.substring(0, 60)}" — no pixel-tracked visitor, skipping`);
+      console.log(`[stripe-poll] UNATTRIBUTED: $${amount} email=${customerEmail || 'none'} desc="${chargeDesc.substring(0, 60)}" — parked for manual review`);
       try {
         await pool.query(
-          `INSERT INTO rejected_charges (user_id, charge_id, reason)
-           VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`,
-          [userId, externalId, `unattributed: no visitor match for ${customerEmail || 'unknown'} $${amount}`]
+          `INSERT INTO rejected_charges
+             (user_id, charge_id, reason, amount, customer_email, description, source, charge_date)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (charge_id) DO UPDATE SET
+             amount = EXCLUDED.amount,
+             customer_email = EXCLUDED.customer_email,
+             description = EXCLUDED.description,
+             source = EXCLUDED.source,
+             charge_date = EXCLUDED.charge_date`,
+          [
+            userId, externalId,
+            `unattributed: no visitor match for ${customerEmail || 'unknown'} $${amount}`,
+            amount, customerEmail || null,
+            obj.description || null, 'stripe', chargeDate,
+          ]
         );
       } catch (e) { /* non-fatal */ }
       return false;
@@ -2166,8 +2195,30 @@ export async function registerRoutes(server: Server, app: Express) {
 
             const productName = (txn.entitySourceName || txn.entityName || txn.name || '').toLowerCase();
 
+            // 0. PRODUCT MAP (user's explicit rule) — beats everything.
+            // NULL campaign_id = user dismissed, skip silently. Non-null = auto-attribute.
+            let dismissByRule = false;
+            if (productName) {
+              const pmExact = await pool.query(
+                `SELECT campaign_id FROM product_map
+                 WHERE user_id = $1 AND LOWER(description_pattern) = $2
+                 LIMIT 1`,
+                [u.id, productName]
+              );
+              if (pmExact.rows.length > 0) {
+                if (pmExact.rows[0].campaign_id == null) {
+                  console.log(`[ghl-poll] Product map says 'not mine' for "${productName.substring(0, 40)}" — silently skipping`);
+                  dismissByRule = true;
+                } else {
+                  matchedCampaignId = pmExact.rows[0].campaign_id;
+                  console.log(`[ghl-poll] Product map exact match → C${matchedCampaignId}`);
+                }
+              }
+            }
+            if (dismissByRule) continue;
+
             // 1. Email matches a visitor (converted or not)
-            if (customerEmail) {
+            if (!matchedCampaignId && customerEmail) {
               const em = await pool.query(
                 `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
                  WHERE c.user_id = $1 AND LOWER(v.customer_email) = LOWER($2)
@@ -2222,12 +2273,25 @@ export async function registerRoutes(server: Server, app: Express) {
 
             // PIXEL-GATED: require BOTH a campaign and a visitor match before recording.
             if (!matchedCampaignId || !matchedVisitorId) {
-              console.log(`[ghl-poll] UNATTRIBUTED: $${amount} email=${customerEmail || 'none'} product="${productName.substring(0, 40)}" — no pixel-tracked visitor, skipping`);
+              console.log(`[ghl-poll] UNATTRIBUTED: $${amount} email=${customerEmail || 'none'} product="${productName.substring(0, 40)}" — parked for manual review`);
               try {
                 await pool.query(
-                  `INSERT INTO rejected_charges (user_id, charge_id, reason)
-                   VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`,
-                  [u.id, externalId, `ghl_unattributed: email=${customerEmail || 'none'} amount=$${amount}`]
+                  `INSERT INTO rejected_charges
+                     (user_id, charge_id, reason, amount, customer_email, description, source, charge_date)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                   ON CONFLICT (charge_id) DO UPDATE SET
+                     amount = EXCLUDED.amount,
+                     customer_email = EXCLUDED.customer_email,
+                     description = EXCLUDED.description,
+                     source = EXCLUDED.source,
+                     charge_date = EXCLUDED.charge_date`,
+                  [
+                    u.id, externalId,
+                    `ghl_unattributed: email=${customerEmail || 'none'} amount=$${amount}`,
+                    amount, customerEmail || null,
+                    txn.entitySourceName || txn.entityName || txn.name || null,
+                    'gohighlevel', txnDate,
+                  ]
                 );
               } catch {}
               continue;
@@ -3108,6 +3172,181 @@ export async function registerRoutes(server: Server, app: Express) {
         );
       }
       return res.json({ ok: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // =========================================================================
+  // UNATTRIBUTED SALES — charges the pollers saw but couldn't link to a pixel
+  // visitor. The user reviews these in Settings and either attributes them to
+  // a campaign (creates a product_map rule + routes same-description future
+  // charges automatically) or dismisses them as not-ours.
+  // =========================================================================
+
+  // List all unattributed charges for the user, newest first.
+  app.get("/api/settings/unattributed-sales", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const rows = await pool.query(
+        `SELECT
+           rc.id,
+           rc.charge_id,
+           rc.amount,
+           rc.customer_email,
+           rc.description,
+           rc.source,
+           rc.charge_date,
+           rc.created_at,
+           rc.dismissed,
+           rc.attributed_campaign_id,
+           rc.attributed_at,
+           c.name AS attributed_campaign_name
+         FROM rejected_charges rc
+         LEFT JOIN campaigns c ON c.id = rc.attributed_campaign_id
+         WHERE rc.user_id = $1
+         ORDER BY rc.created_at DESC
+         LIMIT 500`,
+        [req.userId]
+      );
+
+      // Aggregate counts for the UI summary
+      const summary = await pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE dismissed = false AND attributed_campaign_id IS NULL) AS pending,
+           COUNT(*) FILTER (WHERE attributed_campaign_id IS NOT NULL) AS attributed,
+           COUNT(*) FILTER (WHERE dismissed = true) AS dismissed,
+           COALESCE(SUM(amount) FILTER (WHERE dismissed = false AND attributed_campaign_id IS NULL), 0)::numeric(12,2) AS pending_revenue
+         FROM rejected_charges WHERE user_id = $1`,
+        [req.userId]
+      );
+
+      const campaigns = await storage.getCampaignsByUser(req.userId!);
+      return res.json({
+        charges: rows.rows,
+        summary: summary.rows[0] || { pending: 0, attributed: 0, dismissed: 0, pending_revenue: 0 },
+        campaigns: campaigns.map((c: any) => ({ id: c.id, name: c.name, url: c.url, isActive: c.isActive })),
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Attribute a charge to a campaign.
+  //   - Moves the charge from rejected_charges into revenue_events against that campaign
+  //   - Saves a product_map rule for the description so future same-description charges auto-route
+  //   - Optionally applies to all pending charges with the SAME description ("applyToAll")
+  app.post("/api/settings/unattributed-sales/attribute", requireAuth, async (req: Request, res: Response) => {
+    const { chargeId, campaignId, applyToAll } = req.body;
+    if (!chargeId || !campaignId) return res.status(400).json({ error: "chargeId and campaignId required" });
+
+    try {
+      // Verify the charge belongs to this user
+      const chargeRow = await pool.query(
+        `SELECT * FROM rejected_charges WHERE charge_id = $1 AND user_id = $2 LIMIT 1`,
+        [chargeId, req.userId]
+      );
+      if (chargeRow.rows.length === 0) return res.status(404).json({ error: "Charge not found" });
+      const c = chargeRow.rows[0];
+
+      // Verify the campaign belongs to this user
+      const campaign = await storage.getCampaign(parseInt(campaignId));
+      if (!campaign || campaign.userId !== req.userId) return res.status(404).json({ error: "Campaign not found" });
+
+      // Decide which charge IDs to apply this attribution to
+      let chargesToAttribute = [c];
+      if (applyToAll && c.description) {
+        const siblings = await pool.query(
+          `SELECT * FROM rejected_charges
+           WHERE user_id = $1 AND description = $2 AND dismissed = false AND attributed_campaign_id IS NULL`,
+          [req.userId, c.description]
+        );
+        chargesToAttribute = siblings.rows;
+      }
+
+      let attributedCount = 0;
+      let attributedRevenue = 0;
+      for (const ch of chargesToAttribute) {
+        const amt = parseFloat(ch.amount) || 0;
+        // Create a revenue_event (visitor_id null — this was manually attributed, not pixel-linked)
+        await pool.query(
+          `INSERT INTO revenue_events
+             (visitor_id, campaign_id, source, event_type, amount, currency,
+              external_id, customer_email, metadata, created_at)
+           VALUES (NULL, $1, $2, 'purchase', $3, 'USD', $4, $5, $6, $7)
+           ON CONFLICT DO NOTHING`,
+          [
+            campaignId,
+            ch.source === 'gohighlevel' ? 'gohighlevel' : 'stripe_account',
+            amt, ch.charge_id, ch.customer_email,
+            JSON.stringify({ manually_attributed: true, description: ch.description, attributed_by_user: req.userId }),
+            (ch.charge_date ? new Date(ch.charge_date).toISOString() : ch.created_at),
+          ]
+        );
+
+        // Mark the rejected_charges row as attributed (keeps audit trail)
+        await pool.query(
+          `UPDATE rejected_charges SET attributed_campaign_id = $1, attributed_at = NOW() WHERE id = $2`,
+          [campaignId, ch.id]
+        );
+
+        attributedCount++;
+        attributedRevenue += amt;
+      }
+
+      // Save the learning rule: this description → this campaign
+      if (c.description) {
+        await pool.query(
+          `INSERT INTO product_map (user_id, description_pattern, campaign_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (user_id, description_pattern) DO UPDATE SET campaign_id = $3`,
+          [req.userId, c.description, campaignId]
+        );
+      }
+
+      return res.json({
+        ok: true,
+        attributedCount,
+        attributedRevenue: parseFloat(attributedRevenue.toFixed(2)),
+        learningRuleSaved: !!c.description,
+      });
+    } catch (err: any) {
+      console.error('[attribute-sale]', err);
+      return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Dismiss a charge (not ours — high-ticket sale, manual invoice, consulting fee, etc.)
+  // Also supports applyToAll so user can dismiss all charges for a given product description.
+  app.post("/api/settings/unattributed-sales/:id/dismiss", requireAuth, async (req: Request, res: Response) => {
+    const { applyToAll } = req.body || {};
+    try {
+      const row = await pool.query(
+        `SELECT * FROM rejected_charges WHERE id = $1 AND user_id = $2 LIMIT 1`,
+        [parseInt(req.params.id), req.userId]
+      );
+      if (row.rows.length === 0) return res.status(404).json({ error: "Not found" });
+      const c = row.rows[0];
+
+      let dismissedCount = 1;
+      if (applyToAll && c.description) {
+        const result = await pool.query(
+          `UPDATE rejected_charges SET dismissed = true
+           WHERE user_id = $1 AND description = $2 AND dismissed = false AND attributed_campaign_id IS NULL`,
+          [req.userId, c.description]
+        );
+        dismissedCount = result.rowCount || 0;
+        // Save a NULL-campaign product_map rule so future charges with this description are also auto-dismissed
+        await pool.query(
+          `INSERT INTO product_map (user_id, description_pattern, campaign_id)
+           VALUES ($1, $2, NULL)
+           ON CONFLICT (user_id, description_pattern) DO UPDATE SET campaign_id = NULL`,
+          [req.userId, c.description]
+        );
+      } else {
+        await pool.query(`UPDATE rejected_charges SET dismissed = true WHERE id = $1`, [c.id]);
+      }
+
+      return res.json({ ok: true, dismissedCount });
     } catch (err: any) {
       return res.status(500).json({ error: err.message });
     }
