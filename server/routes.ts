@@ -5369,13 +5369,16 @@ export async function registerRoutes(server: Server, app: Express) {
     const headlineVariants = creditExhausted ? [] : await storage.getActiveVariantsByCampaign(campaignId, "headline");
     const subheadlineVariants = creditExhausted ? [] : await storage.getActiveVariantsByCampaign(campaignId, "subheadline");
 
-    // CRITICAL: test_sections.is_active is the authoritative ON/OFF switch for each test.
-    // If a section is inactive (toggle OFF in the dashboard), we NEVER serve a challenger
-    // for that section — even if orphaned variants with is_active=true exist in the DB.
-    // Previously the only check was traffic percentage, which let inactive-section
-    // variants still get served (Travis saw this on C17: all 5 sections OFF in the UI,
-    // but variant 519 was getting 335 visitors and 8 conversions because the section
-    // activation gate was missing here).
+    // TWO GATES:
+    //   (1) test_sections.is_active  — authoritative ON/OFF switch. If OFF, never serve a
+    //       challenger. Travis saw variant 519 serving 335 visitors on C17 despite every
+    //       section being OFF in the dashboard because this gate was missing here.
+    //   (2) trafficPercentage  — % of visitors who enter the test pool. Visitors NOT in
+    //       the pool see the control (no assignment recorded so control stats stay clean).
+    //       Visitors IN the pool are split EVENLY across {control, challenger_1, ..., challenger_N}.
+    //       This is what standard A/B testing means: at 100% pool, half of traffic sees
+    //       control, half sees challenger. Previously 100% meant "100% of traffic sees a
+    //       challenger" which is why Travis's control had 1 visitor and challenger had 337.
     const headlineSection    = allTestSections.find((s: any) => s.isActive && s.category === "headline");
     const subheadlineSection = allTestSections.find((s: any) => s.isActive && s.category === "subheadline");
     const headlineSectionActive    = !!headlineSection;
@@ -5391,18 +5394,22 @@ export async function registerRoutes(server: Server, app: Express) {
     const headlineChallengers    = headlineVariants.filter((v: any) => !v.isControl);
     const subheadlineChallengers = subheadlineVariants.filter((v: any) => !v.isControl);
 
-    // Variant picking: challenger requires BOTH an active section AND a challenger pool hit.
-    // When the section is OFF, we return the control variant (no DOM changes) so tracking
-    // still records the visitor but no test runs.
+    // Pick uniformly from {control, ...challengers}. Uniform split means fair A/B statistics.
+    // If section is OFF or visitor is outside the traffic pool, they get control.
+    function pickVariant(control: any, challengers: any[], sectionActive: boolean, inPool: boolean, fallback: any) {
+      if (!sectionActive) return control || fallback;
+      if (!inPool) return control || fallback;
+      if (challengers.length === 0) return control || fallback;
+      // Build the full test pool: control + all challengers, split evenly
+      const pool = control ? [control, ...challengers] : [...challengers];
+      return pool[Math.floor(Math.random() * pool.length)];
+    }
+
     const hVariant = headlineVariants.length > 0
-      ? (headlineSectionActive && headlineChallengers.length > 0 && inHeadlinePool
-          ? headlineChallengers[Math.floor(Math.random() * headlineChallengers.length)]
-          : (headlineControl || headlineVariants[0]))
+      ? pickVariant(headlineControl, headlineChallengers, headlineSectionActive, inHeadlinePool, headlineVariants[0])
       : null;
     const sVariant = subheadlineVariants.length > 0
-      ? (subheadlineSectionActive && subheadlineChallengers.length > 0 && inSubheadlinePool
-          ? subheadlineChallengers[Math.floor(Math.random() * subheadlineChallengers.length)]
-          : (subheadlineControl || subheadlineVariants[0]))
+      ? pickVariant(subheadlineControl, subheadlineChallengers, subheadlineSectionActive, inSubheadlinePool, subheadlineVariants[0])
       : null;
 
     // === SECTION-LEVEL TESTS: assign variants for all active non-headline/subheadline sections ===
@@ -5421,10 +5428,14 @@ export async function registerRoutes(server: Server, app: Express) {
       if (sectionVars.length === 0) continue;
       const sectionControl = sectionVars.find((v: any) => v.isControl);
       const sectionChallengers = sectionVars.filter((v: any) => !v.isControl);
-      // trafficPct = % who see a challenger. If not in pool → always show control.
-      const chosen = (inTestPool && sectionChallengers.length > 0)
-        ? sectionChallengers[Math.floor(Math.random() * sectionChallengers.length)]
-        : (sectionControl || sectionVars[0]);
+      // Same semantics as headline/subheadline: visitors IN the pool are split evenly
+      // across {control, ...challengers}. Visitors NOT in the pool see the control.
+      const chosen = (!inTestPool || sectionChallengers.length === 0)
+        ? (sectionControl || sectionVars[0])
+        : (() => {
+            const pool = sectionControl ? [sectionControl, ...sectionChallengers] : [...sectionChallengers];
+            return pool[Math.floor(Math.random() * pool.length)];
+          })();
       sectionAssignments[String(section.id)] = chosen.id;
       sectionPayloads.push({
         id: chosen.id,
