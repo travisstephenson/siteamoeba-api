@@ -1019,77 +1019,103 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
 
         // Video section
         if (hasVideo && bodyText.length < 150) return "video";
-        if (hasVideo && /watch|play|video|see how/i.test(headingText)) return "video";
+        if (hasVideo && /watch|play|video|see how|guarda|mira|ver cómo|regarde/i.test(headingText)) return "video";
 
-        // FAQ
-        if (/faq|frequently asked|common question|q\\s*[&+]\\s*a/i.test(headingText)) return "faq";
-        if (/faq|frequently asked/i.test(bodyText) && bodyText.split("?").length >= 3) return "faq";
+        // FAQ — English, Italian, Spanish, Portuguese, French, German
+        if (/faq|frequently asked|common question|q\\s*[&+]\\s*a|domande frequenti|domande comuni|preguntas frecuentes|perguntas frequentes|questions fréquentes|häufig gestellt/i.test(headingText)) return "faq";
+        if (/faq|frequently asked|domande frequenti|preguntas frecuentes|perguntas frequentes|questions fréquentes/i.test(bodyText) && bodyText.split("?").length >= 3) return "faq";
 
-        // Testimonials / social proof
+        // Testimonials / social proof — multilingual
         if (hasBlockquote && bodyText.length > 50) return "testimonials";
         if (hasStars) return "testimonials";
-        if (/testimonial|what (people|clients|customers|members|users) (say|think|are saying)/i.test(headingText)) return "testimonials";
-        if (/\u201c|\u201d|\u2018|\u2019/i.test(bodyText) && bodyText.split(/\u201c|\u201d/).length >= 3) return "testimonials";
-        if (/satisfied|happy (customer|client)|success stor|real results|people trust|\\d+[,.]?\\d*\\s*(customer|client|user|member|review)/i.test(bodyText)) return "social_proof";
+        if (/testimonial|testimoni|testimonios|depoiment|témoignage|what (people|clients|customers|members|users) (say|think|are saying)|cosa dicono|qué dicen|o que dizem|ce que disent/i.test(headingText)) return "testimonials";
+        if (/\u201c|\u201d|\u2018|\u2019|«|»/i.test(bodyText) && bodyText.split(/\u201c|\u201d|«|»/).length >= 3) return "testimonials";
+        if (/satisfied|happy (customer|client)|success stor|real results|people trust|soddisfatt|clienti felici|satisfech|feliz|cliente satisfeit|satisfait|\\d+[,.]?\\d*\\s*(customer|client|user|member|review|cliente|utente|utilisateur|mitglied)/i.test(bodyText)) return "social_proof";
 
-        // Guarantee / risk reversal
-        if (/guarantee|money.?back|risk.?free|refund|no.?risk|100%.?(satisfaction|guaranteed)/i.test(headingText)) return "guarantee";
-        if (/guarantee|money.?back|risk.?free|refund/i.test(bodyText) && bodyText.length < 300) return "guarantee";
+        // Guarantee / risk reversal — multilingual
+        if (/guarantee|garanzia|garantía|garantia|garantie|money.?back|risk.?free|refund|rimborso|reembolso|remboursement|soddisfatt.*rimborsat|no.?risk|senza rischio|sin riesgo|sem risco|sans risque|100%.?(satisfaction|guaranteed|garantit)/i.test(headingText)) return "guarantee";
+        if (/guarantee|garanzia|garantía|garantia|garantie|money.?back|risk.?free|refund|rimborso|reembolso|remboursement/i.test(bodyText) && bodyText.length < 400) return "guarantee";
 
-        // Pricing / offer
-        if (/pricing|how much|investment|regular price|today.?s price|one.?time|payment plan|choose your plan/i.test(headingText)) return "pricing";
-        if (/\$\\d+.*\$\\d+|regular price.*\$|was \$.*now \$/i.test(bodyText)) return "pricing";
+        // Pricing / offer — multilingual
+        if (/pricing|prezzo|precio|preço|prix|preis|how much|quanto costa|cuánto cuesta|quanto custa|combien|investment|investimento|inversión|investissement|regular price|today.?s price|one.?time|pagamento unico|payment plan|choose your plan|scegli il tuo piano|elige tu plan|éscolhe o teu plano|choisissez votre plan/i.test(headingText)) return "pricing";
+        if (/\$\\d+.*\$\\d+|€\\s*\\d+.*€\\s*\\d+|\\d+\\s*€.*\\d+\\s*€|regular price.*\$|prezzo.*normale|was \$.*now \$/i.test(bodyText)) return "pricing";
 
-        // Bonus
-        if (/bonus|free gift|also (get|include|receive)|extra|throw in/i.test(headingText)) return "bonus";
+        // Bonus — multilingual
+        if (/bonus|free gift|regalo gratis|omaggio|brinde|cadeau|also (get|include|receive)|extra|incluso|incluido|inclus|throw in/i.test(headingText)) return "bonus";
 
-        // CTA / form section
+        // CTA / form section — multilingual
         if (hasForm) return "cta";
-        if (/get (started|access|instant)|sign up|register|enroll|claim|reserve|download now|add to cart|join/i.test(headingText)) return "cta";
+        if (/get (started|access|instant)|inizia|comincia|empezar|comenzar|começar|commencer|sign up|register|iscriviti|regístrate|registra|cadastra|inscris|enroll|inscrivi|claim|reclama|reserve|prenota|reserva|réserver|download now|add to cart|aggiungi al carrello|añadir al carrito|ajouter au panier|join|sì.*voglio|sí.*quiero|sim.*quero|oui.*je veux/i.test(headingText)) return "cta";
 
-        // Problem / pain
-        if (/problem|struggle|frustrat|pain|tired of|sick of|can't seem|doesn't work|failing|broken/i.test(headingText)) return "problem";
-        if (/sound familiar|ring a bell|felt like|you've tried/i.test(bodyText.substring(0, 200))) return "problem";
+        // Problem / pain — multilingual
+        if (/problem|problema|problème|struggle|lott|lucha|luta|frustrat|pain|dolor|dor|douleur|tired of|stanco di|cansad|fatigu|sick of|can't seem|non riesc|no (puedes|puede|logro)|doesn't work|non funzion|no funciona|não funciona|ne fonctionne pas|failing|broken|rott/i.test(headingText)) return "problem";
+        if (/sound familiar|ring a bell|felt like|you've tried|ti è familiar|te suena|parece familiar|ça te parle/i.test(bodyText.substring(0, 300))) return "problem";
 
-        // Solution / how it works
-        if (/how (it|this) works|the (solution|answer|method|system|secret|process)|introducing|here'?s (how|what|why)/i.test(headingText)) return "solution";
-        if (/step \\d|step.?by.?step|module \\d|phase \\d|pillar \\d/i.test(bodyText)) return "solution";
+        // Solution / how it works — multilingual
+        if (/how (it|this) works|come funziona|cómo funciona|como funciona|comment ça marche|the (solution|answer|method|system|secret|process)|la (soluzione|risposta|metodo|sistema|segreto)|la (solución|respuesta|método|sistema|secreto)|a (solução|resposta|método|sistema)|la (solution|réponse|méthode)|introducing|presentiamo|presentamos|apresentamos|découvrez|here'?s (how|what|why)/i.test(headingText)) return "solution";
+        if (/step \\d|step.?by.?step|passo \\d|paso \\d|étape \\d|module \\d|modulo \\d|módulo \\d|phase \\d|fase \\d|pillar \\d|pilastro \\d/i.test(bodyText)) return "solution";
 
-        // Benefits / features / what you get
-        if (/what you (get|receive|learn|discover)|inside|everything (you get|included)|feature|benefit|here'?s what/i.test(headingText)) return "benefits";
+        // Benefits / features — multilingual
+        if (/what you (get|receive|learn|discover)|cosa (ottieni|ricevi|imparerai|scoprirai)|qué (obtienes|recibes|aprendes)|o que (vais|você vai) (receber|aprender)|ce que vous (obtenez|recevez)|inside|cosa c'è dentro|qué hay dentro|o que está dentro|ce qu'il y a (dedans|à l'intérieur)|everything (you get|included)|tutto incluso|todo incluido|tout inclus|feature|caratteristic|característic|caractéristique|benefit|beneficio|benefício|bénéfice|vantaggio|vantagem|avantage|here'?s what/i.test(headingText)) return "benefits";
 
-        // About / bio
-        if (/about (me|us|the)|who (we|i) (am|are)|my (story|mission|journey)|meet (your|the)|founder/i.test(headingText)) return "about";
+        // About / bio — multilingual
+        if (/about (me|us|the)|chi (sono|siamo)|sobre (mí|nosotros|mim|nós)|à propos (de moi|de nous)|who (we|i) (am|are)|my (story|mission|journey)|la mia (storia|missione)|mi (historia|misión)|minha (história|missão)|mon (histoire|parcours)|meet (your|the)|founder|fondator|fundador|fondateur/i.test(headingText)) return "about";
 
-        // Scarcity / urgency  
-        if (/limited|hurry|expir|countdown|only \\d+ (left|spot|seat)|act (now|fast|today)|don't (wait|miss)/i.test(headingText)) return "scarcity";
+        // Scarcity / urgency — multilingual
+        if (/limited|limitat|limitad|limité|hurry|sbrigati|apúrate|apresse|dépêche|expir|scad|venc|expir|countdown|conto alla rovescia|cuenta regresiva|contagem regressiva|compte à rebours|only \\d+ (left|spot|seat)|solo \\d+ (rimast|posti|cop)|solo quedan|apenas \\d+ (restante|vaga)|seulement \\d+ (restant|place)|act (now|fast|today)|agisci ora|actúa ahora|age agora|agissez maintenant|don't (wait|miss)|non (aspettare|perdere)|no (esperes|pierdas)|não (espere|perca)|ne (tardez|manquez)/i.test(headingText)) return "scarcity";
+        if (/esaurimento|agotado|esgotado|épuis|in esaurimento|scorte limitate|ultim[ei]\\s*\\d+/i.test(bodyText.substring(0, 300))) return "scarcity";
 
         // Hero — first section with a prominent heading
         var rect = el.getBoundingClientRect();
         var absTop = rect.top + (window.scrollY || window.pageYOffset);
         if (absTop < 200 && headingText.length > 15) return "hero";
 
-        // Footer
-        if (/copyright|\u00a9|all rights reserved|privacy|terms of (use|service)/i.test(bodyText) && bodyText.length < 200) return "footer";
+        // Footer — multilingual
+        if (/copyright|\u00a9|all rights reserved|tutti i diritti riservati|todos los derechos reservados|todos os direitos reservados|tous droits réservés|privacy|privacidad|privacidade|confidentialité|terms of (use|service)|termini d'uso|términos|termos de uso|conditions d'utilisation/i.test(bodyText) && bodyText.length < 250) return "footer";
 
-        // Default: use truncated heading as the label if we have one
+        // LAST-RESORT HEADING FALLBACK: If we still don't know what this is but we have
+        // a clear heading, return it as a slug instead of the generic "content". Gives
+        // Alberto a meaningful drop-off label for his Italian sections even when we don't
+        // have a perfect classifier match.
+        if (headingText && headingText.length >= 5 && headingText.length <= 80) {
+          var slug = headingText.toLowerCase()
+            .replace(/[^a-z0-9\\s]/g, "")
+            .trim()
+            .split(/\\s+/)
+            .slice(0, 4)
+            .join("_");
+          if (slug.length >= 3) return slug.substring(0, 40);
+        }
+
         return "content";
       }
 
-      // Find meaningful top-level sections — filter out tiny ones
+      // Find meaningful top-level sections — filter out tiny ones AND nested duplicates.
+      // The correct dedup is based on DOM ancestry: if any of my ancestors is already
+      // in the section map, I'm a nested child and should be skipped. Previous key-based
+      // dedup collided across unrelated sections with similar position/height.
       var candidates = document.querySelectorAll("section, [class*='section'], [role='region'], main > div, .container > div, #content > div, [class*='block'], [class*='row']");
       var map = [];
-      var seen = {};
+      var accepted = []; // actual DOM elements we've accepted
       candidates.forEach(function(el) {
-        // Skip tiny sections (< 100px tall) and invisible ones
+        // Skip tiny or invisible sections
         var rect = el.getBoundingClientRect();
         var absTop = rect.top + window.scrollY;
         var height = rect.height;
         if (height < 100 || rect.width < 200) return;
-        // Skip nested sections — if parent is already in our list, skip
-        var key = Math.round(absTop / 50) + "_" + Math.round(height / 50);
-        if (seen[key]) return;
-        seen[key] = true;
+
+        // Skip if any ancestor is already accepted (true nested-section dedup)
+        for (var a = 0; a < accepted.length; a++) {
+          if (accepted[a].contains(el)) return;
+        }
+
+        // Skip if this element contains a section we already accepted — shouldn't
+        // happen given DOM order, but defensive in case iteration is unusual
+        for (var b = 0; b < accepted.length; b++) {
+          if (el.contains(accepted[b])) return;
+        }
+
+        accepted.push(el);
         var offsetPct = Math.round(absTop / pageH * 100);
         var label = classifyEl(el);
         var heading = el.querySelector("h1, h2, h3, h4");
