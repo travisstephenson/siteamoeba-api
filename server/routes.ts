@@ -1864,13 +1864,17 @@ export async function registerRoutes(server: Server, app: Express) {
     let matchedCampaignId: number | null = null;
     let matchedVisitorId: string | null = null;
 
-    // 1. Customer chain (returning buyer)
+    // ATTRIBUTION WATERFALL — find the right campaign FIRST, then a visitor if possible.
+    // A sale belongs to whichever campaign its PRODUCT was sold from. Visitor match is
+    // additional enrichment, not a gate.
+
+    // 1. Customer chain: this Stripe customer bought from us before — use that campaign
     if (stripeCustomerId) {
       const cc = await pool.query("SELECT campaign_id FROM customer_campaigns WHERE user_id = $1 AND stripe_customer_id = $2 LIMIT 1", [userId, stripeCustomerId]);
       if (cc.rows.length > 0) matchedCampaignId = cc.rows[0].campaign_id;
     }
 
-    // 2. Email matches a converted visitor (pixel tracked their conversion)
+    // 2. Email → converted visitor (pixel tracked this buyer previously)
     if (!matchedCampaignId && customerEmail) {
       const em = await pool.query(
         `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
@@ -1879,7 +1883,45 @@ export async function registerRoutes(server: Server, app: Express) {
       if (em.rows.length > 0) { matchedVisitorId = em.rows[0].visitor_id; matchedCampaignId = em.rows[0].campaign_id; }
     }
 
-    // 3. Time proximity — pixel conversion within 2 hours of this charge
+    // 3. FUNNEL MATCH: the user set up a funnel in the dashboard naming every product
+    //    (front-end + order bumps + upsells) for each campaign. If Stripe's charge
+    //    description matches a funnel step name, we KNOW which campaign this sale belongs to.
+    //    This is the attribution path that should work for ALL non-pixel sales going forward.
+    if (!matchedCampaignId && chargeDesc) {
+      const descLower = chargeDesc.toLowerCase();
+      // Pull all funnel steps for this user's campaigns, ordered by length DESC so we match
+      // more specific names first (e.g. "Masterclass + Bump" before "Masterclass").
+      const fs = await pool.query(
+        `SELECT fs.campaign_id, fs.name, fs.price
+         FROM funnel_steps fs
+         JOIN campaigns c ON c.id = fs.campaign_id
+         WHERE c.user_id = $1
+         ORDER BY LENGTH(fs.name) DESC`,
+        [userId]
+      );
+      for (const step of fs.rows) {
+        const stepName = (step.name || "").toLowerCase();
+        if (!stepName) continue;
+        // Strip trailing "($27)" etc so we match on product text, not price
+        const stepCore = stepName.replace(/\s*\(\$[\d.]+\)\s*$/g, "").trim();
+        if (stepCore && descLower.includes(stepCore)) {
+          matchedCampaignId = step.campaign_id;
+          console.log(`[stripe-poll] Funnel match: "${step.name}" → C${matchedCampaignId}`);
+          break;
+        }
+      }
+    }
+
+    // 4. Legacy product_map (manual description → campaign mapping in Settings)
+    if (!matchedCampaignId && chargeDesc) {
+      const pm = await pool.query(
+        `SELECT campaign_id FROM product_map WHERE user_id = $1 AND LOWER($2) LIKE '%' || LOWER(description_pattern) || '%' LIMIT 1`,
+        [userId, chargeDesc]
+      );
+      if (pm.rows.length > 0 && pm.rows[0].campaign_id) matchedCampaignId = pm.rows[0].campaign_id;
+    }
+
+    // 5. Time proximity — pixel conversion within 2 hours of this charge
     if (!matchedCampaignId) {
       const tm = await pool.query(
         `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
@@ -1928,45 +1970,23 @@ export async function registerRoutes(server: Server, app: Express) {
       }
     }
 
-    // NO CHARGE IS EVER DROPPED. If we saw the sale, we record it.
-    // When we can't match to a visitor/campaign, we still create a revenue_event
-    // — attributed to the user's most recently active campaign (for visibility)
-    // and marked as unattributed in the feed. Dashboard totals MUST match Stripe.
-    if (!matchedCampaignId) {
-      // Find the user's most recently active campaign (by latest visitor or most recent creation)
-      const fallbackCampaign = await pool.query(
-        `SELECT c.id FROM campaigns c
-         LEFT JOIN visitors v ON v.campaign_id = c.id
-         WHERE c.user_id = $1 AND c.is_active = true
-         GROUP BY c.id
-         ORDER BY MAX(COALESCE(v.first_seen::timestamptz, c.created_at::timestamptz)) DESC NULLS LAST
-         LIMIT 1`,
-        [userId]
-      );
-      if (fallbackCampaign.rows.length > 0) {
-        matchedCampaignId = fallbackCampaign.rows[0].id;
-        console.log(`[stripe-poll] Unattributed charge $${amount} — recording against most-active campaign C${matchedCampaignId}`);
-      } else {
-        // No active campaigns at all — fall back to ANY campaign for this user
-        const anyCampaign = await pool.query(
-          `SELECT id FROM campaigns WHERE user_id = $1 ORDER BY id DESC LIMIT 1`,
-          [userId]
+    // THE PIXEL IS THE GATE. If no pixel-tracked visitor can be tied to this charge,
+    // the sale is not ours to attribute. We show ONLY what we can prove via:
+    //   - a stripe_customer we already saw convert on our pixel
+    //   - an email that matches a pixel-converted visitor
+    //   - a pixel conversion in time proximity
+    //   - a funnel step name match AS LONG AS a visitor from that campaign exists nearby
+    // If none of those, park it in rejected_charges and do NOT surface it.
+    if (!matchedCampaignId || !matchedVisitorId) {
+      console.log(`[stripe-poll] UNATTRIBUTED: $${amount} email=${customerEmail || 'none'} desc="${chargeDesc.substring(0, 60)}" — no pixel-tracked visitor, skipping`);
+      try {
+        await pool.query(
+          `INSERT INTO rejected_charges (user_id, charge_id, reason)
+           VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`,
+          [userId, externalId, `unattributed: no visitor match for ${customerEmail || 'unknown'} $${amount}`]
         );
-        if (anyCampaign.rows.length > 0) {
-          matchedCampaignId = anyCampaign.rows[0].id;
-        } else {
-          // Literally no campaigns exist for this user — only then do we skip
-          console.log(`[stripe-poll] User ${userId} has no campaigns, cannot record $${amount}`);
-          try {
-            await pool.query(
-              `INSERT INTO rejected_charges (user_id, charge_id, reason) VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`,
-              [userId, externalId, `no campaigns exist: ${customerEmail || 'unknown'} $${amount}`]
-            );
-          } catch (e) { /* non-fatal */ }
-          return false;
-        }
-      }
-      // matchedVisitorId remains null/undefined — revenue_event will record with NULL visitor_id
+      } catch (e) { /* non-fatal */ }
+      return false;
     }
 
     // Backfill email on visitor + set customer chain + mark converted
@@ -2144,6 +2164,8 @@ export async function registerRoutes(server: Server, app: Express) {
             let matchedCampaignId: number | null = null;
             let matchedVisitorId: string | null = null;
 
+            const productName = (txn.entitySourceName || txn.entityName || txn.name || '').toLowerCase();
+
             // 1. Email matches a visitor (converted or not)
             if (customerEmail) {
               const em = await pool.query(
@@ -2153,7 +2175,26 @@ export async function registerRoutes(server: Server, app: Express) {
               if (em.rows.length > 0) { matchedVisitorId = em.rows[0].visitor_id; matchedCampaignId = em.rows[0].campaign_id; }
             }
 
-            // 2. Time proximity — pixel conversion within 2 hours of this transaction
+            // 2. FUNNEL MATCH by product name
+            if (!matchedCampaignId && productName) {
+              const fs = await pool.query(
+                `SELECT fs.campaign_id, fs.name
+                 FROM funnel_steps fs JOIN campaigns c ON c.id = fs.campaign_id
+                 WHERE c.user_id = $1
+                 ORDER BY LENGTH(fs.name) DESC`,
+                [u.id]
+              );
+              for (const step of fs.rows) {
+                const stepCore = (step.name || '').toLowerCase().replace(/\s*\(\$[\d.]+\)\s*$/g, '').trim();
+                if (stepCore && productName.includes(stepCore)) {
+                  matchedCampaignId = step.campaign_id;
+                  console.log(`[ghl-poll] Funnel match: "${step.name}" → C${matchedCampaignId}`);
+                  break;
+                }
+              }
+            }
+
+            // 3. Time proximity — pixel conversion within 2 hours of this transaction
             if (!matchedCampaignId) {
               const tm = await pool.query(
                 `SELECT v.id AS visitor_id, v.campaign_id FROM visitors v JOIN campaigns c ON c.id = v.campaign_id
@@ -2179,36 +2220,22 @@ export async function registerRoutes(server: Server, app: Express) {
               }
             }
 
-            // NO SALE IS EVER DROPPED. Record every GHL transaction we see.
-            // If we can't match to a campaign, fall back to the user's most-active campaign.
-            if (!matchedCampaignId) {
-              const fallback = await pool.query(
-                `SELECT c.id FROM campaigns c
-                 LEFT JOIN visitors v ON v.campaign_id = c.id
-                 WHERE c.user_id = $1 AND c.is_active = true
-                 GROUP BY c.id
-                 ORDER BY MAX(COALESCE(v.first_seen::timestamptz, c.created_at::timestamptz)) DESC NULLS LAST
-                 LIMIT 1`,
-                [u.id]
-              );
-              if (fallback.rows.length > 0) {
-                matchedCampaignId = fallback.rows[0].id;
-                console.log(`[ghl-poll] Unattributed $${amount} — recording against most-active campaign C${matchedCampaignId}`);
-              } else {
-                const any = await pool.query(`SELECT id FROM campaigns WHERE user_id = $1 ORDER BY id DESC LIMIT 1`, [u.id]);
-                if (any.rows.length > 0) matchedCampaignId = any.rows[0].id;
-                else {
-                  console.log(`[ghl-poll] User ${u.id} has no campaigns, cannot record $${amount}`);
-                  try { await pool.query(`INSERT INTO rejected_charges (user_id, charge_id, reason) VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`, [u.id, externalId, `no campaigns: email=${customerEmail || 'none'} $${amount}`]); } catch {}
-                  continue;
-                }
-              }
-              // matchedVisitorId stays null — event still records, shows as unattributed in feed
+            // PIXEL-GATED: require BOTH a campaign and a visitor match before recording.
+            if (!matchedCampaignId || !matchedVisitorId) {
+              console.log(`[ghl-poll] UNATTRIBUTED: $${amount} email=${customerEmail || 'none'} product="${productName.substring(0, 40)}" — no pixel-tracked visitor, skipping`);
+              try {
+                await pool.query(
+                  `INSERT INTO rejected_charges (user_id, charge_id, reason)
+                   VALUES ($1, $2, $3) ON CONFLICT (charge_id) DO NOTHING`,
+                  [u.id, externalId, `ghl_unattributed: email=${customerEmail || 'none'} amount=$${amount}`]
+                );
+              } catch {}
+              continue;
             }
 
-            // Create revenue event — visitorId may be null for unattributed charges
+            // Create revenue event — visitorId guaranteed non-null by pixel gate above
             await storage.addRevenueEvent({
-              visitorId: matchedVisitorId || undefined,
+              visitorId: matchedVisitorId,
               campaignId: matchedCampaignId,
               source: "gohighlevel",
               eventType: "purchase",
