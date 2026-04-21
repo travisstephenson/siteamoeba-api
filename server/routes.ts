@@ -3579,12 +3579,17 @@ export async function registerRoutes(server: Server, app: Express) {
         return;
       }
 
-      const messages = buildFrameworkAnalysisPrompt(url, pageText, scanSections, pageGoal, niche);
+      // Cap sections to the top 12 scanned — rich analysis for 20+ sections overflows
+      // Haiku's context+output budget and returns truncated or empty JSON.
+      const trimmedSections = scanSections.slice(0, 12);
+      const messages = buildFrameworkAnalysisPrompt(url, pageText, trimmedSections, pageGoal, niche);
       const content = await callLLM(
         { provider: "anthropic", apiKey: platformKey, model: "claude-haiku-4-5-20251001" },
         messages,
-        { maxTokens: 8000 }  // Framework analysis output can run 5-7KB for 20+ section pages
+        { maxTokens: 8000 }
       );
+      // Debug: log first 300 chars of response so we can see what the model returned
+      console.log(`[framework-analysis] C${campaignId} raw response (first 300 chars): ${content?.substring(0, 300)}`);
 
       if (!content) {
         console.warn(`[framework-analysis] Empty response for C${campaignId}`);

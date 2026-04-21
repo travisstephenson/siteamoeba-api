@@ -357,8 +357,8 @@ Niche: ${niche || 'unknown'}
 Sections identified by the scanner:
 ${sectionSummary}
 
-Full page text:
-${pageText.substring(0, 20000)}
+Full page text (first 8KB for brevity):
+${pageText.substring(0, 8000)}
 
 Return the JSON framework analysis now. Structure:
 {
