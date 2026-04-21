@@ -3311,9 +3311,12 @@ function EmbedCodeSection({ campaignId, headlineSelector, subheadlineSelector, v
   const { toast } = useToast();
   const apiBase = getApiBaseUrl();
 
-  const scriptTagCode = wpCacheMode
-    ? `<script data-no-optimize="1" data-cfasync="false" src="${apiBase}/api/widget/script/${campaignId}"></script>`
-    : `<script src="${apiBase}/api/widget/script/${campaignId}"></script>`;
+  // Inline loader format — immune to LiteSpeed/WP Rocket/Autoptimize/Cloudflare Rocket Loader.
+  // These cache/optimize plugins scan HTML for <script src> tags and rewrite/defer them
+  // (LiteSpeed turns `src` into `data-src` + `type="litespeed/javascript"` which the browser never runs).
+  // By creating the script element at runtime inside an IIFE, there is nothing to rewrite at HTML-parse time.
+  const loaderAttrs = wpCacheMode ? ' data-no-optimize="1" data-cfasync="false"' : '';
+  const scriptTagCode = `<script${loaderAttrs}>(function(){var s=document.createElement('script');s.src='${apiBase}/api/widget/script/${campaignId}';s.async=true;s.setAttribute('data-cfasync','false');s.setAttribute('data-no-optimize','1');document.head.appendChild(s);})();</script>`;
 
   // Option 2: full inline code (for users who can't use external script tags)
   const inlineCode = generateEmbedCodeClient(apiBase, campaignId, headlineSelector, subheadlineSelector);
