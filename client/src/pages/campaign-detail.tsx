@@ -5786,7 +5786,13 @@ export default function CampaignDetailPage() {
                       } else {
                         toast({ title: "Rescan complete", description: `${result.updated} section${result.updated !== 1 ? "s" : ""} refreshed. No text changes detected.` });
                       }
-                      queryClient.invalidateQueries({ queryKey: [`/api/campaigns/${campaign?.id}/stats`] });
+                      // Use 3-segment key to match what the stats query registers with.
+                      // Previously this was a single template-literal string, which React Query
+                      // treats as a DIFFERENT key than ["/api/campaigns", id, "stats"] — so the
+                      // 'page changed' banner stayed on screen after a successful rescan.
+                      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaign?.id, "stats"] });
+                      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaign?.id, "test-sections"] });
+                      queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaign?.id] });
                     } else if (data.status === "error") {
                       setRescanLoading(false);
                       toast({ title: "Rescan failed", description: data.error, variant: "destructive" });
