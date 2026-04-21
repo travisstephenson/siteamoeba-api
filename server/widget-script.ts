@@ -225,49 +225,105 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   //   3. For buttons/CTAs, also search by element type + text content
   // When a selector targets multiple elements (multi-line headlines),
   // distribute text proportionally — each element keeps its own CSS.
-  // === ELEMENT LOOKUP — platform-agnostic, 3-strategy cascade ===
+  // === ELEMENT LOOKUP — text-first, platform-agnostic cascade ===
   // Returns an array of DOM elements to update.
-  // Strategy order is designed to work across GHL, Shopify, WordPress, Clickfunnels, etc.
+  //
+  // DESIGN PRINCIPLE (April 2026 rewrite): we match by TEXT, not by TAG.
+  // Two H1s on a page are not "the same element" — the hero_promise is a
+  // different JOB from a secondary outcome_promise, and the user's control_text
+  // captured at scan time is the ONLY reliable way to tell them apart.
+  //
+  // Strategy order (new):
+  //   1. EXACT text match against controlText/currentText anywhere on the page
+  //   2. Fuzzy text match (token scoring) against the same fingerprints
+  //   3. CSS selector, but only if we also verify the result contains the
+  //      expected text — otherwise fall through
+  //   4. Broader token-overlap scan on block-level elements (last resort)
   function findElements(selector, currentText, controlText, category) {
     var elements = [];
+    var isCTA = category === "cta" || category === "button";
 
-    // STRATEGY 1: Exact CSS selector
-    // Fastest. Works if the page hasn't been republished since the scan.
-    // GHL, Clickfunnels, and some builders regenerate these on every publish,
-    // so this may fail — that's why we have fallbacks.
+    // Normalize — lowercase, collapse whitespace, strip non-word chars.
+    // Keep the untouched version for a "did it match verbatim" check.
+    function normalize(s) {
+      return (s || "").toString().toLowerCase().replace(/\s+/g, " ").replace(/[^\w\s]/g, "").trim();
+    }
+    var controlRaw = (controlText || currentText || "").trim();
+    var controlNorm = normalize(controlRaw);
+
+    // ---------- STRATEGY 1: EXACT text match ----------
+    // Walk block-level + interactive elements and find any whose textContent
+    // (normalized) exactly equals the control text. This is how we guarantee
+    // that a "subheadline" variant never lands on the "headline" element even
+    // if both share the H1 tag.
+    if (controlNorm && controlNorm.length >= 3) {
+      var scanSelector = isCTA
+        ? "button, a, [role='button'], [class*='btn'], [class*='cbutton'], [class*='cta']"
+        : "h1, h2, h3, h4, h5, h6, p, span, div, [class*='heading'], [class*='cheading'], [class*='title']";
+      try {
+        var candidates = document.querySelectorAll(scanSelector);
+        for (var ei = 0; ei < candidates.length; ei++) {
+          // Skip deeply nested parents — we want the element whose text IS the
+          // control text, not a giant wrapper that happens to contain it.
+          if (candidates[ei].children.length > 8) continue;
+          var txt = normalize(candidates[ei].textContent);
+          if (!txt) continue;
+          if (txt === controlNorm) {
+            if (elements.indexOf(candidates[ei]) === -1) elements.push(candidates[ei]);
+          }
+        }
+      } catch(e) {}
+      if (elements.length > 0) return elements;
+    }
+
+    // ---------- STRATEGY 2: CSS selector, verified by text ----------
+    // Selector is useful but never authoritative. We only accept a selector
+    // result if the returned element's text also overlaps the control text
+    // (so a stale selector pointing at the wrong element fails closed).
     if (selector) {
       var parts = selector.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
+      var selElements = [];
       for (var i = 0; i < parts.length; i++) {
         try {
           var matches = document.querySelectorAll(parts[i]);
           for (var j = 0; j < matches.length; j++) {
-            if (elements.indexOf(matches[j]) === -1) elements.push(matches[j]);
+            if (selElements.indexOf(matches[j]) === -1) selElements.push(matches[j]);
           }
         } catch(e) {}
       }
-    }
-    // CRITICAL: If the selector matched multiple elements (e.g. "h1:first-of-type" on a GHL page
-    // matches EVERY h1 that is first-in-its-parent), filter down to only the element that actually
-    // contains the expected control text. Without this, text gets distributed across 20+ H1s.
-    if (elements.length > 1) {
-      var fp = (currentText || controlText || "").trim().toLowerCase();
-      var fpTokens = fp.split(/ +/).filter(function(w) { return w.length > 2; }).slice(0, 6);
-      if (fpTokens.length >= 2) {
-        var filtered = [];
-        for (var fi = 0; fi < elements.length; fi++) {
-          var elTxt = (elements[fi].textContent || "").trim().toLowerCase();
-          var hits = 0;
-          for (var ft = 0; ft < fpTokens.length; ft++) { if (elTxt.indexOf(fpTokens[ft]) !== -1) hits++; }
-          // Require 50%+ of tokens to match — enough to be confident it's the right element
-          if (hits >= Math.ceil(fpTokens.length * 0.5)) filtered.push(elements[fi]);
+      if (selElements.length > 0 && controlNorm && controlNorm.length >= 3) {
+        var fpTokens = controlNorm.split(/ +/).filter(function(w) { return w.length > 2; }).slice(0, 8);
+        var verified = [];
+        for (var fi = 0; fi < selElements.length; fi++) {
+          var elTxt = normalize(selElements[fi].textContent);
+          if (!elTxt) continue;
+          if (elTxt === controlNorm) {
+            verified.push(selElements[fi]);
+            continue;
+          }
+          // Token-overlap check — 60%+ tokens must appear in the candidate.
+          if (fpTokens.length >= 2) {
+            var hits = 0;
+            for (var ft = 0; ft < fpTokens.length; ft++) {
+              if (elTxt.indexOf(fpTokens[ft]) !== -1) hits++;
+            }
+            if (hits >= Math.ceil(fpTokens.length * 0.6)) verified.push(selElements[fi]);
+          }
         }
-        if (filtered.length > 0) elements = filtered;
+        if (verified.length > 0) return verified;
+        // Selector matched, but nothing verified by text. Fall through — we
+        // would rather miss a swap than apply the wrong one.
+      } else if (selElements.length === 1 && !controlNorm) {
+        // No control text recorded (edge case on very old sections) — trust
+        // the selector if it's unique.
+        return selElements;
       }
     }
-    if (elements.length > 0) return elements;
 
-    // STRATEGY 2: Find by actual page text captured at scan time (currentText)
-    // This is the PRIMARY cross-platform approach. Text content is platform-agnostic.
+    // ---------- STRATEGY 3: Fuzzy token-score text search ----------
+    // Same fingerprint-based search that was the old strategy 2. Runs only
+    // when exact match + selector-verified paths both failed — typically when
+    // the page's text has drifted slightly since the scan.
     // Works on GHL, Shopify, WordPress, Webflow, Clickfunnels, custom HTML — everything.
     // Uses token scoring so minor text changes (added words, punctuation) still match.
     var fingerprints = [currentText, controlText].filter(Boolean);
@@ -308,7 +364,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     }
     if (elements.length > 0) return elements;
 
-    // STRATEGY 3: Broader fallback — any visible text node that partially overlaps
+    // ---------- STRATEGY 4: Broader token-overlap (last resort) ----------
     // Last resort. Searches all block-level elements for any token overlap.
     if (fingerprints.length > 0) {
       var anyTokens = (fingerprints[0] || "").trim().toLowerCase().split(/ +/)

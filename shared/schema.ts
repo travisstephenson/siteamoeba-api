@@ -155,6 +155,25 @@ export const testSections = pgTable("test_sections", {
   testMethod: text("test_method").notNull().default("text_swap"),
   // Captured CSS properties from the live page (JSON string) — used for styled preview cards
   elementStyles: text("element_styles"),
+  // --- Persuasion metadata (enhanced scan) ---
+  // The JOB this section does in the sales psychology arc.
+  // e.g. hero_promise, problem_agitation, objection_handler, credibility_anchor,
+  //      mechanism_reveal, social_proof_stack, urgency_trigger, risk_reversal,
+  //      offer_stack, identity_call, transformation_hook
+  persuasionRole: text("persuasion_role"),
+  // attention | interest | desire | action | retention
+  funnelStage: text("funnel_stage"),
+  // curiosity_gap | loss_aversion | social_proof | authority | scarcity | reciprocity
+  // | identification | specificity | pattern_interrupt | future_pacing | commitment | risk_reversal
+  psychologicalLever: text("psychological_lever"),
+  // PAS | AIDA | hero_journey | product_launch_formula | storybrand | offer_stack | trust_stack | cta_ladder
+  framework: text("framework"),
+  // Free-text strategic angle explaining what this element does for the reader
+  angle: text("angle"),
+  // sha256 of normalized original text — primary attribution key for widget + editor
+  originalTextHash: text("original_text_hash"),
+  // 0-based order on the page — disambiguates duplicates
+  positionIndex: integer("position_index"),
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 

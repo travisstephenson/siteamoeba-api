@@ -821,7 +821,9 @@ function CampaignWizard({
       // 2. Create test sections + control variants for each selected section
       const selected = scanResult?.sections.filter((s) => selectedSections.has(s.id)) || [];
       for (const section of selected) {
-        // Create the test section
+        // Create the test section — pass the enhanced persuasion metadata through
+        // so every section row starts life knowing its role, lever, framework, etc.
+        // The server also computes originalTextHash + positionIndex defensively.
         await apiRequest("POST", `/api/campaigns/${campaign.id}/sections`, {
           sectionId: section.id,
           label: section.label,
@@ -832,6 +834,13 @@ function CampaignWizard({
           testPriority: section.testPriority,
           testMethod: section.testMethod || "text_swap",
           isActive: section.testPriority === 1, // activate highest priority section by default
+          persuasionRole: (section as any).persuasionRole ?? null,
+          funnelStage: (section as any).funnelStage ?? null,
+          psychologicalLever: (section as any).psychologicalLever ?? null,
+          framework: (section as any).framework ?? null,
+          angle: (section as any).angle ?? null,
+          originalTextHash: (section as any).originalTextHash ?? null,
+          positionIndex: (section as any).positionIndex ?? null,
         });
 
         // Create control variant for this section (if there's current text)

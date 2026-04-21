@@ -392,13 +392,13 @@ Return the JSON framework analysis now. Structure:
 
 export function buildPageScanPrompt(url: string, htmlContent: string): LLMMessage[] {
 
-  const systemPrompt = `You are an expert conversion rate optimization (CRO) analyst and direct-response copywriter. Your task is to analyze the HTML of a web page and identify all distinct, testable content sections.
+  const systemPrompt = `You are an expert conversion rate optimization (CRO) analyst and direct-response copywriter. You understand sales psychology at a deep level — not just "what tag is this" but "what JOB is this element doing for the reader."
 
 For each section you identify, you must:
 1. Determine the page type, goal, price point, and niche (see classification fields below)
 2. Find every distinct content section that could be A/B tested
 3. Suggest a CSS selector for each section (best effort — the user can adjust)
-4. Explain the sales psychology purpose of each section
+4. Classify the sales-psychology job of the element (persuasionRole, funnelStage, psychologicalLever, framework, angle)
 5. Rank by test priority — highest impact sections first (headlines are always #1)
 6. Extract the current visible text content. For body_copy and hero_journey sections, capture the FULL text (up to 2000 chars) including paragraph breaks as \n. For headlines, CTAs, and other short sections, truncate to 200 chars.
 7. Determine the testMethod for each section (see below)
@@ -452,6 +452,43 @@ Test priority guidelines:
 - Guarantee (7): Risk reversal
 - Other sections: Lower priority
 
+PERSUASION METADATA — fill these for EVERY section (this is how we stop treating elements as "just a tag" and start understanding what each one does):
+
+- persuasionRole: The specific JOB this element does. Choose the best match:
+  * hero_promise — the big outcome promise at the top (reader sees this first)
+  * outcome_promise — a secondary promise further down the page
+  * problem_agitation — making the reader feel the pain of their current situation
+  * objection_handler — addressing "what if I'm not ready / too late / not smart enough"
+  * credibility_anchor — founder story, proof of authority, "why trust me"
+  * mechanism_reveal — "here's the unique system / framework / method" that makes the promise believable
+  * social_proof_stack — testimonials, logos, counts, results from others
+  * urgency_trigger — deadline, quantity limit, time-boxed bonus
+  * risk_reversal — guarantee, money-back, "no questions asked"
+  * offer_stack — what's included, value comparison, bonus list
+  * identity_call — "this is for you if you're the kind of person who..."
+  * transformation_hook — future-pacing the reader's life after buying
+  * cta_action — the button/link asking for the click (NOT the same as offer_stack)
+  * section_header — transitional header that introduces the next block but isn't persuasive on its own
+  * utility — nav, footer, legal, policy links (rarely worth testing)
+
+- funnelStage: Where this sits in the reader's journey. Use AIDA+retention:
+  * attention | interest | desire | action | retention
+
+- psychologicalLever: The PRIMARY lever being pulled (pick ONE — the dominant one):
+  * curiosity_gap | loss_aversion | social_proof | authority | scarcity | reciprocity
+  * identification | specificity | pattern_interrupt | future_pacing | commitment | risk_reversal
+
+- framework: Which copywriting framework slot this section occupies:
+  * PAS | AIDA | hero_journey | product_launch_formula | storybrand | offer_stack | trust_stack | cta_ladder
+
+- angle: A SHORT (under 25 words) strategic sentence explaining the essence of what this element does for the reader. Example: "Positions the reader as a 'beginner' so their imposter syndrome becomes permission to buy."
+
+Rules of thumb so you don't cargo-cult this:
+- If two H1s exist, they are NOT both hero_promise. The first, biggest one is hero_promise; the second is probably outcome_promise or section_header.
+- A "Get It Now" button is cta_action with lever=commitment, NOT offer_stack.
+- A bullet list of features is offer_stack only if it's inside the "what's included" block. A feature teaser at the top is mechanism_reveal.
+- Don't tag 5 sections with lever=social_proof. If you see multiple social-proof blocks, they can differ: one is social_proof_stack (lever=social_proof), another might be credibility_anchor (lever=authority).
+
 Return ONLY valid JSON in this exact format:
 {
   "pageName": "Brief descriptive name of the page",
@@ -468,7 +505,12 @@ Return ONLY valid JSON in this exact format:
       "currentText": "The visible headline text here",
       "testPriority": 1,
       "category": "headline",
-      "testMethod": "text_swap"
+      "testMethod": "text_swap",
+      "persuasionRole": "hero_promise",
+      "funnelStage": "attention",
+      "psychologicalLever": "curiosity_gap",
+      "framework": "AIDA",
+      "angle": "Positions the product as the shortcut a beginner needs — curiosity about the specific '12 prompts' hooks the click."
     }
   ]
 }`;

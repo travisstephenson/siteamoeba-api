@@ -11,6 +11,8 @@ import { runCounsel, runPostMortem } from "./counsel";
 import { encryptApiKey, decryptApiKey } from "./encryption";
 import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildSectionGenerationPrompt, buildClassificationPrompt, buildPageScanPrompt, buildFrameworkAnalysisPrompt, buildBrainChatPrompt, buildTestLessonPrompt, buildCROReportPrompt, type GenerationContext } from "./prompts";
 import { getActiveTestState, reconcileVariantsOnSectionToggle } from "./active-tests";
+import { buildSectionMetadata, hashText, normalizeForHash, PERSUASION_ROLES, FUNNEL_STAGES, PSYCH_LEVERS, FRAMEWORKS } from "./persuasion-metadata";
+import { classifyAndPersistSection, backfillCampaignMetadata } from "./classify-section";
 import { getBrainPageAuditKnowledge, getRelevantTestLessons } from "./brain-selector";
 import { getNetworkIntelligence, refreshNetworkIntelligence } from "./network-intelligence";
 import { getCROKnowledge } from "./brain-cro-knowledge";
@@ -1670,17 +1672,19 @@ export async function registerRoutes(server: Server, app: Express) {
 
     const variantData: any = { ...parsed.data };
 
-    // Auto-assign testSectionId if missing — find the first active section matching this type
-    if (!variantData.testSectionId) {
-      try {
-        const matchingSections = await pool.query(
-          `SELECT id FROM test_sections WHERE campaign_id = $1 AND category = $2 AND is_active = true ORDER BY id LIMIT 1`,
-          [campaign.id, variantData.type || 'headline']
-        );
-        if (matchingSections.rows.length > 0) {
-          variantData.testSectionId = matchingSections.rows[0].id;
-        }
-      } catch {}
+    // ----- ATTRIBUTION GUARDRAIL (April 2026) -----
+    // We used to "rescue" a variant that arrived without a testSectionId by
+    // auto-assigning it to the first active section with the same category.
+    // That silent rescue is how a subheadline edit ended up gluing onto the
+    // headline test on C17. Never again.
+    //
+    // New rule: a non-control variant without a testSectionId is saved but
+    // forced inactive. The user must link it to a section explicitly (via
+    // the campaign dashboard or visual editor) before the widget will serve it.
+    // Controls are exempt — they're allowed to sit section-less as historical
+    // records of the original copy.
+    if (!variantData.testSectionId && !variantData.isControl) {
+      variantData.isActive = false;
     }
 
     // Sanitize variant text (preserve allowed HTML for colored/styled headlines)
@@ -3843,6 +3847,10 @@ export async function registerRoutes(server: Server, app: Express) {
         // Allow up to 2000 chars for body_copy/hero_journey, 300 for others
         const currentText = isLongSection ? rawText.slice(0, 2000) : rawText.slice(0, 300);
         const contentLength = rawText.length;
+        // Persuasion metadata — the canonical "what does this element DO" payload.
+        // buildSectionMetadata validates every field against its enum so a
+        // hallucinated value from the LLM becomes null instead of poisoning the DB.
+        const meta = buildSectionMetadata({ ...s, currentText }, i);
         return {
           id: String(s.id),
           label: String(s.label),
@@ -3853,6 +3861,15 @@ export async function registerRoutes(server: Server, app: Express) {
           testPriority: typeof s.testPriority === "number" ? s.testPriority : i + 1,
           category,
           testMethod: validTestMethods.includes(s.testMethod) ? String(s.testMethod) : "text_swap",
+          // Surface these on the scan result so the frontend can show "Role: Hero Promise"
+          // next to every checkbox in the section picker, and pass them to POST /sections.
+          persuasionRole: meta.persuasion_role,
+          funnelStage: meta.funnel_stage,
+          psychologicalLever: meta.psychological_lever,
+          framework: meta.framework,
+          angle: meta.angle,
+          originalTextHash: meta.original_text_hash,
+          positionIndex: meta.position_index,
         };
       })
       .sort((a: any, b: any) => a.testPriority - b.testPriority);
@@ -3921,13 +3938,38 @@ export async function registerRoutes(server: Server, app: Express) {
     if (!campaign || campaign.userId !== req.userId) {
       return res.status(404).json({ error: "Campaign not found" });
     }
-    const parsed = insertTestSectionSchema.safeParse({
-      ...req.body,
-      campaignId: campaign.id,
-    });
+    // Compute the text hash + position on the server so clients can't forget it
+    // and so every section row has a stable attribution key from birth.
+    const body = { ...req.body, campaignId: campaign.id };
+    if (!body.originalTextHash && body.currentText) {
+      body.originalTextHash = hashText(body.currentText);
+    }
+    if (body.positionIndex === undefined || body.positionIndex === null) {
+      body.positionIndex = typeof body.testPriority === "number" ? body.testPriority - 1 : 0;
+    }
+    const parsed = insertTestSectionSchema.safeParse(body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.issues });
     const section = await storage.createTestSection(parsed.data);
     res.status(201).json(section);
+  });
+
+  // POST /api/campaigns/:id/backfill-section-metadata
+  // One-shot endpoint that runs classifyAndPersistSection() over every section
+  // in this campaign that has null persuasion_role. Safe to call repeatedly —
+  // it only re-classifies unclassified rows, so no duplicate LLM spend.
+  // Exposed so the frontend can trigger enrichment on an older campaign the
+  // first time a user opens the dashboard after the enhanced scan rolled out.
+  app.post("/api/campaigns/:id/backfill-section-metadata", aiLimiter, requireAuth, async (req: Request, res: Response) => {
+    const campaignId = paramId(req.params.id);
+    const campaign = await storage.getCampaign(campaignId);
+    if (!campaign || campaign.userId !== req.userId) return res.status(404).json({ error: "Campaign not found" });
+    try {
+      const result = await backfillCampaignMetadata(campaignId);
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      console.error(`[backfill] C${campaignId} failed:`, err.message);
+      res.status(500).json({ error: "Backfill failed" });
+    }
   });
 
   // GET /api/campaigns/:id/test-sections — list all test sections (including inactive)
@@ -4064,20 +4106,59 @@ export async function registerRoutes(server: Server, app: Express) {
         let updated = 0, added = 0;
         const changedSections: any[] = [];
 
-        for (const ns of newSections) {
+        for (let i = 0; i < newSections.length; i++) {
+          const ns = newSections[i];
+          // Canonical persuasion metadata payload (role, lever, framework, hash, position).
+          // Computed here once and used for both UPDATE and INSERT so both paths carry
+          // the same structured "what this section does" information forward.
+          const meta = buildSectionMetadata(ns, i);
           const ex = existingMap.get(ns.id);
           if (ex) {
-            // Existing section — update text and selector if changed
+            // Existing section — update text, selector, AND persuasion metadata if changed.
+            // The rescan is the canonical moment to refresh how we understand the page,
+            // so we always write the new metadata even if the text didn't change.
             const textChanged = ex.current_text !== ns.currentText;
             if (textChanged || ex.selector !== ns.selector) {
               await pool.query(
-                `UPDATE test_sections SET current_text = $1, selector = $2, mismatch_detected = false, mismatch_count = 0 WHERE id = $3`,
-                [ns.currentText, ns.selector, ex.id]
+                `UPDATE test_sections
+                    SET current_text = $1,
+                        selector = $2,
+                        mismatch_detected = false,
+                        mismatch_count = 0,
+                        persuasion_role = $3,
+                        funnel_stage = $4,
+                        psychological_lever = $5,
+                        framework = $6,
+                        angle = $7,
+                        original_text_hash = $8,
+                        position_index = $9
+                  WHERE id = $10`,
+                [ns.currentText, ns.selector,
+                 meta.persuasion_role, meta.funnel_stage, meta.psychological_lever,
+                 meta.framework, meta.angle, meta.original_text_hash, meta.position_index,
+                 ex.id]
               );
               updated++;
               if (textChanged) {
                 changedSections.push({ id: ex.id, sectionId: ns.id, label: ns.label, oldText: ex.current_text, newText: ns.currentText });
               }
+            } else {
+              // Text/selector unchanged but we still want to backfill metadata
+              // the first time we see a section after the enhanced scan rolled out.
+              await pool.query(
+                `UPDATE test_sections
+                    SET persuasion_role    = COALESCE(persuasion_role,    $1),
+                        funnel_stage       = COALESCE(funnel_stage,       $2),
+                        psychological_lever= COALESCE(psychological_lever,$3),
+                        framework          = COALESCE(framework,          $4),
+                        angle              = COALESCE(angle,              $5),
+                        original_text_hash = COALESCE(original_text_hash, $6),
+                        position_index     = COALESCE(position_index,     $7)
+                  WHERE id = $8`,
+                [meta.persuasion_role, meta.funnel_stage, meta.psychological_lever,
+                 meta.framework, meta.angle, meta.original_text_hash, meta.position_index,
+                 ex.id]
+              );
             }
           }
           else {
@@ -4085,10 +4166,18 @@ export async function registerRoutes(server: Server, app: Express) {
             try {
               const category = (ns.category || "body_copy").toLowerCase();
               await pool.query(
-                `INSERT INTO test_sections (campaign_id, section_id, label, category, selector, current_text, test_method, test_priority, is_active)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false)
+                `INSERT INTO test_sections
+                    (campaign_id, section_id, label, category, selector, current_text,
+                     test_method, test_priority, is_active,
+                     persuasion_role, funnel_stage, psychological_lever, framework, angle,
+                     original_text_hash, position_index)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, false,
+                         $9, $10, $11, $12, $13, $14, $15)
                  ON CONFLICT DO NOTHING`,
-                [campaignId, ns.id, ns.label || ns.id, category, ns.selector || '', ns.currentText || '', ns.testMethod || 'text_swap', ns.testPriority || 5]
+                [campaignId, ns.id, ns.label || ns.id, category, ns.selector || '', ns.currentText || '',
+                 ns.testMethod || 'text_swap', ns.testPriority || 5,
+                 meta.persuasion_role, meta.funnel_stage, meta.psychological_lever,
+                 meta.framework, meta.angle, meta.original_text_hash, meta.position_index]
               );
               added++;
             } catch (addErr) {
