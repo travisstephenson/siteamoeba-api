@@ -9,7 +9,7 @@ import { storage, pool } from "./storage";
 import { callLLM, resolveLLMConfig } from "./llm";
 import { runCounsel, runPostMortem } from "./counsel";
 import { encryptApiKey, decryptApiKey } from "./encryption";
-import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildSectionGenerationPrompt, buildClassificationPrompt, buildPageScanPrompt, buildBrainChatPrompt, buildTestLessonPrompt, buildCROReportPrompt, type GenerationContext } from "./prompts";
+import { buildHeadlineGenerationPrompt, buildSubheadlineGenerationPrompt, buildSectionGenerationPrompt, buildClassificationPrompt, buildPageScanPrompt, buildFrameworkAnalysisPrompt, buildBrainChatPrompt, buildTestLessonPrompt, buildCROReportPrompt, type GenerationContext } from "./prompts";
 import { getBrainPageAuditKnowledge, getRelevantTestLessons } from "./brain-selector";
 import { getNetworkIntelligence, refreshNetworkIntelligence } from "./network-intelligence";
 import { getCROKnowledge } from "./brain-cro-knowledge";
@@ -1263,6 +1263,85 @@ export async function registerRoutes(server: Server, app: Express) {
     } catch (err: any) {
       await pgPool.end();
       res.status(500).json({ error: "Failed to restart test: " + (err.message || "") });
+    }
+  });
+
+  // ============== FRAMEWORK ANALYSIS ==============
+
+  // GET /api/campaigns/:id/framework-analysis
+  //   Returns the stored framework analysis for a campaign. UI uses this to render
+  //   Section Intelligence card, Brain chat reads it as context, CRO report surfaces it.
+  app.get("/api/campaigns/:id/framework-analysis", requireAuth, async (req: Request, res: Response) => {
+    const campaign = await storage.getCampaign(paramId(req.params.id));
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    const row = await pool.query(
+      `SELECT framework_analysis, framework_analysis_updated_at FROM campaigns WHERE id = $1`,
+      [campaign.id]
+    );
+    const analysis = row.rows[0]?.framework_analysis || null;
+    const updatedAt = row.rows[0]?.framework_analysis_updated_at || null;
+    return res.json({
+      analysis,
+      updatedAt,
+      hasAnalysis: !!analysis,
+    });
+  });
+
+  // POST /api/campaigns/:id/framework-analysis/run
+  //   Manual trigger to run the analysis on an existing campaign without rescanning
+  //   everything. Uses the already-stored scan sections (test_sections rows) and
+  //   re-extracts the page text from the live URL.
+  app.post("/api/campaigns/:id/framework-analysis/run", aiLimiter, requireAuth, async (req: Request, res: Response) => {
+    const campaign = await storage.getCampaign(paramId(req.params.id));
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    try {
+      // Pull this campaign's test_sections so the LLM knows what the scanner saw
+      const secs = await pool.query(
+        `SELECT section_id AS id, label, category, current_text AS "currentText", selector
+         FROM test_sections WHERE campaign_id = $1 ORDER BY test_priority ASC`,
+        [campaign.id]
+      );
+      if (secs.rows.length === 0) {
+        return res.status(400).json({ error: "Campaign has no scanned sections yet. Run a scan or rescan first." });
+      }
+
+      // Fetch and extract page text fresh
+      const pageResp = await fetch(campaign.url, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; SiteAmoeba/1.0)" },
+      }).catch(() => null);
+      if (!pageResp || !pageResp.ok) {
+        return res.status(502).json({ error: "Could not fetch the page for analysis" });
+      }
+      const html = await pageResp.text();
+      const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      const bodyHtml = bodyMatch ? bodyMatch[1] : html;
+      const cleanedText = extractPageText(bodyHtml).slice(0, 20000);
+
+      // Fire and await so the response tells the user whether it worked
+      await runFrameworkAnalysis(
+        campaign.id,
+        campaign.url,
+        cleanedText,
+        secs.rows,
+        (campaign as any).pageGoal || undefined,
+        (campaign as any).niche || undefined,
+      );
+
+      const updated = await pool.query(
+        `SELECT framework_analysis, framework_analysis_updated_at FROM campaigns WHERE id = $1`,
+        [campaign.id]
+      );
+      return res.json({
+        ok: true,
+        analysis: updated.rows[0]?.framework_analysis || null,
+        updatedAt: updated.rows[0]?.framework_analysis_updated_at || null,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err?.message || "Framework analysis failed" });
     }
   });
 
@@ -3473,6 +3552,72 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   }, 60000);
 
+  /**
+   * Framework analysis runner — called after a successful scan/rescan.
+   *
+   * Always uses the platform key (per Travis's directive: scanning always uses
+   * platform key, and this is part of the scan flow). Fire-and-forget: does
+   * not block the scan response. On success, writes to campaigns.framework_analysis.
+   * On failure, logs but does not retry — next rescan will re-attempt.
+   */
+  async function runFrameworkAnalysis(
+    campaignId: number,
+    url: string,
+    pageText: string,
+    scanSections: Array<any>,
+    pageGoal?: string,
+    niche?: string
+  ): Promise<void> {
+    try {
+      if (!scanSections || scanSections.length === 0) return;
+
+      // Platform key, always
+      const platformKey = process.env.PLATFORM_OPENAI_KEY || process.env.OPENAI_API_KEY;
+      if (!platformKey) {
+        console.warn(`[framework-analysis] No platform OpenAI key; skipping C${campaignId}`);
+        return;
+      }
+
+      const messages = buildFrameworkAnalysisPrompt(url, pageText, scanSections, pageGoal, niche);
+      const content = await callLLM(
+        { provider: "openai", apiKey: platformKey, model: "gpt-4o-mini" },
+        messages,
+        { maxTokens: 4000 }
+      );
+
+      if (!content) {
+        console.warn(`[framework-analysis] Empty response for C${campaignId}`);
+        return;
+      }
+
+      // Strip any markdown code fences the model may wrap around the JSON
+      const cleaned = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/g, "").trim();
+
+      let parsed;
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch (e: any) {
+        console.warn(`[framework-analysis] JSON parse failed for C${campaignId}: ${e.message}`);
+        return;
+      }
+
+      // Basic shape validation — require at least section_analysis array
+      if (!Array.isArray(parsed?.section_analysis)) {
+        console.warn(`[framework-analysis] Bad shape for C${campaignId}: no section_analysis`);
+        return;
+      }
+
+      await pool.query(
+        `UPDATE campaigns SET framework_analysis = $1, framework_analysis_updated_at = NOW() WHERE id = $2`,
+        [JSON.stringify(parsed), campaignId]
+      );
+
+      console.log(`[framework-analysis] C${campaignId}: saved (${parsed.section_analysis.length} sections, framework=${parsed.overall_framework || 'unknown'}, grade=${parsed.copy_grade_overall || '?'})`);
+    } catch (err: any) {
+      console.error(`[framework-analysis] Failed for C${campaignId}:`, err?.message || err);
+    }
+  }
+
   // GET /api/scan-status/:jobId — poll for async scan result
   app.get("/api/scan-status/:jobId", requireAuth, async (req: Request, res: Response) => {
     const job = scanJobs.get(req.params.jobId);
@@ -3691,6 +3836,17 @@ export async function registerRoutes(server: Server, app: Express) {
             pageVideoCount,
             pageSectionCount,
           } as any);
+
+          // Kick off framework analysis in the background. Does not block scan response.
+          // Populates campaigns.framework_analysis for Brain chat, CRO report, drop-off charts.
+          void runFrameworkAnalysis(
+            campaignId,
+            url,
+            cleaned,
+            scanResult.sections,
+            scanResult.pageGoal,
+            scanResult.niche
+          );
         }
       } catch (err) {
         // Non-fatal — scan result is still returned
@@ -3895,6 +4051,16 @@ export async function registerRoutes(server: Server, app: Express) {
           result: { updated, added, changedSections, totalScanned: newSections.length },
         });
         console.log(`[rescan] Campaign ${campaignId}: ${updated} updated, ${added} new sections added, ${newSections.length} total scanned`);
+
+        // Refresh the framework analysis with the latest scan output. Fire-and-forget.
+        void runFrameworkAnalysis(
+          campaignId,
+          campaign.url,
+          cleaned,
+          newSections,
+          (campaign as any).pageGoal || undefined,
+          (campaign as any).niche || undefined
+        );
 
       } catch (err: any) {
         scanJobs.set(jobId, { status: "error", error: err.message, createdAt: Date.now() });

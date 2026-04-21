@@ -295,6 +295,101 @@ Return ONLY the JSON array with objects containing: text, strategy, reasoning, b
 // PAGE SCAN PROMPT
 // ============================================================
 
+/**
+ * FRAMEWORK ANALYSIS PROMPT
+ * 
+ * Runs AFTER the regular scan to produce copywriting-framework intelligence.
+ * Takes the scan output + the raw page text and returns a rich analysis:
+ *   - per-section copy_role, framework, psychological_lever, grade
+ *   - overall framework composition (e.g. "PAS + hero_journey + offer_stack")
+ *   - missing sections the page should consider
+ *   - overall copy grade and prioritized CRO recommendations
+ * 
+ * This becomes the ground truth for Brain chat, CRO reports, drop-off analysis,
+ * and cross-site pattern aggregates.
+ */
+export function buildFrameworkAnalysisPrompt(
+  url: string,
+  pageText: string,
+  scanSections: Array<{ label: string; category: string; currentText: string; selector?: string }>,
+  pageGoal?: string,
+  niche?: string
+): LLMMessage[] {
+  const sectionSummary = scanSections
+    .map((s, i) => `[${i}] ${s.category}/${s.label}: "${(s.currentText || '').substring(0, 180)}"`)
+    .join('\n');
+
+  const systemPrompt = `You are a world-class direct-response copywriter and CRO analyst. You've studied the great copywriting frameworks — PAS (Problem-Agitation-Solution), AIDA, the 4 Ps, hero's journey, Dan Kennedy's deadly 19, Halbert's star-story-solution, and modern frameworks like StoryBrand.
+
+Your job: analyze this sales page and produce a structured copywriting framework analysis.
+
+For EACH section the scanner identified, classify:
+1. copy_role — the specific copywriting job this section is doing. Be precise. Use labels like:
+   hero_big_promise, problem_identification, problem_agitation, origin_story, credibility_intro,
+   solution_reveal, mechanism_explanation, proof_of_concept, social_proof_video, social_proof_stats,
+   testimonial_wall, authority_stack, offer_introduction, product_stack, bonus_stack, price_anchor,
+   price_reveal, value_stack, risk_reversal, urgency_scarcity, cta_primary, cta_soft, faq_handling,
+   objection_handler, founder_story, methodology_breakdown, results_showcase, comparison_table,
+   transition, housekeeping_footer
+2. framework — which primary copywriting framework this section belongs to (PAS, AIDA, hero_journey, storybrand, product_stack, offer_stack, trust_stack, cta_ladder, etc.)
+3. psychological_lever — the specific persuasion principle at work (specificity, social_proof, loss_aversion, authority, reciprocity, scarcity, identification, pattern_interrupt, commitment, curiosity_gap, future_pacing, risk_reversal, etc.)
+4. strengths — 1-3 SPECIFIC things this section does well (reference actual words from the copy)
+5. weaknesses — 1-3 SPECIFIC missed opportunities
+6. grade — letter grade A+/A/A-/B+/B/B-/C+/C/C-/D/F based on how well this section plays its role
+
+Then for the WHOLE page, produce:
+- overall_framework: string summarizing the page's arc (e.g. "PAS -> hero_journey -> offer_stack -> trust_stack -> CTA")
+- detected_frameworks: array of frameworks actively used (subset of: PAS, AIDA, 4Ps, hero_journey, storybrand, product_launch_formula, problem_agitation, offer_stack, trust_stack, cta_ladder, founder_story, mechanism_hook)
+- missing_sections: array of standard sections this page DOESN'T have but SHOULD for its goal/niche. Examples: "founder_story", "risk_reversal_early", "mechanism_explanation", "price_anchor", "scarcity_with_reason"
+- sequence_analysis: 1-3 sentences on whether the order of sections is optimal. Reference specific positions. E.g. "Problem agitation hits before solution reveal (correct), but risk reversal arrives after the CTA stack at 91% scroll — should be anchored near the first CTA at 30%."
+- copy_grade_overall: letter grade
+- positioning_analysis: 1-2 sentences on the positioning/angle of the offer and whether it's compelling
+- cro_recommendations: array of 3-6 specific, actionable recommendations. Each is { priority: "high"|"medium"|"low", section_idx: number (which scan section it relates to, -1 if new section), issue: string, suggestion: string, expected_lift: string (qualitative e.g. "significant on cold traffic") }
+
+BE SPECIFIC. Reference actual copy from the page. Avoid generic advice like "add social proof" — instead say "Section 5's social proof is vague ('many customers love it'). Replace with a specific number + timeframe ('2,400+ women lost 4+kg in 21 days')."
+
+Return ONLY valid JSON. No markdown, no commentary.`;
+
+  const userMessage = `URL: ${url}
+Page goal: ${pageGoal || 'unknown'}
+Niche: ${niche || 'unknown'}
+
+Sections identified by the scanner:
+${sectionSummary}
+
+Full page text:
+${pageText.substring(0, 20000)}
+
+Return the JSON framework analysis now. Structure:
+{
+  "section_analysis": [
+    {
+      "section_idx": 0,
+      "copy_role": "hero_big_promise",
+      "framework": "PAS",
+      "psychological_lever": "specificity + identification",
+      "strengths": ["specific timeframe (21 days)", "emotional proof (husband noticed)"],
+      "weaknesses": ["no credibility marker for the claim"],
+      "grade": "A-"
+    }
+  ],
+  "overall_framework": "PAS -> hero_journey -> offer_stack -> trust_stack -> CTA",
+  "detected_frameworks": ["PAS", "hero_journey", "offer_stack"],
+  "missing_sections": ["mechanism_explanation", "risk_reversal_early"],
+  "sequence_analysis": "...",
+  "copy_grade_overall": "B+",
+  "positioning_analysis": "...",
+  "cro_recommendations": [
+    { "priority": "high", "section_idx": 3, "issue": "...", "suggestion": "...", "expected_lift": "..." }
+  ]
+}`;
+
+  return [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userMessage },
+  ];
+}
+
 export function buildPageScanPrompt(url: string, htmlContent: string): LLMMessage[] {
 
   const systemPrompt = `You are an expert conversion rate optimization (CRO) analyst and direct-response copywriter. Your task is to analyze the HTML of a web page and identify all distinct, testable content sections.
