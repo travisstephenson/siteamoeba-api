@@ -149,9 +149,44 @@ export default function VisualEditorPage() {
     enabled: isAuthenticated && !isNaN(campaignId),
   });
 
-  // Real active challenger variants (not instructions, not control)
-  const activeChallengers = allVariants.filter(v => !v.isControl && v.isActive && isRealVariant(v));
-  const hasActiveTest = activeChallengers.length > 0;
+  // Fetch the test sections so we can determine which section a variant belongs to
+  // AND whether that section is actually toggled ON. A challenger that isn't linked to
+  // an ACTIVE section should NOT show up as a 'live variant' in the editor.
+  const { data: testSections = [] } = useQuery<any[]>({
+    queryKey: ["/api/campaigns", campaignId, "test-sections"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", `/api/campaigns/${campaignId}/test-sections`);
+      return res.json();
+    },
+    enabled: isAuthenticated && !isNaN(campaignId),
+  });
+
+  // Build a quick lookup of which sections are currently active
+  const activeSectionIds = new Set(
+    (testSections || []).filter((s: any) => s.isActive).map((s: any) => s.id)
+  );
+
+  // Only surface challengers that (a) are active in the DB AND (b) belong to a section
+  // the user has toggled ON in the dashboard. Previously, orphaned is_active variants
+  // showed up in the editor as 'Active Test' even when every section toggle was OFF.
+  const activeChallengers = allVariants.filter(v =>
+    !v.isControl && v.isActive && isRealVariant(v) &&
+    v.testSectionId && activeSectionIds.has(v.testSectionId)
+  );
+
+  // Group challengers BY SECTION so the panel shows distinct tests separately
+  // (instead of labeling a body-copy variant and a headline variant as 'A' and 'B').
+  const challengersBySection = activeChallengers.reduce((acc: Record<number, { section: any; challengers: Variant[] }>, v) => {
+    const sid = v.testSectionId as number;
+    if (!acc[sid]) {
+      const section = (testSections || []).find((s: any) => s.id === sid);
+      acc[sid] = { section, challengers: [] };
+    }
+    acc[sid].challengers.push(v);
+    return acc;
+  }, {});
+  const activeSectionGroups = Object.values(challengersBySection);
+  const hasActiveTest = activeSectionGroups.length > 0;
 
   // ---- postMessage listener ----
 
@@ -231,13 +266,29 @@ export default function VisualEditorPage() {
       iframeRef.current.contentWindow.postMessage({ type: "SA_RESET_VIEW" }, "*");
       setPreviewVariantId(null);
     } else {
-      let elementIdentity = null;
-      let styleOverridesData = null;
+      let elementIdentity: any = null;
+      let styleOverridesData: any = null;
       try {
         const m = JSON.parse(variant.mutations || "{}");
         elementIdentity = m.elementIdentity;
         styleOverridesData = m.styleOverrides;
       } catch {}
+
+      // FALLBACK: variants created by scan/autopilot (not the visual editor) have
+      // mutations = []. Without elementIdentity the iframe has nothing to target.
+      // Derive it from the test section's CSS selector + control text (same signals
+      // the widget uses at runtime) so the preview still works.
+      if (!elementIdentity) {
+        const section = (testSections || []).find((s: any) => s.id === variant.testSectionId);
+        if (section) {
+          elementIdentity = {
+            selector: section.selector || (variant.type === "headline" ? "h1" : variant.type === "subheadline" ? "h2" : undefined),
+            currentText: section.currentText || "",
+            tagName: (variant.type === "headline" ? "H1" : variant.type === "subheadline" ? "H2" : "DIV"),
+          };
+        }
+      }
+
       iframeRef.current.contentWindow.postMessage({
         type: "SA_APPLY_VARIANT",
         data: { variantId: variant.id, text: variant.text, elementIdentity, styleOverrides: styleOverridesData }
@@ -459,38 +510,52 @@ export default function VisualEditorPage() {
           <ScrollArea className="flex-1">
             <div className="p-4 space-y-4">
 
-              {/* ── Active Test Preview ── */}
+              {/* ── Active Tests ── one group per active section ── */}
               {hasActiveTest && (
                 <>
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     <div className="flex items-center gap-2">
                       <Layers className="w-3.5 h-3.5 text-muted-foreground" />
                       <Label className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                        Active Test
+                        {activeSectionGroups.length === 1 ? "Active Test" : `Active Tests (${activeSectionGroups.length})`}
                       </Label>
                     </div>
+
+                    {/* Global Control button — resets the page to its original rendering */}
                     <button onClick={() => sendPreviewToIframe(null)}
                       className={`w-full text-left rounded-lg border p-2.5 transition-colors ${
                         previewVariantId === null ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/30"
                       }`}>
                       <div className="flex items-center gap-2">
                         <Badge variant="outline" className="text-[10px]">Control</Badge>
-                        <span className="text-xs text-muted-foreground">Original page</span>
+                        <span className="text-xs text-muted-foreground">Show the page as visitors see it</span>
                       </div>
                     </button>
-                    {activeChallengers.map((v, idx) => (
-                      <button key={v.id} onClick={() => sendPreviewToIframe(v)}
-                        className={`w-full text-left rounded-lg border p-2.5 transition-colors ${
-                          previewVariantId === v.id ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/30"
-                        }`}>
-                        <div className="flex items-center gap-2 mb-1">
-                          <Badge variant={previewVariantId === v.id ? "default" : "secondary"} className="text-[10px]">
-                            Variant {String.fromCharCode(65 + idx)}
-                          </Badge>
-                          <Eye className="w-3 h-3 text-muted-foreground" />
+
+                    {/* One group per active section. Each group's variants are labeled
+                        A, B, C … within that section, so the labels make sense. */}
+                    {activeSectionGroups.map(({ section, challengers }) => (
+                      <div key={section?.id || Math.random()} className="space-y-1.5">
+                        <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-medium uppercase tracking-wide px-1">
+                          <span>{section?.label || "Unnamed section"}</span>
+                          <span className="text-muted-foreground/50">·</span>
+                          <span className="lowercase">{section?.category}</span>
                         </div>
-                        <p className="text-xs text-foreground leading-snug line-clamp-2">{v.text}</p>
-                      </button>
+                        {challengers.map((v, idx) => (
+                          <button key={v.id} onClick={() => sendPreviewToIframe(v)}
+                            className={`w-full text-left rounded-lg border p-2.5 transition-colors ${
+                              previewVariantId === v.id ? "border-primary bg-primary/5" : "border-border hover:border-muted-foreground/30"
+                            }`}>
+                            <div className="flex items-center gap-2 mb-1">
+                              <Badge variant={previewVariantId === v.id ? "default" : "secondary"} className="text-[10px]">
+                                Variant {String.fromCharCode(65 + idx)}
+                              </Badge>
+                              <Eye className="w-3 h-3 text-muted-foreground" />
+                            </div>
+                            <p className="text-xs text-foreground leading-snug line-clamp-2">{v.text}</p>
+                          </button>
+                        ))}
+                      </div>
                     ))}
                   </div>
                   <Separator />
