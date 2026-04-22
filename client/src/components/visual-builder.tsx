@@ -90,23 +90,27 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
       const msg = ev.data || {};
       if (msg.type === "SA_ELEMENT_SELECTED") {
         const d = msg.data;
-        setSelection({
-          tagName: d.tagName,
-          originalText: d.originalText,
-          treePath: d.treePath,
-          elementHash: d.elementHash || "",
-          computedStyles: d.computedStyles || {},
-          isImage: !!d.isImage,
-        });
-        // If the user re-clicks an element, seed the variant text with its
-        // current content so they can tweak from there. Only if variantText
-        // is empty OR was equal to the previous selection's text (so we don't
-        // clobber active edits).
-        setVariantText((prev) => (prev.trim() === "" ? d.originalText : prev));
-        // Reset any style overrides from the prior element
+        // Reset editing state fully when a different element is selected.
+        // This prevents old textarea text from getting written onto the
+        // newly selected element via the debounced preview effect.
+        setVariantText("");
+        setMode("choose");
         setStyleOverrides({});
-        // Revert iframe so styles from a previous preview don't leak over
-        iframeRef.current?.contentWindow?.postMessage({ type: "SA_COMMAND_REVERT" }, "*");
+        setSavedVariantId(null);
+        setAiSuggestions([]);
+        setChosenAiIndex(null);
+        // Brief pause so the reset propagates before the new selection lands
+        // (prevents a stale SA_COMMAND_PREVIEW_TEXT from firing on the new el)
+        setTimeout(() => {
+          setSelection({
+            tagName: d.tagName,
+            originalText: d.originalText,
+            treePath: d.treePath,
+            elementHash: d.elementHash || "",
+            computedStyles: d.computedStyles || {},
+            isImage: !!d.isImage,
+          });
+        }, 80);
       } else if (msg.type === "SA_FOCUS_NOT_FOUND") {
         // Section text wasn't found on the live page. User must click manually.
         // Don't toast — the sidebar empty state already tells them what to do.
@@ -133,16 +137,23 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
   // ---------- Push variantText → iframe live preview on change ----------
   useEffect(() => {
     if (!iframeReady || !selection) return;
-    // Debounce a tiny bit to avoid flooding the iframe with postMessages on every keystroke
+    // Only push a preview when the text differs from the original. When
+    // variantText is empty (user cleared it, or a fresh selection reset it),
+    // do NOT send any command — let the current page state persist. Clicking
+    // a new element already reset the prior one in the bridge.
+    const trimmed = variantText.trim();
+    if (trimmed === "") return;
+    if (trimmed === (selection.originalText || "").trim()) {
+      // Same text as original — tell the iframe to revert so any prior preview clears
+      iframeRef.current?.contentWindow?.postMessage({ type: "SA_COMMAND_REVERT" }, "*");
+      return;
+    }
+    // Debounce to avoid flooding the iframe on every keystroke
     const t = setTimeout(() => {
-      if (variantText.trim().length === 0) {
-        iframeRef.current?.contentWindow?.postMessage({ type: "SA_COMMAND_REVERT" }, "*");
-      } else {
-        iframeRef.current?.contentWindow?.postMessage(
-          { type: "SA_COMMAND_PREVIEW_TEXT", text: variantText },
-          "*",
-        );
-      }
+      iframeRef.current?.contentWindow?.postMessage(
+        { type: "SA_COMMAND_PREVIEW_TEXT", text: variantText },
+        "*",
+      );
     }, 60);
     return () => clearTimeout(t);
   }, [variantText, selection, iframeReady]);
@@ -306,8 +317,8 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!o) handleCancel(); }}>
-      <DialogContent className="max-w-[97vw] w-[97vw] h-[94vh] p-0 gap-0 overflow-hidden">
-        <div className="flex h-full">
+      <DialogContent className="max-w-[97vw] w-[97vw] h-[94vh] p-0 gap-0 overflow-hidden flex flex-col">
+        <div className="flex h-full min-h-0">
           {/* LEFT: live preview iframe */}
           <div className="flex-1 min-w-0 flex flex-col">
             <div className="px-4 py-2.5 border-b bg-gradient-to-r from-primary to-emerald-500 text-white flex items-center justify-between gap-3">
@@ -401,8 +412,10 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
             </div>
           </div>
 
-          {/* RIGHT: sidebar */}
-          <div className="w-[380px] border-l bg-card flex flex-col shrink-0">
+          {/* RIGHT: sidebar — flex column where the middle is the only scrollable
+              region. min-h-0 is REQUIRED on the column so the overflow-y child
+              actually scrolls (flex children ignore overflow without it). */}
+          <div className="w-[380px] border-l bg-card flex flex-col shrink-0 min-h-0">
             {/* Selection info */}
             <div className="p-4 border-b space-y-2">
               <div className="flex items-center gap-2">
@@ -429,8 +442,8 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
               )}
             </div>
 
-            {/* Main body: scrollable */}
-            <div className="flex-1 overflow-y-auto">
+            {/* Main body: scrollable. min-h-0 here too, belt and braces. */}
+            <div className="flex-1 overflow-y-auto min-h-0">
               {/* Mode chooser */}
               {mode === "choose" && selection && !selection.isImage && (
                 <div className="p-4 space-y-3">
