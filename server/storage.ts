@@ -791,11 +791,13 @@ class StorageImpl implements IStorage {
     await db.update(testSections).set({ isActive: false }).where(eq(testSections.campaignId, id));
     // Deactivate all variants
     await db.update(variants).set({ isActive: false }).where(eq(variants.campaignId, id));
-    // Archive the campaign
+    // Archive the campaign + fully reset autopilot so a poll never picks this up again
     const rows = await db.update(campaigns).set({
       status: 'archived',
       archivedAt: now,
       isActive: false,
+      autopilotEnabled: false,
+      autopilotStatus: 'paused',
     }).where(eq(campaigns.id, id)).returning();
     return rows[0];
   }
