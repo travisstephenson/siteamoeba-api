@@ -4004,7 +4004,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
     let rawResponse: string;
     try {
-      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 12000 });
+      rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 32000 });
     } catch (err: any) {
       console.error("Page scan LLM call failed:", err);
       scanJobs.set(jobId, { status: "error", error: err.message || "AI provider error. Check your API key and credits in Settings.", createdAt: Date.now() }); return;
@@ -4302,8 +4302,8 @@ export async function registerRoutes(server: Server, app: Express) {
         // Bumped from 8000 → 12000 tokens so enriched persuasion metadata doesn't
         // get truncated on 20+ section pages. Each section's angle/role fields add ~80 chars.
         const rawResponse = await Promise.race([
-          callLLM(llmConfigResolved.config, messages, { maxTokens: 12000 }),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("LLM call timed out after 120s")), 120000)),
+          callLLM(llmConfigResolved.config, messages, { maxTokens: 32000 }),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("LLM call timed out after 180s")), 180000)),
         ]);
 
         // Quick observability: log the first chunk of raw output so we can see
@@ -4312,9 +4312,57 @@ export async function registerRoutes(server: Server, app: Express) {
 
         // Same JSON parsing as initial scan, with verbose diagnostics so we
         // don't have to guess what went wrong when "Scan found no sections" fires.
+        //
+        // This ALSO now salvages truncated responses. LLMs on long pages often
+        // hit max_tokens mid-generation — the response ends with an unterminated
+        // string inside the last section object. We trim back to the last
+        // complete `}` followed by `,` or `]` and re-parse; that gives us every
+        // section up to the truncation point instead of dropping all of them.
         let newSections: any[] = [];
         let parseBranch = "unknown";
         let parsedObj: any = null;
+
+        function salvageSections(raw: string): any[] {
+          // 1) Strip markdown code fences if present
+          let s = raw.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "");
+          // 2) Locate the `"sections": [` array opening
+          const arrMatch = s.match(/\"(?:sections|testSections)\"\s*:\s*\[/);
+          if (!arrMatch) return [];
+          const arrStart = (arrMatch.index ?? 0) + arrMatch[0].length;
+          // 3) Walk through, tracking brace depth, and collect each top-level object
+          //    that closes cleanly. Stop when we hit an unterminated object.
+          const out: any[] = [];
+          let i = arrStart;
+          while (i < s.length) {
+            // Skip whitespace + optional comma
+            while (i < s.length && /[\s,]/.test(s[i])) i++;
+            if (s[i] === "]") break;
+            if (s[i] !== "{") break;
+            const objStart = i;
+            let depth = 0;
+            let inString = false;
+            let escape = false;
+            for (; i < s.length; i++) {
+              const ch = s[i];
+              if (escape) { escape = false; continue; }
+              if (ch === "\\" && inString) { escape = true; continue; }
+              if (ch === '"') { inString = !inString; continue; }
+              if (inString) continue;
+              if (ch === "{") depth++;
+              else if (ch === "}") {
+                depth--;
+                if (depth === 0) { i++; break; }
+              }
+            }
+            if (depth !== 0) break; // truncation — stop here, keep what we have
+            const objStr = s.substring(objStart, i);
+            try {
+              out.push(JSON.parse(objStr));
+            } catch { break; }
+          }
+          return out;
+        }
+
         try {
           const firstBrace = rawResponse.indexOf("{");
           if (firstBrace === -1) throw new Error("No JSON");
@@ -4324,14 +4372,21 @@ export async function registerRoutes(server: Server, app: Express) {
           newSections = parsedObj.sections || parsedObj.testSections || [];
           parseBranch = "primary";
         } catch (primaryErr: any) {
-          // Fallback: try array extraction (LLM returned bare array)
+          // Salvage path: manually walk section array and keep every complete section
           try {
-            const jsonMatch = rawResponse.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0];
-            if (jsonMatch) {
-              newSections = JSON.parse(jsonMatch);
-              parseBranch = "array-fallback";
+            newSections = salvageSections(rawResponse);
+            if (newSections.length > 0) {
+              parseBranch = `salvage:${newSections.length}-sections`;
+              console.warn(`[rescan] C${campaignId} primary parse failed, salvaged ${newSections.length} complete sections from truncated response`);
             } else {
-              parseBranch = "no-json-match";
+              // Fallback: try array extraction (LLM returned bare array)
+              const jsonMatch = rawResponse.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0];
+              if (jsonMatch) {
+                newSections = JSON.parse(jsonMatch);
+                parseBranch = "array-fallback";
+              } else {
+                parseBranch = "no-json-match";
+              }
             }
           } catch (fallbackErr: any) {
             parseBranch = "parse-failed:" + (fallbackErr?.message || "").slice(0, 120);
