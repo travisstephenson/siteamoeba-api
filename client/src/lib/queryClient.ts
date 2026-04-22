@@ -1,6 +1,28 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-export const API_BASE = "__PORT_5000__".startsWith("__") ? "https://api.siteamoeba.com" : "__PORT_5000__";
+// API base URL resolution.
+//
+//   1. If the placeholder __PORT_5000__ has been substituted at deploy time
+//      (Perplexity iframe preview), use that.
+//   2. If we're running on the staging host, point at staging-api.siteamoeba.com
+//      so staging never writes to production.
+//   3. Otherwise default to production api.siteamoeba.com.
+//
+// This matches the APP_ENV=staging environment variable on the staging service
+// so a single deploy can serve both staging and production without rebuild-time
+// branching.
+function resolveApiBase(): string {
+  const port5000 = "__PORT_5000__";
+  if (!port5000.startsWith("__")) return port5000;
+  if (typeof window !== "undefined" && window.location) {
+    const h = window.location.hostname;
+    if (h.includes("staging-api.siteamoeba.com") || h.includes("staging.siteamoeba.com")) {
+      return "https://staging-api.siteamoeba.com";
+    }
+  }
+  return "https://api.siteamoeba.com";
+}
+export const API_BASE = resolveApiBase();
 
 // JWT token persistence — stored in localStorage on the real domain (app.siteamoeba.com).
 // Falls back to URL hash param for the Perplexity iframe preview (where localStorage is blocked).
