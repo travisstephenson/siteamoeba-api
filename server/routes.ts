@@ -908,6 +908,54 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // POST /api/admin/offer-context/backfill — detect offer context for every active campaign missing it
+  app.post("/api/admin/offer-context/backfill", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { force } = req.body || {};
+      const { backfillOfferContexts } = await import("./offer-detector");
+      const result = await backfillOfferContexts({ force: !!force });
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/offer-context/:campaignId — re-detect offer context for a single campaign
+  app.post("/api/admin/offer-context/:campaignId", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { detectAndSaveForCampaign } = await import("./offer-detector");
+      const ctx = await detectAndSaveForCampaign(parseInt(req.params.campaignId, 10));
+      if (!ctx) return res.status(404).json({ error: "Campaign not found or fetch failed" });
+      res.json({ ok: true, context: ctx });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/brain-sync — run the daily internal learning loop manually
+  app.post("/api/admin/brain-sync", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const { runBrainSync } = await import("./brain-sync");
+      const result = await runBrainSync();
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      console.error("[brain-sync] admin endpoint error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // POST /api/admin/external-research — run the daily external agent manually
+  app.post("/api/admin/external-research", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const { runExternalResearch } = await import("./external-research");
+      const result = await runExternalResearch();
+      res.json({ ok: true, ...result });
+    } catch (err: any) {
+      console.error("[external-research] admin endpoint error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // GET /api/admin/stats — overview numbers
   app.get("/api/admin/stats", requireAdmin, async (req: Request, res: Response) => {
     const allUsers = await storage.getAllUsers();
@@ -4621,6 +4669,18 @@ export async function registerRoutes(server: Server, app: Express) {
           (campaign as any).pageGoal || undefined,
           (campaign as any).niche || undefined
         );
+
+        // Detect offer context (VSL, CTA position, linked-vs-inline checkout). Fire-and-forget.
+        // Uses raw HTML heuristics, no LLM call. Lets the brain judge scroll-depth fairly.
+        void (async () => {
+          try {
+            const { detectOfferContext, saveOfferContext } = await import("./offer-detector");
+            const ctx = detectOfferContext(rawHtml, campaign.url);
+            await saveOfferContext(campaignId, ctx);
+          } catch (e: any) {
+            console.warn(`[offer-detect] C${campaignId} post-rescan failed:`, e.message);
+          }
+        })();
 
       } catch (err: any) {
         scanJobs.set(jobId, { status: "error", error: err.message, createdAt: Date.now() });
