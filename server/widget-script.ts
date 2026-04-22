@@ -297,15 +297,40 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     var controlRaw = (controlText || currentText || "").trim();
     var controlNorm = normalize(controlRaw);
 
-    // ---------- STRATEGY 1: EXACT text match ----------
+    // ---------- STRATEGY 1: EXACT text match, ranked by semantic tag ----------
     // Walk block-level + interactive elements and find any whose textContent
-    // (normalized) exactly equals the control text. This is how we guarantee
-    // that a "subheadline" variant never lands on the "headline" element even
-    // if both share the H1 tag.
+    // (normalized) exactly equals the control text.
+    //
+    // When multiple elements match (e.g. GHL renders the same heading as BOTH
+    // an <h1><strong> AND a <div class="c-heading"> wrapper), we PREFER the
+    // one whose tag carries the strongest authored typography — headings with
+    // a <strong> inside beat plain headings beat STRONG/B beat P beat SPAN
+    // beat generic DIV wrappers.
+    //
+    // This way, writing the new text lands on the <h1> (which then descends
+    // via findSingleWrapperText into <strong>/<span>, preserving bold + color)
+    // instead of on a class*='heading' DIV that inherits light weight.
     if (controlNorm && controlNorm.length >= 3) {
       var scanSelector = isCTA
         ? "button, a, [role='button'], [class*='btn'], [class*='cbutton'], [class*='cta']"
-        : "h1, h2, h3, h4, h5, h6, p, span, div, [class*='heading'], [class*='cheading'], [class*='title']";
+        : "h1, h2, h3, h4, h5, h6, p, strong, b, em, span, div, [class*='heading'], [class*='cheading'], [class*='title']";
+
+      function semanticRank(el) {
+        var t = (el.tagName || "").toUpperCase();
+        if (t === "H1" || t === "H2" || t === "H3" || t === "H4" || t === "H5" || t === "H6") {
+          // Heading with bold inside — highest priority, carries richest typography
+          if (el.querySelector("strong, b")) return 10;
+          return 9;
+        }
+        if (t === "STRONG" || t === "B") return 7;
+        if (t === "EM" || t === "I") return 6;
+        if (t === "P") return 5;
+        if (t === "SPAN") return 4;
+        if (t === "DIV") return 2;
+        return 3;
+      }
+
+      var rankedMatches = [];
       try {
         var candidates = document.querySelectorAll(scanSelector);
         for (var ei = 0; ei < candidates.length; ei++) {
@@ -315,11 +340,22 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           var txt = normalize(candidates[ei].textContent);
           if (!txt) continue;
           if (txt === controlNorm) {
-            if (elements.indexOf(candidates[ei]) === -1) elements.push(candidates[ei]);
+            rankedMatches.push({ el: candidates[ei], rank: semanticRank(candidates[ei]) });
           }
         }
       } catch(e) {}
-      if (elements.length > 0) return elements;
+      if (rankedMatches.length > 0) {
+        // Keep only the top-rank tier. If an H1 exists, don't also swap a DIV
+        // wrapper — that DIV is usually a mobile mirror that renders lighter.
+        rankedMatches.sort(function(a, b) { return b.rank - a.rank; });
+        var topRank = rankedMatches[0].rank;
+        for (var rmi = 0; rmi < rankedMatches.length; rmi++) {
+          if (rankedMatches[rmi].rank === topRank && elements.indexOf(rankedMatches[rmi].el) === -1) {
+            elements.push(rankedMatches[rmi].el);
+          }
+        }
+        return elements;
+      }
     }
 
     // ---------- STRATEGY 2: CSS selector, verified by text ----------
