@@ -244,9 +244,31 @@ async function _callLLMInternal(
         content: m.content,
       }));
 
+    const effectiveMaxTokens = maxTokens || 2048;
+    // Anthropic requires streaming for requests that may run longer than 10 minutes.
+    // Any request with maxTokens > 8192 is flagged as potentially long — use the
+    // streaming API and reassemble the full text. For smaller requests we keep
+    // the simpler non-streaming path.
+    if (effectiveMaxTokens > 8192) {
+      let text = "";
+      const stream = await client.messages.stream({
+        model,
+        max_tokens: effectiveMaxTokens,
+        system: systemMsg?.content,
+        messages: conversationMsgs,
+      });
+      for await (const event of stream) {
+        if (event.type === "content_block_delta" && event.delta?.type === "text_delta") {
+          text += event.delta.text || "";
+        }
+      }
+      if (!text) throw new Error("No text content in Anthropic streaming response");
+      return text;
+    }
+
     const response = await client.messages.create({
       model,
-      max_tokens: maxTokens || 2048,
+      max_tokens: effectiveMaxTokens,
       system: systemMsg?.content,
       messages: conversationMsgs,
     });

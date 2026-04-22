@@ -4303,7 +4303,7 @@ export async function registerRoutes(server: Server, app: Express) {
         // get truncated on 20+ section pages. Each section's angle/role fields add ~80 chars.
         const rawResponse = await Promise.race([
           callLLM(llmConfigResolved.config, messages, { maxTokens: 32000 }),
-          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("LLM call timed out after 180s")), 180000)),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("LLM call timed out after 600s")), 600000)),
         ]);
 
         // Quick observability: log the first chunk of raw output so we can see
