@@ -718,13 +718,34 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
 
   // Direct text finder — searches ALL elements of a type for the best text match.
   // Simpler and more reliable than the selector+fallback cascade, used for preview mode.
+  // directTextFind — used by preview mode to quickly locate the element a
+  // variant should land on, using word-overlap against the control text.
+  //
+  // IMPORTANT: when multiple elements match (common on GHL — it renders the
+  // hero as BOTH an <h1><strong><span>...</span></strong></h1> AND a
+  // <div class="c-heading"> wrapper), we prefer the one with the strongest
+  // semantic tag, because that's the element carrying authored bold + color
+  // typography. Picking the DIV wrapper loses font-weight and color.
   function directTextFind(controlText, category) {
-    var tags = category === "cta" ? "button, a, [class*='btn']" : "h1, h2, h3, [class*='heading'], [class*='title']";
+    var tags = category === "cta" ? "button, a, [class*='btn']" : "h1, h2, h3, h4, h5, h6, p, strong, b, [class*='heading'], [class*='title']";
     var candidates = document.querySelectorAll(tags);
     var ctrlWords = (controlText || "").trim().toLowerCase().split(/ +/).filter(function(w) { return w.length > 3; });
     if (ctrlWords.length === 0) return null;
-    var bestEl = null;
-    var bestScore = 0;
+
+    function semRank(el) {
+      var t = (el.tagName || "").toUpperCase();
+      if (t === "H1" || t === "H2" || t === "H3" || t === "H4" || t === "H5" || t === "H6") {
+        if (el.querySelector("strong, b")) return 10;
+        return 9;
+      }
+      if (t === "STRONG" || t === "B") return 7;
+      if (t === "P") return 5;
+      if (t === "SPAN") return 4;
+      if (t === "DIV") return 2;
+      return 3;
+    }
+
+    var scored = [];
     for (var i = 0; i < candidates.length; i++) {
       var el = candidates[i];
       var elText = (el.textContent || "").trim().toLowerCase();
@@ -733,15 +754,24 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       for (var j = 0; j < ctrlWords.length; j++) {
         if (elText.indexOf(ctrlWords[j]) !== -1) score++;
       }
-      if (score > bestScore) { bestScore = score; bestEl = el; }
+      // Require at least 40% word overlap to consider at all
+      if (score < Math.ceil(ctrlWords.length * 0.4)) continue;
+      scored.push({ el: el, wordScore: score, semScore: semRank(el) });
     }
-    // Require at least 40% word overlap
-    if (bestEl && bestScore >= Math.ceil(ctrlWords.length * 0.4)) {
-      console.log("[SA] directTextFind: matched", bestScore + "/" + ctrlWords.length, "words in", bestEl.tagName, "text:", (bestEl.textContent||"").substring(0,50));
-      return bestEl;
+    if (scored.length === 0) {
+      console.log("[SA] directTextFind: no match found");
+      return null;
     }
-    console.log("[SA] directTextFind: no match found. Best:", bestScore + "/" + ctrlWords.length);
-    return null;
+    // Highest word-score wins. Ties broken by semantic rank (H1 beats DIV).
+    scored.sort(function(a, b) {
+      if (b.wordScore !== a.wordScore) return b.wordScore - a.wordScore;
+      return b.semScore - a.semScore;
+    });
+    var best = scored[0];
+    console.log("[SA] directTextFind: matched", best.wordScore + "/" + ctrlWords.length,
+                "words in", best.el.tagName, "(sem=" + best.semScore + ") text:",
+                (best.el.textContent || "").substring(0, 50));
+    return best.el;
   }
 
   function handleAssignData(data) {
