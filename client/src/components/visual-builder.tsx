@@ -207,7 +207,15 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
 
   function pickAiSuggestion(idx: number) {
     setChosenAiIndex(idx);
-    setVariantText(aiSuggestions[idx].text);
+    const t = aiSuggestions[idx].text;
+    setVariantText(t);
+    // Force preview immediately instead of waiting for the debounced useEffect.
+    // This guarantees the user sees the picked suggestion on the page the
+    // instant they click it, even if React batches the state update.
+    iframeRef.current?.contentWindow?.postMessage(
+      { type: "SA_COMMAND_PREVIEW_TEXT", text: t },
+      "*",
+    );
   }
 
   // ---------- Save ----------
