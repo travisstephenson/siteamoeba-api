@@ -1,132 +1,83 @@
-# SiteAmoeba — Development Workflow
+# SiteAmoeba Development Workflow
 
-## Branch Strategy
+## Environments
 
-| Branch | Purpose | Deploys to |
-|--------|---------|------------|
-| `main` | Production-ready code only | `app.siteamoeba.com` (Railway production) |
-| `staging` | QA and testing before production | `staging-api.siteamoeba.com` (Railway staging) |
+| Name | URL | Database | Widget serves from |
+|---|---|---|---|
+| **production** | `https://app.siteamoeba.com` | prod Postgres | `api.siteamoeba.com` |
+| **staging** | `https://staging-api.siteamoeba.com` | staging Postgres (isolated snapshot of prod) | `staging-api.siteamoeba.com` |
 
-**Rule: nothing goes to `main` that hasn't been tested on staging first.**
+Staging and production are completely isolated — writes in one never affect the other.
 
----
+## Day-to-day workflow
 
-## Versioning
+1. **Never commit directly to `main`.** Branch off for every change:
+   ```bash
+   git checkout main && git pull
+   git checkout -b feature/<short-name>
+   ```
 
-We use semantic versioning: `MAJOR.MINOR.PATCH`
+2. **Deploy your branch to staging to test it:**
+   ```bash
+   scripts/deploy.sh staging
+   ```
+   Staging will rebuild and serve your branch within ~90 seconds. Test against the staging URL, staging DB, and staging widget.
 
-| Type | When | Example |
-|------|------|---------|
-| PATCH | Bug fixes, copy changes, small tweaks | `1.1.0` → `1.1.1` |
-| MINOR | New features, non-breaking changes | `1.1.0` → `1.2.0` |
-| MAJOR | Breaking changes, major redesigns | `1.1.0` → `2.0.0` |
+3. **When satisfied, merge to `main` and deploy to production:**
+   ```bash
+   git checkout main && git merge feature/<name>
+   git push origin main
+   scripts/deploy.sh production
+   ```
+   The deploy script refuses to ship to production unless you are on `main` with a clean working tree.
 
-Current version: **v1.1.0**
+## Refreshing staging with the latest prod data
 
----
-
-## Workflow for Every Change
-
-### 1. Make changes on `staging`
-
-```bash
-git checkout staging
-# make changes
-git add -A
-git commit -m "feat: description of change"
-git push origin staging
-```
-
-Then deploy to staging:
-```bash
-RAILWAY_API_TOKEN=d1f61cf2-... railway up \
-  --project 9dcf00bb-c86d-4be9-9aed-0da0c80f2ed2 \
-  --service 6b73d393-8e4d-485b-b872-31448c030cf2 \
-  --environment 4b63b3f2-c649-4e77-b9f9-d8a598ae4a98 \
-  --detach
-```
-
-### 2. Test on staging
-
-- Visit `staging-api.siteamoeba.com` and verify the change works
-- Check for regressions in core flows: scan → campaign → widget → conversion
-- Check admin error panel for any new errors
-
-### 3. Promote to production
-
-Once verified on staging:
+Staging should periodically be refreshed from production so its test data looks realistic. To do that:
 
 ```bash
-git checkout main
-git merge staging --no-edit
-npm version patch   # or minor/major
-git push origin main --follow-tags
+# from the sandbox / local
+PGPASSWORD=<prod_password> /usr/lib/postgresql/18/bin/pg_dump \
+  -h crossover.proxy.rlwy.net -p 40694 -U postgres -d railway \
+  --no-owner --no-acl --format=custom \
+  -f /tmp/prod_snapshot.dump
+
+PGPASSWORD=stagingdbpassword123 /usr/lib/postgresql/18/bin/pg_restore \
+  -h shortline.proxy.rlwy.net -p 16854 -U postgres -d railway \
+  --no-owner --no-acl --clean --if-exists \
+  /tmp/prod_snapshot.dump
 ```
 
-Then deploy to production:
-```bash
-RAILWAY_API_TOKEN=d1f61cf2-... railway up \
-  --project 9dcf00bb-c86d-4be9-9aed-0da0c80f2ed2 \
-  --service 6b73d393-8e4d-485b-b872-31448c030cf2 \
-  --environment production \
-  --detach
+Do this sparingly — it overwrites whatever experimental state is in staging.
+
+## Connecting to each database
+
+**Staging:**
+```
+host: shortline.proxy.rlwy.net
+port: 16854
+user: postgres
+pass: stagingdbpassword123
+db:   railway
 ```
 
----
-
-## Commit Message Format
-
+**Production:**
 ```
-type: short description
-
-Types:
-  feat      New feature
-  fix       Bug fix
-  chore     Maintenance (deps, version bumps, cleanup)
-  refactor  Code change that isn't a fix or feature
-  docs      Documentation only
+host: crossover.proxy.rlwy.net
+port: 40694
+user: postgres
+pass: KAJtGvTuRLGdpdduPedeRzDyZdGdzwiT
+db:   railway
 ```
 
-Examples:
-- `feat: add minimize button to Brain chat panel`
-- `fix: deleted variants still showing in campaign UI`
-- `chore: bump version to 1.1.1`
+## Environment variables
 
----
+Both environments share most variables, but these differ:
 
-## Emergency Hotfix (production is broken)
+| Variable | staging | production |
+|---|---|---|
+| `DATABASE_URL` | postgres-staging.railway.internal | production proxy |
+| `PUBLIC_API_URL` | `https://staging-api.siteamoeba.com` | `https://api.siteamoeba.com` |
+| `APP_ENV` | `staging` | (unset, defaults to production) |
 
-```bash
-# Fix directly on main (only for critical production issues)
-git checkout main
-# make the fix
-git commit -m "fix: critical description"
-git push origin main --follow-tags
-
-# Then backport to staging so branches stay in sync
-git checkout staging
-git merge main --no-edit
-git push origin staging
-```
-
----
-
-## Core User Flows to Test Before Any Production Deploy
-
-1. **New user signup** → can create an account and log in
-2. **Page scan** → enter URL, AI scans, sections appear, campaign created
-3. **Widget** → pixel installs, visitor is tracked, variant rotates correctly
-4. **Conversion** → Stripe webhook fires, revenue appears in dashboard
-5. **Brain Chat** → response generates with BYOK key (paid user)
-6. **Settings** → AI provider saves correctly, Stripe connects
-
----
-
-## Railway Environment IDs (for reference)
-
-| Environment | ID |
-|---|---|
-| Production | `f1571fa5-1034-431b-a311-0161ab2f089c` |
-| Staging | `4b63b3f2-c649-4e77-b9f9-d8a598ae4a98` |
-
-Service ID (same service, both envs): `6b73d393-8e4d-485b-b872-31448c030cf2`
+`APP_ENV=staging` is what code can key off of to add visible banners, relax rate limits, or enable feature flags that shouldn't reach real users.
