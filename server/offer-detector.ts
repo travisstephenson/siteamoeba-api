@@ -95,25 +95,44 @@ export function detectOfferContext(
   // Find the first <a> or <button> whose visible text OR aria-label OR value matches a CTA.
   // We check attributes + inner text because modern builders (GHL, Elementor, Vue SPAs) often
   // put the CTA copy in aria-label/value and render the visible text via JS later.
+  //
+  // Implementation: we scan for tag OPENINGS only. On a 500KB page, a full
+  // open-to-close regex blows up the backtracker. The opening tag alone gives
+  // us position + attrs, and for visible-text resolution we walk forward a
+  // bounded number of chars.
   let firstCtaIdx = -1;
   let firstCtaText: string | null = null;
   let firstCtaHref: string | null = null;
 
-  // Match anchor/button/input tags with a longer inner range so multi-span buttons resolve
-  const tagRegex = /<(a|button|input)\b([^>]*?)(?:>([\s\S]{0,800}?)<\/\1>|\/>)/gi;
+  const openTagRegex = /<(a|button|input)\b([^>]{0,2000})>/gi;
   let m: RegExpExecArray | null;
-  while ((m = tagRegex.exec(rawHtml)) !== null) {
+  while ((m = openTagRegex.exec(rawHtml)) !== null) {
+    const tagName = m[1].toLowerCase();
     const attrs = m[2] || "";
-    const innerHtml = m[3] || "";
 
-    // Pull candidate text from: aria-label, value attr, title attr, inner visible text
+    // Pull candidate text from: aria-label, value attr, title attr
     const ariaLabel = attrs.match(/\saria-label="([^"]+)"/i)?.[1]?.trim();
     const valueAttr = attrs.match(/\svalue="([^"]+)"/i)?.[1]?.trim();
     const titleAttr = attrs.match(/\stitle="([^"]+)"/i)?.[1]?.trim();
     const hrefAttr  = attrs.match(/\shref="([^"]+)"/i)?.[1] || null;
     const typeAttr  = attrs.match(/\stype="([^"]+)"/i)?.[1]?.toLowerCase();
 
-    // Strip nested tags + entities to get visible text
+    // For <input>: require a submit/button type — ignore hidden/text/email
+    if (tagName === "input" && typeAttr && !/^(submit|button|image)$/.test(typeAttr)) {
+      continue;
+    }
+    // For <a>: ignore internal navigation + cloudflare email protection + anchor-only
+    if (tagName === "a" && hrefAttr) {
+      if (/^(javascript:|mailto:|tel:|#)/.test(hrefAttr)) continue;
+      if (/cdn-cgi\/l\/email-protection/.test(hrefAttr)) continue;
+    }
+
+    // Resolve visible text by walking forward from tag end up to 1500 chars
+    // looking for the matching </tag>. Bounded so we don't hang on malformed HTML.
+    const tagEnd = m.index + m[0].length;
+    const scanWindow = rawHtml.slice(tagEnd, tagEnd + 1500);
+    const closeMatch = scanWindow.match(new RegExp(`</${tagName}\\s*>`, "i"));
+    const innerHtml = closeMatch ? scanWindow.slice(0, closeMatch.index) : "";
     const visibleText = innerHtml
       .replace(/<[^>]+>/g, " ")
       .replace(/&nbsp;/gi, " ")
@@ -121,14 +140,9 @@ export function detectOfferContext(
       .replace(/\s+/g, " ")
       .trim();
 
-    // Collect all candidate strings and test each against the CTA patterns
     const candidates = [ariaLabel, valueAttr, titleAttr, visibleText].filter(
-      (s): s is string => !!s && s.length >= 2 && s.length <= 120
+      (s): s is string => !!s && s.length >= 2 && s.length <= 140
     );
-    // For <input>, also require a submit/button type — ignore hidden/text/email inputs
-    if (m[1].toLowerCase() === "input" && typeAttr && !/^(submit|button|image)$/.test(typeAttr)) {
-      continue;
-    }
     const hit = candidates.find(c => CTA_TEXT_PATTERNS.some(p => p.test(c)));
     if (hit) {
       firstCtaIdx = m.index;
