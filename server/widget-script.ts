@@ -127,6 +127,41 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   // GHL buttons, CTAs, and some headings use nested divs for text.
   // e.g. <button><div class="main-heading-group"><div class="main-heading-button">TEXT</div>...
   // We need to find the actual text-bearing child, not just set textContent on the parent.
+  // findSingleWrapperText — preserves inline/class-based styling on headlines.
+  //
+  // The rule we enforce: if this element has exactly ONE element child AND
+  // all of the element's visible text comes from that child (no sibling text
+  // nodes with >2 non-whitespace chars), descend. Keep descending while the
+  // chain holds. Stop at the deepest single wrapper.
+  //
+  // On multi-span GHL layouts (2+ element children, each carrying text) we
+  // bail out immediately and the caller writes on the outer element — the
+  // pre-existing correct behavior for that case.
+  function findSingleWrapperText(el) {
+    var cur = el;
+    var guard = 0;
+    while (guard++ < 6) {
+      if (!cur || !cur.children || cur.children.length !== 1) break;
+      var childText = (cur.children[0].textContent || "").replace(/\s+/g, " ").trim();
+      var fullText  = (cur.textContent || "").replace(/\s+/g, " ").trim();
+      // The single child must account for ~all the element's text. We allow
+      // a tiny delta for whitespace/punctuation nodes. If there are sibling
+      // text nodes with real content, we must NOT descend.
+      if (!childText || !fullText) break;
+      if (Math.abs(fullText.length - childText.length) > 3) break;
+      // The child must be a presentational wrapper (span/strong/em/b/font/mark)
+      // OR a div that carries styling. Do NOT descend into interactive or
+      // structural elements like links/buttons/images.
+      var tag = (cur.children[0].tagName || "").toUpperCase();
+      var allow = tag === "SPAN" || tag === "STRONG" || tag === "EM" || tag === "B" ||
+                  tag === "FONT" || tag === "MARK" || tag === "I" || tag === "U" ||
+                  tag === "DIV";
+      if (!allow) break;
+      cur = cur.children[0];
+    }
+    return cur || el;
+  }
+
   function findTextTarget(el) {
     // Known GHL text container classes
     var GHL_TEXT_CLASSES = [
@@ -183,26 +218,37 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       return;
     }
 
-    // === FULL ELEMENT TEXT REPLACEMENT ===
-    // PRINCIPLE: Replace ALL text in the matched element. Never partially inject.
-    // For CTAs only: drill into nested text child (GHL buttons are deeply nested).
-    // For everything else: set textContent on the matched element directly.
-    // This replaces ALL child spans/text nodes cleanly with the new text.
+    // === FULL ELEMENT TEXT REPLACEMENT (style-preserving when possible) ===
+    // PRINCIPLE: Replace the text but keep the authored visual style intact.
     //
-    // We do NOT drill into child spans for non-CTA elements because:
-    // - GHL pages split headings into multiple spans for color/styling
-    // - Drilling into one span replaces only a fragment, leaving siblings intact
-    // - The variant text is meant to replace the ENTIRE section, not a fragment
-
+    // Pages wrap headlines in different ways across builders:
+    //   (a) GHL splits a headline into multiple colored spans
+    //       <h1><span class="red">Hello</span><span class="blue">World</span></h1>
+    //       → we must wipe all children and write textContent on the outer element.
+    //   (b) Many builders (Elementor, Brizi, custom HTML, Alberto's Keto page)
+    //       wrap the whole headline in ONE styled span:
+    //       <h2><span style="color:magenta;font-weight:800;font-size:32px">Anche se...</span></h2>
+    //       → if we write on the outer H2, the styled span gets deleted and the
+    //         variant renders in plain base styles (Alberto's bug).
+    //       → we should write INSIDE the wrapper so the styling stays.
+    //
+    // Heuristic: walk the single-child chain. As long as an element has exactly
+    // one child element AND that child's textContent covers the full text
+    // (i.e. no sibling text nodes with meaningful content), descend. Stop at
+    // the deepest single wrapper. This handles any level of nesting while
+    // correctly bailing out on the GHL multi-span case.
     var target = el;
 
-    // For CTAs only, drill into the nested text child
     if (category === "cta") {
+      // Buttons: drill through any wrapper class to the leaf text node.
       target = findTextTarget(el);
+    } else {
+      target = findSingleWrapperText(el);
     }
 
-    // Replace the full text content — this destroys all child elements
-    // but that's correct because the variant text replaces the entire section
+    // Replace the full text content on the chosen target. For the single-
+    // wrapper case this preserves the span's inline styles; for multi-span
+    // cases we stay at the outer element and wipe children as before.
     target.textContent = text;
 
     // Apply explicit style overrides ONLY if specified (from visual editor)
