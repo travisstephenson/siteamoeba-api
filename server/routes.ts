@@ -1554,29 +1554,30 @@ export async function registerRoutes(server: Server, app: Express) {
     removeHoverLabel();
   });
 
-  // --- VISUAL BUILDER (April 2026) ---
+  // --- VISUAL BUILDER bridge (April 2026, v2) ---
   //
-  // State:
-  //   _selectedEl  — the currently highlighted element
-  //   _editingEl   — the element that is currently in contentEditable mode
-  //   _originalHTML — the HTML content of _editingEl BEFORE user edits (so we
-  //                   can cancel / compute diff / send original to server)
+  // The iframe is a LIVE PREVIEW — never an editing surface. All editing
+  // happens in the parent React sidebar. The bridge's only jobs are:
   //
-  // Event flow:
-  //   mouseover        — blue dashed outline, show tag label
-  //   click            — select + enter edit mode inline (contentEditable = true)
-  //   blur / enter     — parent receives current text + captured styles
-  //   parent "save"    — parent commits the variant; bridge resets the element
-  //   parent "cancel"  — bridge reverts the element to _originalHTML
-  //   parent "focus"   — bridge programmatically starts editing a given treePath
-  //                      (used so "Edit Variant" lands on the correct element).
-  var _editingEl = null;
-  var _originalHTML = null;
+  //   1. Let the user CLICK any element to select it as the variant target.
+  //      Clicking does NOT put the element into contentEditable. It just
+  //      highlights + reports the selection to the parent.
+  //   2. Accept commands from the parent to:
+  //      - preview a new text (replace the target element's text live)
+  //      - override specific CSS properties (font-weight, color, etc.)
+  //      - revert to the original text + styles
+  //      - pre-select an element by text (so opening from a section row
+  //        pre-targets the right element)
+  //
+  // This decouples "what element" from "what text" — the user picks the
+  // element here, then types / generates the text in the sidebar, and we
+  // post the preview back into the iframe so they see it live.
+
+  var _selectedEl = null;         // the current variant target
+  var _originalHTML = null;       // snapshot of _selectedEl.innerHTML before any preview
+  var _originalInlineStyles = ''; // snapshot of _selectedEl.style.cssText before any style override
 
   function getStableElementHash(el) {
-    // A stable fingerprint combining tag, text, and ancestor tags. Used by the
-    // widget at serve time to find this exact element even if the page markup
-    // shifts slightly. Not cryptographic — just a dedupable string.
     var txt = (el.innerText || el.textContent || '').trim().toLowerCase().replace(/\\s+/g, ' ').slice(0, 200);
     var ancestors = [];
     var cur = el.parentElement;
@@ -1589,145 +1590,121 @@ export async function registerRoutes(server: Server, app: Express) {
     return el.tagName.toLowerCase() + '|' + ancestors.join('>') + '|' + txt;
   }
 
-  function sendSelectionToParent(el, currentText) {
+  function selectElement(el) {
     if (!el) return;
-    var rect = el.getBoundingClientRect();
-    var isImage = el.tagName.toUpperCase() === 'IMG';
-    var data = {
-      tagName: el.tagName.toUpperCase(),
-      textContent: isImage ? (el.alt || '') : (currentText != null ? currentText : (el.innerText || el.textContent || '').trim()),
-      originalText: isImage ? (el.alt || '') : _originalHTML ? (el.innerText || '').trim() : (el.innerText || el.textContent || '').trim(),
-      treePath: getTreePath(el),
-      elementHash: getStableElementHash(el),
-      isImage: isImage,
-      imageSrc: isImage ? el.src : null,
-      imageAlt: isImage ? (el.alt || '') : null,
-      imageWidth: isImage ? (el.naturalWidth || el.width) : null,
-      imageHeight: isImage ? (el.naturalHeight || el.height) : null,
-      imageRenderedWidth: isImage ? el.offsetWidth : null,
-      imageRenderedHeight: isImage ? el.offsetHeight : null,
-      computedStyles: isImage ? {} : getComputedStyleData(el),
-      parentInfo: el.parentElement ? getTreePath(el.parentElement) : '',
-      outerHTML: (el.outerHTML || '').substring(0, 500),
-      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
-    };
-    window.parent.postMessage({ type: 'SA_ELEMENT_SELECTED', data: data }, '*');
-  }
-
-  function enterEditMode(el) {
-    if (!el || el === _editingEl) return;
-    exitEditMode(/*cancel*/ false);
-    var isImage = el.tagName.toUpperCase() === 'IMG';
-    if (isImage) {
-      // Images are not contentEditable. We just report the selection so the
-      // parent can offer an "upload / paste URL" flow.
-      sendSelectionToParent(el);
-      return;
+    // If switching selection, restore the previous one's text/styles first
+    if (_selectedEl && _selectedEl !== el) {
+      revertPreview();
     }
-    _editingEl = el;
+    _selectedEl = el;
     _originalHTML = el.innerHTML;
-    el.setAttribute('contenteditable', 'true');
+    _originalInlineStyles = el.style ? el.style.cssText : '';
+    markSelected(el);
     el.style.outline = '2px solid #059669';
     el.style.outlineOffset = '2px';
-    el.style.caretColor = '#059669';
-    el.focus();
-    // Place caret at end so the user can start typing / deleting without surprise
-    try {
-      var sel = window.getSelection();
-      var range = document.createRange();
-      range.selectNodeContents(el);
-      range.collapse(false);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    } catch (e) {}
-    sendSelectionToParent(el);
+    var rect = el.getBoundingClientRect();
+    var isImage = el.tagName.toUpperCase() === 'IMG';
+    window.parent.postMessage({
+      type: 'SA_ELEMENT_SELECTED',
+      data: {
+        tagName: el.tagName.toUpperCase(),
+        originalText: isImage ? (el.alt || '') : (el.innerText || el.textContent || '').trim(),
+        treePath: getTreePath(el),
+        elementHash: getStableElementHash(el),
+        isImage: isImage,
+        imageSrc: isImage ? el.src : null,
+        computedStyles: isImage ? {} : getComputedStyleData(el),
+        rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
+      }
+    }, '*');
+  }
 
-    function onInput() {
-      window.parent.postMessage({
-        type: 'SA_ELEMENT_EDITED',
-        data: {
-          treePath: getTreePath(el),
-          currentText: (el.innerText || el.textContent || '').trim(),
-          rect: (function(){ var r = el.getBoundingClientRect(); return { top:r.top,left:r.left,width:r.width,height:r.height }; })()
+  function previewText(newText) {
+    if (!_selectedEl) return;
+    // Preserve the wrapper structure: if the element's only meaningful child
+    // chain is a single STRONG/SPAN/DIV wrapping the text (common on GHL and
+    // Elementor), write the new text on the deepest wrapper so authored bold/
+    // color stay intact. Otherwise write on the element itself.
+    var leaf = _selectedEl;
+    var guard = 0;
+    while (leaf && leaf.children && leaf.children.length === 1 && guard++ < 4) {
+      var t = (leaf.children[0].tagName || '').toUpperCase();
+      if (t !== 'SPAN' && t !== 'STRONG' && t !== 'EM' && t !== 'B' && t !== 'DIV' && t !== 'I' && t !== 'U' && t !== 'FONT' && t !== 'MARK') break;
+      leaf = leaf.children[0];
+    }
+    if (leaf) leaf.textContent = newText;
+    else _selectedEl.textContent = newText;
+  }
+
+  function applyStyleOverrides(styles) {
+    if (!_selectedEl || !styles) return;
+    var map = { fontWeight: 'font-weight', fontSize: 'font-size', color: 'color',
+                fontFamily: 'font-family', lineHeight: 'line-height',
+                letterSpacing: 'letter-spacing', textTransform: 'text-transform',
+                fontStyle: 'font-style' };
+    var leaf = _selectedEl;
+    var guard = 0;
+    while (leaf && leaf.children && leaf.children.length === 1 && guard++ < 4) {
+      leaf = leaf.children[0];
+    }
+    for (var k in styles) {
+      if (!styles.hasOwnProperty(k)) continue;
+      var css = map[k]; if (!css) continue;
+      try {
+        if (styles[k] === null || styles[k] === '') _selectedEl.style.removeProperty(css);
+        else _selectedEl.style.setProperty(css, styles[k], 'important');
+        if (leaf && leaf !== _selectedEl) {
+          if (styles[k] === null || styles[k] === '') leaf.style.removeProperty(css);
+          else leaf.style.setProperty(css, styles[k], 'important');
         }
-      }, '*');
+      } catch (e) {}
     }
-    el.addEventListener('input', onInput);
-    el._saInputHandler = onInput;
   }
 
-  function exitEditMode(cancel) {
-    if (!_editingEl) return;
-    var el = _editingEl;
-    if (cancel && _originalHTML != null) {
-      el.innerHTML = _originalHTML;
-    }
-    el.removeAttribute('contenteditable');
-    if (el._saInputHandler) {
-      el.removeEventListener('input', el._saInputHandler);
-      delete el._saInputHandler;
-    }
-    _editingEl = null;
+  function revertPreview() {
+    if (!_selectedEl) return;
+    if (_originalHTML != null) _selectedEl.innerHTML = _originalHTML;
+    if (_selectedEl.style) _selectedEl.style.cssText = _originalInlineStyles;
+    // Re-apply selection highlight
+    _selectedEl.style.outline = '2px solid #059669';
+    _selectedEl.style.outlineOffset = '2px';
+  }
+
+  function clearSelection() {
+    if (!_selectedEl) return;
+    if (_originalHTML != null) _selectedEl.innerHTML = _originalHTML;
+    if (_selectedEl.style) _selectedEl.style.cssText = _originalInlineStyles;
+    _selectedEl = null;
     _originalHTML = null;
+    _originalInlineStyles = '';
   }
 
+  // Click anywhere on the page = re-select that element as the variant target.
+  // Never enters contentEditable mode. Prevents default so normal link/button
+  // navigation doesn't hijack the click.
   document.addEventListener('click', function(e) {
     var el = findBestContainer(e.target);
     if (!el) return;
-    // If the user clicks inside the element they're already editing, let
-    // the native text-caret behavior happen — do NOT interrupt.
-    if (_editingEl && _editingEl.contains(e.target)) return;
     e.preventDefault();
     e.stopPropagation();
-    markSelected(el);
-    enterEditMode(el);
+    selectElement(el);
   }, true);
 
-  // Commit edit on Enter (without shift). Cancel on Escape.
-  document.addEventListener('keydown', function(e) {
-    if (!_editingEl) return;
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      window.parent.postMessage({
-        type: 'SA_ELEMENT_COMMIT',
-        data: {
-          treePath: getTreePath(_editingEl),
-          currentText: (_editingEl.innerText || _editingEl.textContent || '').trim(),
-          originalText: (function(){
-            // Reconstruct original text from _originalHTML via a scratch div
-            var d = document.createElement('div');
-            d.innerHTML = _originalHTML || '';
-            return (d.innerText || d.textContent || '').trim();
-          })(),
-          elementHash: getStableElementHash(_editingEl),
-          tagName: _editingEl.tagName.toUpperCase(),
-          treePathParent: _editingEl.parentElement ? getTreePath(_editingEl.parentElement) : '',
-          computedStyles: getComputedStyleData(_editingEl)
-        }
-      }, '*');
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      exitEditMode(true);
-      window.parent.postMessage({ type: 'SA_EDIT_CANCELED' }, '*');
-    }
-  }, true);
-
-  // Parent-driven commands. The parent sends these when the user clicks
-  // "Save" / "Cancel" in the React sidebar.
+  // Parent-driven commands.
   window.addEventListener('message', function(ev) {
     var msg = ev.data || {};
-    if (msg.type === 'SA_COMMAND_COMMIT') {
-      exitEditMode(false);
-    } else if (msg.type === 'SA_COMMAND_CANCEL') {
-      exitEditMode(true);
+    if (msg.type === 'SA_COMMAND_PREVIEW_TEXT') {
+      previewText(msg.text || '');
+    } else if (msg.type === 'SA_COMMAND_APPLY_STYLES') {
+      applyStyleOverrides(msg.styles || {});
+    } else if (msg.type === 'SA_COMMAND_REVERT') {
+      revertPreview();
+    } else if (msg.type === 'SA_COMMAND_CLEAR') {
+      clearSelection();
     } else if (msg.type === 'SA_COMMAND_FOCUS_BY_TEXT') {
-      // Parent asks us to pre-select an element by text (used when user
-      // triggers "Add Variant" from a specific section row — we pre-highlight
-      // that section's element).
       var q = (msg.text || '').toLowerCase().trim();
       if (!q) return;
       var best = null;
-      // Prefer semantic tags (H1..H6, STRONG, P) when multiple elements match.
       var candidates = document.querySelectorAll('h1,h2,h3,h4,h5,h6,strong,b,p,span,div');
       var bestRank = -1;
       for (var i = 0; i < candidates.length; i++) {
@@ -1742,14 +1719,15 @@ export async function registerRoutes(server: Server, app: Express) {
         if (rank > bestRank) { bestRank = rank; best = candidates[i]; }
       }
       if (best) {
-        markSelected(best);
-        enterEditMode(best);
+        selectElement(best);
         best.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else {
+        window.parent.postMessage({ type: 'SA_FOCUS_NOT_FOUND' }, '*');
       }
     }
   });
 
-  console.log('[SiteAmoeba] Visual builder bridge loaded for campaign ' + _SA_CAMPAIGN_ID);
+  console.log('[SiteAmoeba] Visual builder bridge v2 loaded for campaign ' + _SA_CAMPAIGN_ID);
 })();
 <\/script>`;
     }
