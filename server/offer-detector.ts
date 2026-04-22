@@ -26,9 +26,19 @@ const VIDEO_MARKERS = [
   /<div[^>]+class="[^"]*\b(vsl|video-player|wistia_embed)\b/i,
 ];
 
-// CTA token patterns — button/link text that indicates "buy/register/claim/start"
+// CTA token patterns — button/link text that indicates "buy/register/claim/start".
+// Multi-language to cover European markets (IT/ES/FR/PT/DE) we see real user traffic from.
 const CTA_TEXT_PATTERNS = [
+  // English
   /\b(buy|order|register|get\s+(started|access|instant)|claim|start\s+(free|now|today)|add to cart|checkout|subscribe|join|enroll|yes[,!]?\s+\w+|sign\s+up|reserve|book|download)\b/i,
+  // Italian
+  /\b(ordina|acquista|ottieni|ricevi|scopri|scarica|iscriviti|prenota|clicca qui|inizia|sì,?\s*voglio)\b/i,
+  // Spanish / Portuguese (shared roots)
+  /\b(comprar|ordenar|reservar|descargar|obtener|obten|inscribir|inscribete|suscríbete|comenzar|empezar|inicio|regist(ro|rar)|sí,?\s*quiero|quiero|acesso|garanta|comprar agora|quero)\b/i,
+  // French
+  /\b(acheter|commander|réserver|télécharger|obtenir|s'inscrire|inscription|commencer|démarrer|oui,?\s*je)\b/i,
+  // German
+  /\b(kaufen|bestellen|reservieren|herunterladen|anmelden|registrieren|jetzt\s+starten|ja,?\s*ich)\b/i,
 ];
 
 // External checkout domains — if first CTA links here, offer is a separate page
