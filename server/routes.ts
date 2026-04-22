@@ -1792,6 +1792,18 @@ export async function registerRoutes(server: Server, app: Express) {
         /<script[^>]*\sdata-src=["'][^"']*siteamoeba[^"']*\/api\/widget[^"']*["'][^>]*>\s*<\/script>/gi,
         '<!-- SiteAmoeba widget (data-src) stripped for visual editor -->'
       );
+      // Nuxt/Next SSR pages embed serialized HTML (including <script src=...siteamoeba>)
+      // inside __NUXT_DATA__ as a plain-string property. The HTML gets re-injected
+      // into the DOM during hydration via v-html, AFTER our server-side strip runs.
+      // To break the loop, rewrite any widget URL reference inside serialized JSON
+      // strings so when the client hydrates it gets a dead URL instead. We leave
+      // other occurrences alone — the URL string may appear as literal documentation.
+      //
+      // This runs ONLY in editor-proxy mode, never on real visitor traffic.
+      modified = modified.replace(
+        /https?:(\\u002F|\/)(\\u002F|\/)?(api|staging-api)\.siteamoeba\.com(\\u002F|\/)api(\\u002F|\/)widget(\\u002F|\/)script(\\u002F|\/)?\d*/gi,
+        'https://editor-proxy-widget-disabled.invalid/api/widget/script/0'
+      );
       // Insert <base> right after <head>
       if (modified.includes('<head>')) {
         modified = modified.replace('<head>', '<head>' + baseTag);
