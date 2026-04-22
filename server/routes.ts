@@ -1775,23 +1775,22 @@ export async function registerRoutes(server: Server, app: Express) {
       // CRITICAL: strip the live SiteAmoeba widget from the proxied HTML.
       // Otherwise the widget runs inside the iframe, assigns a variant to the
       // 'visitor' (us), and swaps the H1/sub/etc before the bridge captures the
-      // original text. Clicking 'Control' in the editor then resets to the
-      // variant text (because the bridge thinks that IS the original), and
-      // clicking a text element to edit it creates a new variant based on the
-      // already-swapped text. The editor must ALWAYS see the true control HTML.
+      // original text.
+      //
+      // ONLY strip scripts whose `src` (or litespeed `data-src`) attribute
+      // actually points at the SiteAmoeba widget endpoint. DO NOT strip by
+      // inline content match — Nuxt/Next SSR hydration embeds the full URL map
+      // (including `api.siteamoeba.com/api/widget` references if the site uses
+      // them) inside a <script type="application/json" id="__NUXT_DATA__">
+      // block that can be 600KB+. A content-based regex was matching that
+      // entire JSON blob and obliterating the page body. (April 2026 fix.)
       modified = modified.replace(
-        /<script[^>]*src=["'][^"']*siteamoeba[^"']*widget\/script[^"']*["'][^>]*><\/script>/gi,
-        '<!-- SiteAmoeba widget stripped for visual editor -->'
+        /<script[^>]*\ssrc=["'][^"']*siteamoeba[^"']*\/api\/widget[^"']*["'][^>]*>\s*<\/script>/gi,
+        '<!-- SiteAmoeba widget (src) stripped for visual editor -->'
       );
       modified = modified.replace(
-        /<script[^>]*>[\s\S]*?api\.siteamoeba\.com\/api\/widget[\s\S]*?<\/script>/gi,
-        '<!-- SiteAmoeba widget stripped for visual editor -->'
-      );
-      // Some cache plugins (LiteSpeed, WP Rocket) rewrite <script src=> into
-      // <script type="litespeed/javascript" data-src=>. Strip those too.
-      modified = modified.replace(
-        /<script[^>]*type=["']litespeed\/javascript["'][^>]*data-src=["'][^"']*siteamoeba[^"']*["'][^>]*><\/script>/gi,
-        '<!-- SiteAmoeba widget (litespeed-deferred) stripped for visual editor -->'
+        /<script[^>]*\sdata-src=["'][^"']*siteamoeba[^"']*\/api\/widget[^"']*["'][^>]*>\s*<\/script>/gi,
+        '<!-- SiteAmoeba widget (data-src) stripped for visual editor -->'
       );
       // Insert <base> right after <head>
       if (modified.includes('<head>')) {
