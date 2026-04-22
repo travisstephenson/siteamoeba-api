@@ -3124,10 +3124,13 @@ export async function registerRoutes(server: Server, app: Express) {
   // ============== AUTOPILOT EVALUATION LOOP ==============
   // Check all active autopilot campaigns every 5 minutes for tests that should be declared
   async function pollAutopilotCampaigns() {
+    const tickStart = Date.now();
     try {
       const result = await pool.query(
         `SELECT id FROM campaigns WHERE autopilot_enabled = true AND autopilot_status = 'testing'`
       );
+      // Heartbeat: always log the tick so we can prove the poll is alive
+      console.log(`[autopilot] Poll tick — ${result.rows.length} active campaign(s)`);
       for (const row of result.rows) {
         try {
           const action = await evaluateAutopilotTests(row.id);
@@ -3138,12 +3141,70 @@ export async function registerRoutes(server: Server, app: Express) {
           console.error(`[autopilot] Evaluation failed for campaign ${row.id}:`, err.message);
         }
       }
+      console.log(`[autopilot] Poll tick complete in ${Date.now() - tickStart}ms`);
     } catch (err: any) {
       console.error("[autopilot] Poll failed:", err.message);
     }
   }
+
+  // Zombie status reconciler: a transient autopilot_status (evaluating/generating/advancing)
+  // cannot survive a process restart. Run once at startup to unstick anything left hanging.
+  async function reconcileAutopilotZombies() {
+    try {
+      const res = await pool.query(`
+        UPDATE campaigns
+        SET autopilot_status = 'testing'
+        WHERE autopilot_enabled = true
+          AND autopilot_status IN ('evaluating', 'generating', 'advancing')
+        RETURNING id, name
+      `);
+      if (res.rows.length > 0) {
+        console.log(`[autopilot] Reconciled ${res.rows.length} zombie campaign(s): ${res.rows.map((r: any) => r.id).join(', ')}`);
+      }
+    } catch (err: any) {
+      console.error("[autopilot] Zombie reconciler failed:", err.message);
+    }
+  }
+
+  // Orphan variant reconciler: variants with test_section_id=NULL that belong to an active
+  // section by category get linked automatically. Prevents getActiveTestState from dropping
+  // variants the widget still serves via fallback.
+  async function reconcileOrphanVariants() {
+    try {
+      const res = await pool.query(`
+        WITH section_by_campaign_category AS (
+          SELECT DISTINCT ON (campaign_id, category) id, campaign_id, category
+          FROM test_sections
+          WHERE is_active = true
+          ORDER BY campaign_id, category, id ASC
+        )
+        UPDATE variants v
+        SET test_section_id = s.id
+        FROM section_by_campaign_category s
+        WHERE v.campaign_id = s.campaign_id
+          AND v.type = s.category
+          AND v.test_section_id IS NULL
+          AND v.is_active = true
+          AND v.is_control = false
+        RETURNING v.id, v.campaign_id, v.test_section_id
+      `);
+      if (res.rows.length > 0) {
+        console.log(`[autopilot] Linked ${res.rows.length} orphan variant(s): ${res.rows.map((r: any) => `v${r.id}→s${r.test_section_id}`).join(', ')}`);
+      }
+    } catch (err: any) {
+      console.error("[autopilot] Orphan variant reconciler failed:", err.message);
+    }
+  }
+
   setInterval(pollAutopilotCampaigns, 5 * 60 * 1000); // Every 5 minutes
-  setTimeout(pollAutopilotCampaigns, 30000); // First run after 30s startup delay
+  setTimeout(async () => {
+    // Startup reconcilers run once, then the poll kicks off
+    await reconcileAutopilotZombies();
+    await reconcileOrphanVariants();
+    await pollAutopilotCampaigns();
+  }, 30000);
+  // Re-run orphan variant linker every hour as a safety net (zombie reconciler only needed at startup)
+  setInterval(reconcileOrphanVariants, 60 * 60 * 1000);
 
   // Keep the old function signature for the manual sync button (just calls the poller)
   async function matchStripeTransactionsToVisitors(userId: number): Promise<number> {

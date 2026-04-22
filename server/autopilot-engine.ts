@@ -341,7 +341,7 @@ export async function advanceAutopilot(
   if (!targetSection) {
     // Should not happen since we filtered, but handle gracefully
     console.log(
-      `Autopilot: no section found for category "${step.sectionCategory}" in campaign ${campaignId}. Skipping.`
+      `[autopilot] no section found for category "${step.sectionCategory}" in campaign ${campaignId}. Skipping.`
     );
     const nextStep = currentStepIndex + 1;
     await storage.updateCampaign(campaignId, {
@@ -352,8 +352,27 @@ export async function advanceAutopilot(
     return;
   }
 
-  // Activate this section
-  await storage.updateTestSection(targetSection.id, { isActive: true } as any);
+  // Respect user intent: if the user explicitly turned this section off AND autopilot has never
+  // tested it yet (no variants exist for this section), skip it rather than force-reactivating.
+  const allVariantsForCampaign = await storage.getVariantsByCampaign(campaignId);
+  const hasBeenTested = allVariantsForCampaign.some((v: any) => v.testSectionId === targetSection.id);
+  if (targetSection.isActive === false && !hasBeenTested) {
+    console.log(
+      `[autopilot] Campaign ${campaignId}: section ${targetSection.id} (${step.sectionCategory}) is user-disabled and untested — skipping step ${currentStepIndex}.`
+    );
+    const nextStep = currentStepIndex + 1;
+    await storage.updateCampaign(campaignId, {
+      autopilotStep: nextStep,
+      autopilotStatus: nextStep >= playbook.length ? "completed" : "advancing",
+    } as any);
+    if (nextStep < playbook.length) return advanceAutopilot(campaignId, userId);
+    return;
+  }
+
+  // Activate this section (only if needed — avoids a useless write)
+  if (targetSection.isActive !== true) {
+    await storage.updateTestSection(targetSection.id, { isActive: true } as any);
+  }
 
   // Generate variants for it
   await storage.updateCampaign(campaignId, { autopilotStatus: "generating" } as any);
@@ -502,8 +521,45 @@ export async function generateAutopilotVariants(
     return;
   }
 
-  // Parse the JSON response
+  // Parse the JSON response with a salvage fallback for truncated LLM output
+  // (same pattern as rescan — truncated JSON still yields usable variants instead of silently failing).
+  function salvageVariantArray(raw: string): any[] {
+    // Strip markdown fences
+    let s = raw.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+    // Find the first `[` opening the array
+    const arrStart = s.indexOf("[");
+    if (arrStart === -1) return [];
+    let i = arrStart + 1;
+    const out: any[] = [];
+    while (i < s.length) {
+      while (i < s.length && /[\s,]/.test(s[i])) i++;
+      if (s[i] === "]") break;
+      if (s[i] !== "{") break;
+      const objStart = i;
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      for (; i < s.length; i++) {
+        const ch = s[i];
+        if (escape) { escape = false; continue; }
+        if (ch === "\\" && inString) { escape = true; continue; }
+        if (ch === '"') { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) { i++; break; }
+        }
+      }
+      if (depth !== 0) break; // truncation — stop, keep what we have
+      const objStr = s.substring(objStart, i);
+      try { out.push(JSON.parse(objStr)); } catch { break; }
+    }
+    return out;
+  }
+
   let generatedVariants: { text: string; strategy: string; reasoning: string }[];
+  let parseBranch = "primary";
   try {
     const cleaned = rawResponse
       .replace(/^```(?:json)?\s*/i, "")
@@ -511,10 +567,18 @@ export async function generateAutopilotVariants(
       .trim();
     generatedVariants = JSON.parse(cleaned);
     if (!Array.isArray(generatedVariants)) throw new Error("Expected JSON array");
-  } catch (err) {
-    console.error("Autopilot: Failed to parse LLM response:", rawResponse);
-    await storage.updateCampaign(campaignId, { autopilotStatus: "testing" } as any);
-    return;
+  } catch (primaryErr) {
+    // Salvage path
+    const salvaged = salvageVariantArray(rawResponse);
+    if (salvaged.length > 0) {
+      generatedVariants = salvaged;
+      parseBranch = "salvage";
+      console.warn(`[autopilot] Variant parse salvaged for campaign ${campaignId}: recovered ${salvaged.length} variant(s) from truncated LLM response`);
+    } else {
+      console.error(`[autopilot] Variant parse failed for campaign ${campaignId}. Raw response: ${rawResponse.slice(0, 500)}`);
+      await storage.updateCampaign(campaignId, { autopilotStatus: "testing" } as any);
+      return;
+    }
   }
 
   const sanitized = generatedVariants
@@ -526,11 +590,19 @@ export async function generateAutopilotVariants(
     }))
     .slice(0, 3);
 
+  // Refuse to create orphan variants — if we can't link to an active section, skip cleanly.
+  // getActiveTestState drops NULL test_section_id variants, which caused dashboard/widget drift.
+  if (!matchingSection?.id) {
+    console.error(`[autopilot] Cannot create variants for campaign ${campaignId}: no active test_section for type=${type}. Skipping to prevent orphan variants.`);
+    await storage.updateCampaign(campaignId, { autopilotStatus: "testing" } as any);
+    return;
+  }
+
   // Check if a control variant already exists for this type
   const existingControl = typeVariants.find((v) => v.isControl);
 
   // If no existing control and there's a currentText in the section, create control first
-  if (!existingControl && matchingSection?.currentText) {
+  if (!existingControl && matchingSection.currentText) {
     await storage.createVariant({
       campaignId,
       type,
@@ -538,7 +610,7 @@ export async function generateAutopilotVariants(
       isControl: true,
       isActive: true,
       persuasionTags: null,
-      testSectionId: matchingSection?.id ?? null,
+      testSectionId: matchingSection.id,
     });
   }
 
@@ -551,9 +623,10 @@ export async function generateAutopilotVariants(
       isControl: false,
       isActive: true,
       persuasionTags: JSON.stringify([v.strategy]),
-      testSectionId: matchingSection?.id ?? null,
+      testSectionId: matchingSection.id,
     });
   }
+  console.log(`[autopilot] Generated ${sanitized.length} variant(s) for campaign ${campaignId} section ${matchingSection.id} (parse=${parseBranch})`);
 }
 
 // ============================================================
