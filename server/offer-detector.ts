@@ -131,9 +131,10 @@ export function detectOfferContext(
     if (tagName === "input" && typeAttr && !/^(submit|button|image)$/.test(typeAttr)) {
       continue;
     }
-    // For <a>: ignore internal navigation + cloudflare email protection + anchor-only
+    // For <a>: ignore javascript:/mailto:/tel: and email-protection, but ALLOW
+    // on-page anchors (#form) because lots of pages use them to scroll to the order form.
     if (tagName === "a" && hrefAttr) {
-      if (/^(javascript:|mailto:|tel:|#)/.test(hrefAttr)) continue;
+      if (/^(javascript:|mailto:|tel:)/.test(hrefAttr)) continue;
       if (/cdn-cgi\/l\/email-protection/.test(hrefAttr)) continue;
     }
 
