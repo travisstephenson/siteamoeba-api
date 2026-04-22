@@ -92,24 +92,48 @@ export function detectOfferContext(
   }
 
   // ----- First CTA detection -----
-  // Find the first <a> or <button> whose visible text matches a CTA pattern.
+  // Find the first <a> or <button> whose visible text OR aria-label OR value matches a CTA.
+  // We check attributes + inner text because modern builders (GHL, Elementor, Vue SPAs) often
+  // put the CTA copy in aria-label/value and render the visible text via JS later.
   let firstCtaIdx = -1;
   let firstCtaText: string | null = null;
   let firstCtaHref: string | null = null;
 
-  // Greedy-free match for anchor/button tags with their inner text
-  const tagRegex = /<(a|button)\b[^>]*?(?:\shref="([^"]*)")?[^>]*>([\s\S]{0,300}?)<\/\1>/gi;
+  // Match anchor/button/input tags with a longer inner range so multi-span buttons resolve
+  const tagRegex = /<(a|button|input)\b([^>]*?)(?:>([\s\S]{0,800}?)<\/\1>|\/>)/gi;
   let m: RegExpExecArray | null;
   while ((m = tagRegex.exec(rawHtml)) !== null) {
-    const href = m[2] || null;
+    const attrs = m[2] || "";
     const innerHtml = m[3] || "";
-    // Strip nested tags to get visible text
-    const visibleText = innerHtml.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-    if (!visibleText || visibleText.length > 80) continue;  // skip junk
-    if (CTA_TEXT_PATTERNS.some(p => p.test(visibleText))) {
+
+    // Pull candidate text from: aria-label, value attr, title attr, inner visible text
+    const ariaLabel = attrs.match(/\saria-label="([^"]+)"/i)?.[1]?.trim();
+    const valueAttr = attrs.match(/\svalue="([^"]+)"/i)?.[1]?.trim();
+    const titleAttr = attrs.match(/\stitle="([^"]+)"/i)?.[1]?.trim();
+    const hrefAttr  = attrs.match(/\shref="([^"]+)"/i)?.[1] || null;
+    const typeAttr  = attrs.match(/\stype="([^"]+)"/i)?.[1]?.toLowerCase();
+
+    // Strip nested tags + entities to get visible text
+    const visibleText = innerHtml
+      .replace(/<[^>]+>/g, " ")
+      .replace(/&nbsp;/gi, " ")
+      .replace(/&amp;/gi, "&")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // Collect all candidate strings and test each against the CTA patterns
+    const candidates = [ariaLabel, valueAttr, titleAttr, visibleText].filter(
+      (s): s is string => !!s && s.length >= 2 && s.length <= 120
+    );
+    // For <input>, also require a submit/button type — ignore hidden/text/email inputs
+    if (m[1].toLowerCase() === "input" && typeAttr && !/^(submit|button|image)$/.test(typeAttr)) {
+      continue;
+    }
+    const hit = candidates.find(c => CTA_TEXT_PATTERNS.some(p => p.test(c)));
+    if (hit) {
       firstCtaIdx = m.index;
-      firstCtaText = visibleText;
-      firstCtaHref = href;
+      firstCtaText = hit;
+      firstCtaHref = hrefAttr;
       break;
     }
   }
