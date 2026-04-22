@@ -4332,23 +4332,51 @@ export async function registerRoutes(server: Server, app: Express) {
         // what the LLM actually returned when a field ends up null downstream.
         console.log(`[rescan] C${campaignId} LLM raw first 400 chars:`, rawResponse.slice(0, 400));
 
-        // Same JSON parsing as initial scan
+        // Same JSON parsing as initial scan, with verbose diagnostics so we
+        // don't have to guess what went wrong when "Scan found no sections" fires.
         let newSections: any[] = [];
+        let parseBranch = "unknown";
+        let parsedObj: any = null;
         try {
           const firstBrace = rawResponse.indexOf("{");
           if (firstBrace === -1) throw new Error("No JSON");
           const lastBrace = rawResponse.lastIndexOf("}");
           const jsonStr = rawResponse.substring(firstBrace, lastBrace + 1);
-          const parsed = JSON.parse(jsonStr);
-          newSections = parsed.sections || parsed.testSections || [];
-        } catch {
-          // Fallback: try array extraction
-          const jsonMatch = rawResponse.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0];
-          newSections = jsonMatch ? JSON.parse(jsonMatch) : [];
+          parsedObj = JSON.parse(jsonStr);
+          newSections = parsedObj.sections || parsedObj.testSections || [];
+          parseBranch = "primary";
+        } catch (primaryErr: any) {
+          // Fallback: try array extraction (LLM returned bare array)
+          try {
+            const jsonMatch = rawResponse.match(/\[\s*\{[\s\S]*\}\s*\]/)?.[0];
+            if (jsonMatch) {
+              newSections = JSON.parse(jsonMatch);
+              parseBranch = "array-fallback";
+            } else {
+              parseBranch = "no-json-match";
+            }
+          } catch (fallbackErr: any) {
+            parseBranch = "parse-failed:" + (fallbackErr?.message || "").slice(0, 120);
+          }
+          console.warn(`[rescan] C${campaignId} primary parse failed: ${primaryErr?.message}`);
         }
 
         if (newSections.length === 0) {
-          scanJobs.set(jobId, { status: "error", error: "Scan found no sections", createdAt: Date.now() });
+          // Emit enough context to diagnose next time. We log the raw response
+          // head + tail plus what the parser actually produced.
+          console.error(`[rescan] C${campaignId} SCAN_FOUND_NO_SECTIONS: parseBranch=${parseBranch} rawLen=${rawResponse.length}`);
+          console.error(`[rescan] C${campaignId} raw head: ${rawResponse.slice(0, 600)}`);
+          console.error(`[rescan] C${campaignId} raw tail: ${rawResponse.slice(-600)}`);
+          if (parsedObj) {
+            console.error(`[rescan] C${campaignId} parsed keys: ${Object.keys(parsedObj).join(",")}`);
+            console.error(`[rescan] C${campaignId} parsed sample: ${JSON.stringify(parsedObj).slice(0, 500)}`);
+          }
+          scanJobs.set(jobId, {
+            status: "error",
+            error: "Scan found no sections",
+            diagnostics: { parseBranch, rawLen: rawResponse.length, parsedKeys: parsedObj ? Object.keys(parsedObj) : null },
+            createdAt: Date.now(),
+          });
           return;
         }
 
