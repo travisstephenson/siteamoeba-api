@@ -1,5 +1,36 @@
-import React, { useState, useRef, useMemo, useEffect } from "react";
+import React, { useState, useRef, useMemo, useEffect, createContext, useContext } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { VisualBuilder } from "@/components/visual-builder";
+
+// ---- Visual Builder context ----
+// Any component inside a campaign page can call openBuilder({section, editingVariant?})
+// to launch the visual builder modal. This is the ONLY way variants get created
+// or edited — manual text inputs and edit popovers are being phased out.
+interface OpenBuilderArgs { section: any; editingVariant?: any | null; }
+const VisualBuilderContext = createContext<{ openBuilder: (args: OpenBuilderArgs) => void } | null>(null);
+function useVisualBuilder() {
+  const ctx = useContext(VisualBuilderContext);
+  return ctx;
+}
+
+// Small button component that opens the Visual Builder for a given section.
+// Rendered inside per-section JSX where direct access to the page-level builder
+// state isn't available — it goes through the context instead.
+function OpenBuilderButton({ section }: { section: any }) {
+  const builder = useVisualBuilder();
+  return (
+    <button
+      type="button"
+      onClick={() => builder?.openBuilder({ section })}
+      className="flex-1 gap-2 inline-flex items-center justify-center rounded-md text-sm font-medium h-9 px-4 bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+      data-testid={`button-open-visual-builder-${section.id}`}
+    >
+      {/* Type icon imported from lucide-react */}
+      <span className="inline-block align-middle" aria-hidden>✍</span>
+      Create variant in Visual Builder
+    </button>
+  );
+}
 import { Link, useLocation } from "wouter";
 import { useParams } from "wouter";
 import { useForm } from "react-hook-form";
@@ -1979,6 +2010,7 @@ function VariantCard({
   sectionType,
   elementStyles,
   campaignType,
+  section,
 }: {
   variant: VariantStats;
   rank: number;
@@ -1989,7 +2021,12 @@ function VariantCard({
   sectionType: string;
   elementStyles?: string | null;
   campaignType?: string;
+  // Section is used to open the Visual Builder in edit mode. If omitted
+  // (e.g. legacy headline/subheadline sections without a test_section row),
+  // the edit-via-builder button falls back to the old inline textarea.
+  section?: any;
 }) {
+  const builder = useVisualBuilder();
   const isLeadGen = campaignType === "lead_gen";
   const [showDeclareDialog, setShowDeclareDialog] = useState(false);
   const [declaredWinner, setDeclaredWinner] = useState<VariantStats | null>(null);
@@ -2146,7 +2183,17 @@ function VariantCard({
           <Button
             size="icon"
             variant="ghost"
-            onClick={() => { setEditText(variant.text); setIsEditing(true); }}
+            onClick={() => {
+              // Every edit goes through the Visual Builder so the user sees the
+              // change live on the page and we re-capture fresh styles. Only when
+              // we truly don't have a section handle do we fall back to the inline
+              // textarea (legacy headline/subheadline edge case).
+              if (builder && section) {
+                builder.openBuilder({ section, editingVariant: variant });
+              } else {
+                setEditText(variant.text); setIsEditing(true);
+              }
+            }}
             data-testid={`button-edit-variant-${variant.id}`}
             aria-label="Edit variant text"
           >
@@ -4389,11 +4436,19 @@ function TestSectionCard({
                       sectionType={section.category}
                       elementStyles={section.elementStyles}
                       campaignType={campaignType}
+                      section={section}
                     />
                   ));
                 })()}
               </div>
             )}
+
+            {/* Builder-first variant creation. "Open Visual Builder" is the primary
+                path — user sees the live page, clicks an element, types inline,
+                confirms. The AI generator below remains for bulk generation. */}
+            <div className="flex flex-col sm:flex-row gap-2 mb-3">
+              <OpenBuilderButton section={section} />
+            </div>
 
             {/* AI variant generator for this section */}
             <AddVariantForm
@@ -5493,6 +5548,12 @@ export default function CampaignDetailPage() {
   const [brainBannerDismissed, setBrainBannerDismissed] = useState(false);
   const [showArchiveDialog, setShowArchiveDialog] = useState(false);
   const [showRestartDialog, setShowRestartDialog] = useState(false);
+  // Visual Builder is the ONLY path for creating / editing variants.
+  // Opened with { section, editingVariant? } — a section is always required.
+  const [builderState, setBuilderState] = useState<{
+    section: any;
+    editingVariant?: any | null;
+  } | null>(null);
   const visitorFeedRef = useRef<HTMLDivElement>(null);
   const [scrollToFeed, setScrollToFeed] = useState(0);
 
@@ -5666,7 +5727,19 @@ export default function CampaignDetailPage() {
   const creditsUsed = Math.floor((stats?.totalVisitors ?? 0) / 100);
 
   return (
+    <VisualBuilderContext.Provider value={{ openBuilder: (args) => setBuilderState(args) }}>
     <div className="flex flex-col h-full">
+      {/* Visual Builder modal — rendered at the root so any nested component can open it.
+          This is the SOLE creation / edit path for variants going forward. */}
+      {builderState && (
+        <VisualBuilder
+          open={!!builderState}
+          onClose={() => setBuilderState(null)}
+          campaignId={campaignId}
+          section={builderState.section}
+          editingVariant={builderState.editingVariant || null}
+        />
+      )}
       {/* Breadcrumb header */}
       <div className="px-6 py-4 border-b border-border flex items-center justify-between">
         <Breadcrumb>
@@ -6333,5 +6406,6 @@ export default function CampaignDetailPage() {
         userPlan={user?.plan || 'free'}
       />
     </div>
+    </VisualBuilderContext.Provider>
   );
 }

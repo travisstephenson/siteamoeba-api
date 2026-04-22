@@ -1,4 +1,4 @@
-import { pgTable, text, integer, serial, boolean, real, varchar } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, serial, boolean, real, varchar, jsonb } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -126,6 +126,17 @@ export const variants = pgTable("variants", {
   displayIssueAt: text("display_issue_at"),
   // Visual editor mutations — JSON describing element targeting and style overrides
   mutations: text("mutations"),
+  // --- Visual Builder capture (April 2026) ---
+  // What the user SAW and CONFIRMED when saving the variant. The widget
+  // replays these at serve time so the rendered variant looks identical to
+  // the builder preview, independent of any later CSS drift on the page.
+  // Stored as jsonb for styles and as text for the rest so we can index.
+  capturedStyles: jsonb("captured_styles"),          // e.g. {fontWeight:"700", fontSize:"48px", color:"rgb(...)"}
+  capturedTreePath: text("captured_tree_path"),      // "body > div:nth-child(2) > h1 > strong > span"
+  capturedElementHash: text("captured_element_hash"), // sha256 of normalized element fingerprint
+  capturedTagName: text("capture_tag_name"),         // "H1" / "STRONG" / "SPAN" — what tag the user targeted
+  captureOriginalText: text("capture_original_text"), // exact text present at save time (for strict matching)
+  captureScreenshotUrl: text("capture_screenshot_url"), // optional preview snapshot for dashboard cards
 });
 
 export const insertVariantSchema = createInsertSchema(variants).omit({

@@ -501,8 +501,74 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     } catch(e) {}
   }
 
-  function applySectionVariant(selector, text, testMethod, controlText, category, currentText, variantId) {
+  // findByCapture — when a variant was saved through the Visual Builder, we
+  // have a reliable identity for the element (captureOriginalText + capturedTagName).
+  // Use that first. This is more specific than the generic text/selector cascade
+  // and skips all ambiguity about "which of these 3 text-identical elements."
+  function findByCapture(capturedTagName, captureOriginalText) {
+    if (!capturedTagName || !captureOriginalText) return [];
+    var origNorm = (captureOriginalText || "").toString().toLowerCase().replace(/\\s+/g, " ").replace(/[^\\w\\s]/g, "").trim();
+    if (!origNorm) return [];
+    var matches = [];
+    try {
+      var tagSel = capturedTagName.toLowerCase();
+      var candidates = document.querySelectorAll(tagSel);
+      for (var i = 0; i < candidates.length; i++) {
+        if (candidates[i].children.length > 8) continue;
+        var norm = (candidates[i].textContent || "").toLowerCase().replace(/\\s+/g, " ").replace(/[^\\w\\s]/g, "").trim();
+        if (norm === origNorm) matches.push(candidates[i]);
+      }
+    } catch (e) {}
+    return matches;
+  }
+
+  // applyCapturedStyles — replay the font-weight / color / font-family / etc.
+  // that the user saw in the builder. Sets them as INLINE styles so they win
+  // over any later CSS drift or cascade order shenanigans. We apply to the
+  // element AND the likely descendant that actually paints the text (a
+  // <strong>/<span> inside an <h1>), so a variant on the outer H1 still looks
+  // bold + colored.
+  function applyCapturedStyles(el, styles) {
+    if (!el || !styles || typeof styles !== "object") return;
+    var props = ["fontWeight", "fontSize", "fontFamily", "color", "lineHeight", "letterSpacing", "textTransform", "fontStyle"];
+    function apply(target) {
+      for (var i = 0; i < props.length; i++) {
+        var p = props[i];
+        if (styles[p]) {
+          var cssProp = p.replace(/([A-Z])/g, "-$1").toLowerCase();
+          try { target.style.setProperty(cssProp, styles[p], "important"); } catch (e) {}
+        }
+      }
+    }
+    apply(el);
+    // Also apply to the deepest single-wrapper descendant (the text-painting node)
+    var leaf = el;
+    var guard = 0;
+    while (leaf && leaf.children && leaf.children.length === 1 && guard++ < 4) {
+      leaf = leaf.children[0];
+    }
+    if (leaf && leaf !== el) apply(leaf);
+  }
+
+  function applySectionVariant(selector, text, testMethod, controlText, category, currentText, variantId, capturedTagName, captureOriginalText, capturedStyles) {
     if (!text) return;
+
+    // ----- CAPTURE-FIRST PATH -----
+    // If the variant carries Visual Builder capture, trust it above everything else.
+    // The user confirmed that exact element in the builder; we don't guess.
+    if (capturedTagName && captureOriginalText) {
+      var capMatches = findByCapture(capturedTagName, captureOriginalText);
+      if (capMatches.length > 0) {
+        console.log("[SA] capture-first: " + capMatches.length + " match(es) for " + capturedTagName + " '" + captureOriginalText.slice(0, 40) + "'");
+        for (var cm = 0; cm < capMatches.length; cm++) {
+          applyTextToElement(capMatches[cm], text, testMethod, category);
+          if (capturedStyles) applyCapturedStyles(capMatches[cm], capturedStyles);
+          capMatches[cm].setAttribute("data-sa-swapped", "true");
+        }
+        return;
+      }
+      console.log("[SA] capture-first: no match for captured element, falling back to text/selector");
+    }
 
     var allElements = findElements(selector, currentText, controlText, category);
     console.log("[SA] applySectionVariant", category, "found", allElements.length, "elements", "selector:", selector);
@@ -781,17 +847,27 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         // (more reliable on pages with many H1s where selector-based matching struggles)
         if (isPreviewMode && data.headline.controlText) {
           var directMatch = directTextFind(data.headline.controlText, "headline");
-          if (directMatch) {
-            applyTextToElement(directMatch, data.headline.text, data.headline.testMethod || "text_swap", "headline");
-            directMatch.setAttribute("data-sa-swapped", "true");
-            console.log("[SA] preview: direct text match applied for headline");
-          } else {
-            // Fall back to normal approach
+          // Capture-first path — if Visual Builder data is present, it's authoritative.
+          // Fall through to the legacy text-match / selector cascade only if nothing matched.
+          if (data.headline.capturedTagName && data.headline.captureOriginalText) {
             applySectionVariant(
               data.headline.selector, data.headline.text,
               data.headline.testMethod || "text_swap",
               data.headline.controlText, data.headline.category || "headline",
-              data.headline.currentText, data.headline.id
+              data.headline.currentText, data.headline.id,
+              data.headline.capturedTagName, data.headline.captureOriginalText, data.headline.capturedStyles
+            );
+          } else if (directMatch) {
+            applyTextToElement(directMatch, data.headline.text, data.headline.testMethod || "text_swap", "headline");
+            directMatch.setAttribute("data-sa-swapped", "true");
+            console.log("[SA] preview: direct text match applied for headline");
+          } else {
+            applySectionVariant(
+              data.headline.selector, data.headline.text,
+              data.headline.testMethod || "text_swap",
+              data.headline.controlText, data.headline.category || "headline",
+              data.headline.currentText, data.headline.id,
+              data.headline.capturedTagName, data.headline.captureOriginalText, data.headline.capturedStyles
             );
           }
         } else {
@@ -799,32 +875,45 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
             data.headline.selector, data.headline.text,
             data.headline.testMethod || "text_swap",
             data.headline.controlText, data.headline.category || "headline",
-            data.headline.currentText, data.headline.id
+            data.headline.currentText, data.headline.id,
+            data.headline.capturedTagName, data.headline.captureOriginalText, data.headline.capturedStyles
           );
         }
       }
       // Apply subheadline variant — SKIP if control
       if (data.subheadline && data.subheadline.text && !data.subheadline.isControl) {
         if (isPreviewMode && data.subheadline.controlText) {
-          var directSubMatch = directTextFind(data.subheadline.controlText, "subheadline");
-          if (directSubMatch) {
-            applyTextToElement(directSubMatch, data.subheadline.text, data.subheadline.testMethod || "text_swap", "subheadline");
-            directSubMatch.setAttribute("data-sa-swapped", "true");
-            console.log("[SA] preview: direct text match applied for subheadline");
-          } else {
+          if (data.subheadline.capturedTagName && data.subheadline.captureOriginalText) {
             applySectionVariant(
               data.subheadline.selector, data.subheadline.text,
               data.subheadline.testMethod || "text_swap",
               data.subheadline.controlText, data.subheadline.category || "subheadline",
-              data.subheadline.currentText, data.subheadline.id
+              data.subheadline.currentText, data.subheadline.id,
+              data.subheadline.capturedTagName, data.subheadline.captureOriginalText, data.subheadline.capturedStyles
             );
+          } else {
+            var directSubMatch = directTextFind(data.subheadline.controlText, "subheadline");
+            if (directSubMatch) {
+              applyTextToElement(directSubMatch, data.subheadline.text, data.subheadline.testMethod || "text_swap", "subheadline");
+              directSubMatch.setAttribute("data-sa-swapped", "true");
+              console.log("[SA] preview: direct text match applied for subheadline");
+            } else {
+              applySectionVariant(
+                data.subheadline.selector, data.subheadline.text,
+                data.subheadline.testMethod || "text_swap",
+                data.subheadline.controlText, data.subheadline.category || "subheadline",
+                data.subheadline.currentText, data.subheadline.id,
+                null, null, null
+              );
+            }
           }
         } else {
           applySectionVariant(
             data.subheadline.selector, data.subheadline.text,
             data.subheadline.testMethod || "text_swap",
             data.subheadline.controlText, data.subheadline.category || "subheadline",
-            data.subheadline.currentText, data.subheadline.id
+            data.subheadline.currentText, data.subheadline.id,
+            data.subheadline.capturedTagName, data.subheadline.captureOriginalText, data.subheadline.capturedStyles
           );
         }
       }
@@ -834,7 +923,8 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           if (!sv || !sv.text || sv.isControl) return;
           applySectionVariant(
             sv.selector, sv.text, sv.testMethod || "text_swap",
-            sv.controlText, sv.category, sv.currentText, sv.id
+            sv.controlText, sv.category, sv.currentText, sv.id,
+            sv.capturedTagName, sv.captureOriginalText, sv.capturedStyles
           );
         });
       }

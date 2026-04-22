@@ -1554,20 +1554,51 @@ export async function registerRoutes(server: Server, app: Express) {
     removeHoverLabel();
   });
 
-  document.addEventListener('click', function(e) {
-    var el = findBestContainer(e.target);
+  // --- VISUAL BUILDER (April 2026) ---
+  //
+  // State:
+  //   _selectedEl  — the currently highlighted element
+  //   _editingEl   — the element that is currently in contentEditable mode
+  //   _originalHTML — the HTML content of _editingEl BEFORE user edits (so we
+  //                   can cancel / compute diff / send original to server)
+  //
+  // Event flow:
+  //   mouseover        — blue dashed outline, show tag label
+  //   click            — select + enter edit mode inline (contentEditable = true)
+  //   blur / enter     — parent receives current text + captured styles
+  //   parent "save"    — parent commits the variant; bridge resets the element
+  //   parent "cancel"  — bridge reverts the element to _originalHTML
+  //   parent "focus"   — bridge programmatically starts editing a given treePath
+  //                      (used so "Edit Variant" lands on the correct element).
+  var _editingEl = null;
+  var _originalHTML = null;
+
+  function getStableElementHash(el) {
+    // A stable fingerprint combining tag, text, and ancestor tags. Used by the
+    // widget at serve time to find this exact element even if the page markup
+    // shifts slightly. Not cryptographic — just a dedupable string.
+    var txt = (el.innerText || el.textContent || '').trim().toLowerCase().replace(/\\s+/g, ' ').slice(0, 200);
+    var ancestors = [];
+    var cur = el.parentElement;
+    var depth = 0;
+    while (cur && cur !== document.body && depth < 4) {
+      ancestors.unshift(cur.tagName ? cur.tagName.toLowerCase() : '');
+      cur = cur.parentElement;
+      depth++;
+    }
+    return el.tagName.toLowerCase() + '|' + ancestors.join('>') + '|' + txt;
+  }
+
+  function sendSelectionToParent(el, currentText) {
     if (!el) return;
-    e.preventDefault();
-    e.stopPropagation();
-
-    markSelected(el);
-
     var rect = el.getBoundingClientRect();
     var isImage = el.tagName.toUpperCase() === 'IMG';
     var data = {
       tagName: el.tagName.toUpperCase(),
-      textContent: isImage ? (el.alt || '') : (el.innerText || el.textContent || '').trim(),
+      textContent: isImage ? (el.alt || '') : (currentText != null ? currentText : (el.innerText || el.textContent || '').trim()),
+      originalText: isImage ? (el.alt || '') : _originalHTML ? (el.innerText || '').trim() : (el.innerText || el.textContent || '').trim(),
       treePath: getTreePath(el),
+      elementHash: getStableElementHash(el),
       isImage: isImage,
       imageSrc: isImage ? el.src : null,
       imageAlt: isImage ? (el.alt || '') : null,
@@ -1577,14 +1608,148 @@ export async function registerRoutes(server: Server, app: Express) {
       imageRenderedHeight: isImage ? el.offsetHeight : null,
       computedStyles: isImage ? {} : getComputedStyleData(el),
       parentInfo: el.parentElement ? getTreePath(el.parentElement) : '',
-      outerHTML: (el.outerHTML || '').substring(0, 200),
+      outerHTML: (el.outerHTML || '').substring(0, 500),
       rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height }
     };
-
     window.parent.postMessage({ type: 'SA_ELEMENT_SELECTED', data: data }, '*');
+  }
+
+  function enterEditMode(el) {
+    if (!el || el === _editingEl) return;
+    exitEditMode(/*cancel*/ false);
+    var isImage = el.tagName.toUpperCase() === 'IMG';
+    if (isImage) {
+      // Images are not contentEditable. We just report the selection so the
+      // parent can offer an "upload / paste URL" flow.
+      sendSelectionToParent(el);
+      return;
+    }
+    _editingEl = el;
+    _originalHTML = el.innerHTML;
+    el.setAttribute('contenteditable', 'true');
+    el.style.outline = '2px solid #059669';
+    el.style.outlineOffset = '2px';
+    el.style.caretColor = '#059669';
+    el.focus();
+    // Place caret at end so the user can start typing / deleting without surprise
+    try {
+      var sel = window.getSelection();
+      var range = document.createRange();
+      range.selectNodeContents(el);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch (e) {}
+    sendSelectionToParent(el);
+
+    function onInput() {
+      window.parent.postMessage({
+        type: 'SA_ELEMENT_EDITED',
+        data: {
+          treePath: getTreePath(el),
+          currentText: (el.innerText || el.textContent || '').trim(),
+          rect: (function(){ var r = el.getBoundingClientRect(); return { top:r.top,left:r.left,width:r.width,height:r.height }; })()
+        }
+      }, '*');
+    }
+    el.addEventListener('input', onInput);
+    el._saInputHandler = onInput;
+  }
+
+  function exitEditMode(cancel) {
+    if (!_editingEl) return;
+    var el = _editingEl;
+    if (cancel && _originalHTML != null) {
+      el.innerHTML = _originalHTML;
+    }
+    el.removeAttribute('contenteditable');
+    if (el._saInputHandler) {
+      el.removeEventListener('input', el._saInputHandler);
+      delete el._saInputHandler;
+    }
+    _editingEl = null;
+    _originalHTML = null;
+  }
+
+  document.addEventListener('click', function(e) {
+    var el = findBestContainer(e.target);
+    if (!el) return;
+    // If the user clicks inside the element they're already editing, let
+    // the native text-caret behavior happen — do NOT interrupt.
+    if (_editingEl && _editingEl.contains(e.target)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    markSelected(el);
+    enterEditMode(el);
   }, true);
 
-  console.log('[SiteAmoeba] Visual editor bridge loaded for campaign ' + _SA_CAMPAIGN_ID);
+  // Commit edit on Enter (without shift). Cancel on Escape.
+  document.addEventListener('keydown', function(e) {
+    if (!_editingEl) return;
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      window.parent.postMessage({
+        type: 'SA_ELEMENT_COMMIT',
+        data: {
+          treePath: getTreePath(_editingEl),
+          currentText: (_editingEl.innerText || _editingEl.textContent || '').trim(),
+          originalText: (function(){
+            // Reconstruct original text from _originalHTML via a scratch div
+            var d = document.createElement('div');
+            d.innerHTML = _originalHTML || '';
+            return (d.innerText || d.textContent || '').trim();
+          })(),
+          elementHash: getStableElementHash(_editingEl),
+          tagName: _editingEl.tagName.toUpperCase(),
+          treePathParent: _editingEl.parentElement ? getTreePath(_editingEl.parentElement) : '',
+          computedStyles: getComputedStyleData(_editingEl)
+        }
+      }, '*');
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      exitEditMode(true);
+      window.parent.postMessage({ type: 'SA_EDIT_CANCELED' }, '*');
+    }
+  }, true);
+
+  // Parent-driven commands. The parent sends these when the user clicks
+  // "Save" / "Cancel" in the React sidebar.
+  window.addEventListener('message', function(ev) {
+    var msg = ev.data || {};
+    if (msg.type === 'SA_COMMAND_COMMIT') {
+      exitEditMode(false);
+    } else if (msg.type === 'SA_COMMAND_CANCEL') {
+      exitEditMode(true);
+    } else if (msg.type === 'SA_COMMAND_FOCUS_BY_TEXT') {
+      // Parent asks us to pre-select an element by text (used when user
+      // triggers "Add Variant" from a specific section row — we pre-highlight
+      // that section's element).
+      var q = (msg.text || '').toLowerCase().trim();
+      if (!q) return;
+      var best = null;
+      // Prefer semantic tags (H1..H6, STRONG, P) when multiple elements match.
+      var candidates = document.querySelectorAll('h1,h2,h3,h4,h5,h6,strong,b,p,span,div');
+      var bestRank = -1;
+      for (var i = 0; i < candidates.length; i++) {
+        var ct = (candidates[i].innerText || '').toLowerCase().trim();
+        if (!ct || ct !== q) continue;
+        var t = candidates[i].tagName.toUpperCase();
+        var rank = 2;
+        if (t === 'H1' || t === 'H2' || t === 'H3' || t === 'H4' || t === 'H5' || t === 'H6') rank = candidates[i].querySelector('strong,b') ? 10 : 9;
+        else if (t === 'STRONG' || t === 'B') rank = 7;
+        else if (t === 'P') rank = 5;
+        else if (t === 'SPAN') rank = 4;
+        if (rank > bestRank) { bestRank = rank; best = candidates[i]; }
+      }
+      if (best) {
+        markSelected(best);
+        enterEditMode(best);
+        best.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  });
+
+  console.log('[SiteAmoeba] Visual builder bridge loaded for campaign ' + _SA_CAMPAIGN_ID);
 })();
 <\/script>`;
     }
@@ -1721,6 +1886,80 @@ export async function registerRoutes(server: Server, app: Express) {
 
     const variant = await storage.createVariant(variantData);
     res.status(201).json(variant);
+  });
+
+  // POST /api/campaigns/:id/builder-variants
+  //
+  // The ONLY creation path that carries a complete visual-builder capture.
+  // Every field below is mandatory — the intent is that the client can never
+  // create a variant without the user having confirmed it in the builder.
+  //
+  // Required payload:
+  //   text, type, testSectionId, capturedStyles, capturedTreePath,
+  //   capturedTagName, captureOriginalText, capturedElementHash
+  //
+  // The widget uses capturedStyles at serve time to replay exact font-weight
+  // and color, so what the user saw IS what visitors see — even if the host
+  // page's CSS drifts later.
+  app.post("/api/campaigns/:id/builder-variants", requireAuth, async (req: Request, res: Response) => {
+    const campaign = await storage.getCampaign(paramId(req.params.id));
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    const b = req.body || {};
+    const missing: string[] = [];
+    for (const k of ["text", "type", "testSectionId", "capturedStyles", "capturedTreePath", "capturedTagName", "captureOriginalText"]) {
+      if (b[k] === undefined || b[k] === null || (typeof b[k] === "string" && b[k].trim() === "")) {
+        missing.push(k);
+      }
+    }
+    if (missing.length > 0) {
+      return res.status(400).json({ error: "Missing required builder fields", missing });
+    }
+    // Validate the section belongs to this campaign — prevents cross-campaign gluing.
+    const section = await storage.getTestSectionById(b.testSectionId);
+    if (!section || section.campaignId !== campaign.id) {
+      return res.status(400).json({ error: "testSectionId does not belong to this campaign" });
+    }
+    const variantData: any = {
+      campaignId: campaign.id,
+      type: String(b.type),
+      text: sanitizeInput(String(b.text)),
+      isControl: false,
+      isActive: b.isActive !== false, // default ON — the user committed through the builder
+      testSectionId: b.testSectionId,
+      // The full capture payload.
+      capturedStyles: b.capturedStyles,
+      capturedTreePath: String(b.capturedTreePath).slice(0, 500),
+      capturedTagName: String(b.capturedTagName).toUpperCase().slice(0, 20),
+      capturedElementHash: b.capturedElementHash ? String(b.capturedElementHash).slice(0, 500) : null,
+      captureOriginalText: String(b.captureOriginalText).slice(0, 2000),
+      captureScreenshotUrl: b.captureScreenshotUrl ? String(b.captureScreenshotUrl).slice(0, 500) : null,
+      persuasionTags: Array.isArray(b.persuasionTags) ? JSON.stringify(b.persuasionTags) : null,
+    };
+    const variant = await storage.createVariant(variantData);
+    res.status(201).json(variant);
+  });
+
+  // PATCH /api/variants/:id/builder  — matching edit path for the builder.
+  // Accepts the same capture fields so a user re-opening the builder on an
+  // existing variant can commit refreshed styles + text in one call.
+  app.patch("/api/variants/:id/builder", requireAuth, async (req: Request, res: Response) => {
+    const variant = await storage.getVariant(paramId(req.params.id));
+    if (!variant) return res.status(404).json({ error: "Variant not found" });
+    const campaign = await storage.getCampaign(variant.campaignId);
+    if (!campaign || campaign.userId !== req.userId) return res.status(403).json({ error: "Not allowed" });
+    const b = req.body || {};
+    const patch: any = {};
+    if (typeof b.text === "string" && b.text.trim().length > 0) patch.text = sanitizeInput(b.text);
+    if (b.capturedStyles !== undefined) patch.capturedStyles = b.capturedStyles;
+    if (typeof b.capturedTreePath === "string") patch.capturedTreePath = b.capturedTreePath.slice(0, 500);
+    if (typeof b.capturedTagName === "string") patch.capturedTagName = b.capturedTagName.toUpperCase().slice(0, 20);
+    if (typeof b.capturedElementHash === "string") patch.capturedElementHash = b.capturedElementHash.slice(0, 500);
+    if (typeof b.captureOriginalText === "string") patch.captureOriginalText = b.captureOriginalText.slice(0, 2000);
+    if (typeof b.captureScreenshotUrl === "string") patch.captureScreenshotUrl = b.captureScreenshotUrl.slice(0, 500);
+    const updated = await storage.updateVariant(variant.id, patch);
+    res.json(updated);
   });
 
   app.patch("/api/variants/:id", requireAuth, async (req: Request, res: Response) => {
@@ -5378,6 +5617,14 @@ export async function registerRoutes(server: Server, app: Express) {
       currentText: section?.currentText || controlText,
       controlText,
       category: variant.type,
+      // --- Visual Builder capture (April 2026) ---
+      // Surfaced to the widget so it can target the exact element the user
+      // saved through and replay the captured styles — guaranteeing the variant
+      // renders identical to the builder preview.
+      capturedStyles: (variant as any).capturedStyles || null,
+      capturedTreePath: (variant as any).capturedTreePath || null,
+      capturedTagName: (variant as any).capturedTagName || null,
+      captureOriginalText: (variant as any).captureOriginalText || null,
     };
 
     // Return in the same shape as the assign endpoint
@@ -5488,6 +5735,16 @@ export async function registerRoutes(server: Server, app: Express) {
       }
 
       payload.category = variant.type;
+
+      // --- Visual Builder capture fields (April 2026) ---
+      // The widget uses these to (1) find the EXACT element the user saved
+      // against and (2) replay the captured font-weight / color / font-size so
+      // the variant renders identical to what was shown in the builder.
+      if ((variant as any).capturedStyles)      payload.capturedStyles     = (variant as any).capturedStyles;
+      if ((variant as any).capturedTreePath)    payload.capturedTreePath   = (variant as any).capturedTreePath;
+      if ((variant as any).capturedTagName)     payload.capturedTagName    = (variant as any).capturedTagName;
+      if ((variant as any).captureOriginalText) payload.captureOriginalText = (variant as any).captureOriginalText;
+
       return payload;
     }
 
@@ -5516,6 +5773,13 @@ export async function registerRoutes(server: Server, app: Express) {
                 selector: section.selector,
                 testMethod: section.testMethod || "text_swap",
                 sectionId: section.id,
+                category: section.category,
+                currentText: section.currentText || "",
+                // Visual Builder capture replayed for return visitors too.
+                capturedStyles: (variant as any).capturedStyles || null,
+                capturedTreePath: (variant as any).capturedTreePath || null,
+                capturedTagName: (variant as any).capturedTagName || null,
+                captureOriginalText: (variant as any).captureOriginalText || null,
               });
             }
           }
@@ -5618,6 +5882,11 @@ export async function registerRoutes(server: Server, app: Express) {
         // controlText = the control variant text (may differ slightly from currentText)
         currentText: section.currentText || sectionControl?.text || "",
         controlText: sectionControl?.text || "",
+        // Visual Builder capture — widget replays the exact styles the user saw
+        capturedStyles: (chosen as any).capturedStyles || null,
+        capturedTreePath: (chosen as any).capturedTreePath || null,
+        capturedTagName: (chosen as any).capturedTagName || null,
+        captureOriginalText: (chosen as any).captureOriginalText || null,
       });
     }
 
