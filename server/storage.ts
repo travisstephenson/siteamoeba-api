@@ -564,6 +564,16 @@ class StorageImpl implements IStorage {
     await pool.query(`
       ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS section_map JSONB;
     `);
+    // Cached AI-generated "carrot" recommendation for the current biggest
+    // drop-off section. JSON shape:
+    //   { sectionIdx, prevHeading, dropPct, diagnosis, cliffhangers: string[],
+    //     lang, generatedAt }
+    // We regenerate when the biggest-drop section index changes OR when the
+    // drop magnitude shifts by >= 5 percentage points (keeps the advice fresh
+    // without spamming the LLM).
+    await pool.query(`
+      ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS section_dropoff_recommendation JSONB;
+    `);
     // Platform integrations (Teachable, Kajabi, Thinkific, Stan Store webhooks)
     await pool.query(`
       CREATE TABLE IF NOT EXISTS platform_integrations (

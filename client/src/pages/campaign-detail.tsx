@@ -2496,13 +2496,34 @@ interface SectionDropoffData {
   recommendation?: {
     sectionIdx: number;
     sectionLabel: string;
+    prevSectionLabel?: string;
     dropPct: number;
     message: string;
   };
+  carrot?: {
+    sectionIdx: number;
+    dropPct: number;
+    prevHeading: string;
+    prevLabel: string;
+    nextHeading: string;
+    diagnosis: string;
+    cliffhangers: string[];
+    lang: string;
+    generatedAt: string;
+  } | null;
 }
 
 function SectionDropoffPanel({ campaignId }: { campaignId: number }) {
   const [expanded, setExpanded] = useState(false);
+  const { toast } = useToast();
+  const copyCliffhanger = (text: string) => {
+    try {
+      navigator.clipboard.writeText(text);
+      toast({ title: "Copied", description: "Cliffhanger copied — paste it at the end of your previous section." });
+    } catch {
+      toast({ title: "Copy failed", description: "Your browser blocked clipboard access.", variant: "destructive" });
+    }
+  };
   const { data, isLoading } = useQuery<SectionDropoffData>({
     queryKey: ["/api/campaigns", campaignId, "section-dropoff"],
     queryFn: async () => {
@@ -2530,6 +2551,7 @@ function SectionDropoffPanel({ campaignId }: { campaignId: number }) {
 
   const sections = data.sections || [];
   const recommendation = data.recommendation;
+  const carrot = data.carrot;
   const maxReach = Math.max(...sections.map(s => s.reachPct), 1);
 
   return (
@@ -2568,6 +2590,60 @@ function SectionDropoffPanel({ campaignId }: { campaignId: number }) {
               <span className="font-semibold" style={{ color: "hsl(25 95% 53%)" }}>Biggest Drop-off</span>
             </div>
             {recommendation.message}
+          </div>
+        )}
+
+        {/* CARROT — AI-generated cliffhanger recommendation */}
+        {carrot && carrot.cliffhangers && carrot.cliffhangers.length > 0 && (
+          <div
+            className="rounded-lg px-3.5 py-3 space-y-3"
+            style={{
+              background: "hsl(280 70% 60% / 0.07)",
+              border: "1px solid hsl(280 70% 60% / 0.28)",
+            }}
+            data-testid="card-carrot-recommendation"
+          >
+            <div className="flex items-start gap-2">
+              <div className="p-1.5 rounded-md shrink-0" style={{ background: "hsl(280 70% 60% / 0.15)" }}>
+                <Sparkles className="w-3.5 h-3.5" style={{ color: "hsl(280 70% 60%)" }} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="font-semibold text-xs" style={{ color: "hsl(280 70% 60%)" }}>
+                    The Carrot: add a cliffhanger here
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  <span className="font-medium text-foreground">Why they leave: </span>
+                  {carrot.diagnosis}
+                </p>
+                <p className="text-[11px] text-muted-foreground leading-relaxed mt-1">
+                  Paste one of these at the END of <span className="font-medium text-foreground">“{(carrot.prevHeading || carrot.prevLabel || "the previous section").slice(0, 60)}”</span> to open a loop that pulls readers into the next section.
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              {carrot.cliffhangers.slice(0, 3).map((line, i) => (
+                <div
+                  key={i}
+                  className="group rounded-md px-3 py-2 flex items-start gap-2 text-xs leading-relaxed cursor-pointer hover:bg-purple-500/10 transition-colors"
+                  style={{
+                    background: "hsl(280 70% 60% / 0.06)",
+                    border: "1px solid hsl(280 70% 60% / 0.15)",
+                  }}
+                  onClick={() => copyCliffhanger(line)}
+                  data-testid={`carrot-line-${i}`}
+                  title="Click to copy"
+                >
+                  <span className="text-[10px] font-semibold shrink-0 mt-0.5" style={{ color: "hsl(280 70% 60%)" }}>
+                    {i + 1}.
+                  </span>
+                  <span className="flex-1 italic">“{line}”</span>
+                  <Copy className="w-3 h-3 shrink-0 mt-0.5 opacity-40 group-hover:opacity-100 transition-opacity" style={{ color: "hsl(280 70% 60%)" }} />
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

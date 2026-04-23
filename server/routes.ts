@@ -22,6 +22,7 @@ import { evaluateAutopilotTests, advanceAutopilot, generateAutopilotVariants, de
 import { getPlaybook } from "./autopilot-playbooks";
 import { generateWidgetScript } from "./widget-script";
 import { generateDailyObservation, CATEGORY_LABELS } from "./daily-observations";
+import { getCarrotRecommendation, type SectionForCarrot } from "./carrot-recommendation";
 
 // ===== Rate limiters =====
 
@@ -7551,6 +7552,7 @@ export async function registerRoutes(server: Server, app: Express) {
     };
 
     let recommendation = null;
+    let carrot: any = null;
     if (biggestDropIdx >= 0) {
       const dropSection = sections[biggestDropIdx];
       const prevSection = sections[biggestDropIdx - 1];
@@ -7559,9 +7561,57 @@ export async function registerRoutes(server: Server, app: Express) {
       recommendation = {
         sectionIdx: biggestDropIdx,
         sectionLabel: label,
+        prevSectionLabel: prevLabel,
         dropPct: biggestDropPct,
-        message: `${biggestDropPct}% of visitors leave between your ${prevLabel} and ${label} sections. Only ${dropSection.reachPct}% of visitors reach your ${label}. This is the biggest drop-off point on your page — test improving this section next.`,
+        message: `${biggestDropPct}% of visitors leave between "${prevSection.heading || prevLabel}" and "${dropSection.heading || label}". Only ${dropSection.reachPct}% of visitors reach that next section.`,
       };
+
+      // Generate (or load cached) "carrot" cliffhanger recommendation —
+      // actionable copy suggestions the user can paste at the END of the
+      // previous section to keep readers moving forward.
+      try {
+        const user = await storage.getUserById(req.userId!);
+        let llmCfg = null;
+        if (user) {
+          try {
+            const resolved = resolveLLMConfig({
+              operation: "observation",
+              userPlan: user.plan || "free",
+              userProvider: user.llmProvider || undefined,
+              userModel: user.llmModel || undefined,
+              userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : undefined,
+            });
+            llmCfg = resolved.config;
+          } catch {
+            // Free user with no platform budget — carrot falls back to
+            // language-agnostic structural cliffhangers (still useful).
+            llmCfg = null;
+          }
+        }
+
+        const sectionsForCarrot: SectionForCarrot[] = sections.map((s: any) => ({
+          idx: s.idx,
+          label: s.label,
+          heading: s.heading,
+          offsetPct: s.offsetPct,
+          reachPct: s.reachPct,
+          dropFromPrev: s.dropFromPrev,
+        }));
+        carrot = await getCarrotRecommendation({
+          campaignId,
+          campaign: {
+            name: campaign.name,
+            url: campaign.url,
+            niche: campaign.niche,
+            pageType: campaign.pageType,
+          },
+          sections: sectionsForCarrot,
+          llmConfig: llmCfg,
+        });
+      } catch (err) {
+        console.error("[section-dropoff] carrot generation failed:", err);
+        // Non-fatal — the UI still gets the structural recommendation.
+      }
     }
 
     res.json({
@@ -7574,6 +7624,7 @@ export async function registerRoutes(server: Server, app: Express) {
         label: SECTION_LABELS[s.label] || s.label,
       })),
       recommendation,
+      carrot, // New: AI-generated cliffhanger recommendation for the biggest drop-off
     });
   });
 
