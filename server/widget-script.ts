@@ -903,7 +903,7 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   // router, bfcache, unload race) would otherwise cause a silent failure.
   //
   // Anything gated behind a campaign-level flag is declared here but only
-  // activates when the assign response returns `data.antiFlicker === true` etc.
+  // activates when the assign response returns data.antiFlicker === true etc.
   // =====================================================================
 
   // State shared across the hardening systems. Kept in one object so SPA
