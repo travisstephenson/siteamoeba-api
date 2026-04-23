@@ -6286,7 +6286,8 @@ export default function CampaignDetailPage() {
                                 }
                               } catch { /* keep polling */ }
                             }, 3000);
-                            setTimeout(() => { clearInterval(poll); setRescanLoading(false); }, 120000);
+                            // Server-side job TTL is 10 minutes; match it so long scans on big pages finish.
+                            setTimeout(() => { clearInterval(poll); setRescanLoading(false); }, 600000);
                           }
                         } catch (err: any) {
                           setRescanLoading(false);

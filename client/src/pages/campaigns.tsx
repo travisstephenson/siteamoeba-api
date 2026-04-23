@@ -706,6 +706,7 @@ function CampaignWizard({
     setScanning(false);
     setScanResult(null);
     setScanError("");
+    setScanStatus("");
     setSelectedSections(new Set());
     setCampaignName("");
     setCampaignType("purchase");
@@ -729,6 +730,7 @@ function CampaignWizard({
   const handleScan = async () => {
     setUrlError("");
     setScanError("");
+    setScanStatus("Starting scan…");
 
     if (!url.trim()) { setUrlError("Please enter a URL"); return; }
     let normalizedUrl = url.trim();
@@ -746,9 +748,14 @@ function CampaignWizard({
       if (startError) throw new Error(startError);
       if (!jobId) throw new Error("Failed to start scan");
 
-      // Poll for result every 2 seconds (up to 90s)
-      const maxAttempts = 45;
-      for (let i = 0; i < maxAttempts; i++) {
+      // Poll for result every 2 seconds while the server reports the job is still
+      // making progress. No artificial client-side cap — big pages legitimately take
+      // 60–180s to analyze. The server enforces its own 10-minute max.
+      // Friendly status messages update every ~20s so you know it's alive.
+      const startedAt = Date.now();
+      // Loop until the job is done, errors out, or the server TTL expires (10 min).
+      // Each iteration sleeps 2s, so we'd cap somewhere around 300 iterations.
+      for (let i = 0; i < 300; i++) {
         await new Promise(r => setTimeout(r, 2000));
         const pollRes = await apiRequest("GET", `/api/scan-status/${jobId}`);
         if (pollRes.status === 404) throw new Error("Scan job was lost — the server may have restarted. Please try again.");
@@ -768,9 +775,20 @@ function CampaignWizard({
           setStep(2);
           return;
         }
-        // still pending — keep polling
+
+        // Still pending — update the status message so the user knows we're working
+        const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+        const stageLabel =
+          poll.stage === "ai_analyzing" ? "AI is analyzing the page"
+          : poll.stage === "building_sections" ? "Building test sections"
+          : "Fetching page content";
+        let hint = "";
+        if (elapsed > 180) hint = " — large pages can take 3+ minutes, hang tight";
+        else if (elapsed > 120) hint = " — almost there, this page has a lot of content";
+        else if (elapsed > 60) hint = " — this is taking a bit longer than usual, still working";
+        setScanStatus(`${stageLabel}… (${elapsed}s elapsed)${hint}`);
       }
-      throw new Error("Scan timed out after 90 seconds. Try Quick Create instead.");
+      throw new Error("Scan ran for 10 minutes without completing. The server may be under load — please try again.");
     } catch (err: any) {
       const msg = err.message?.replace(/^\d+:\s*/, "") || "Failed to scan page";
       setScanError(msg);
@@ -976,7 +994,9 @@ function CampaignWizard({
                     </div>
                     <div>
                       <p className="text-sm font-medium">Analyzing your page structure…</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">Identifying testable sections with AI</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {scanStatus || "Identifying testable sections with AI"}
+                      </p>
                     </div>
                   </div>
                 )}

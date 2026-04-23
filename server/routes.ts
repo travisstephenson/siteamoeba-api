@@ -4002,7 +4002,7 @@ export async function registerRoutes(server: Server, app: Express) {
   }
 
   // Async job store — in-memory, TTL 10 minutes
-  const scanJobs = new Map<string, { status: "pending" | "done" | "error"; result?: any; error?: string; createdAt: number }>();
+  const scanJobs = new Map<string, { status: "pending" | "done" | "error"; result?: any; error?: string; createdAt: number; stage?: string; stageAt?: number }>();
   setInterval(() => {
     const now = Date.now();
     for (const [id, job] of scanJobs.entries()) {
@@ -4099,9 +4099,11 @@ export async function registerRoutes(server: Server, app: Express) {
   app.get("/api/scan-status/:jobId", requireAuth, async (req: Request, res: Response) => {
     const job = scanJobs.get(req.params.jobId);
     if (!job) return res.status(404).json({ error: "Job not found or expired" });
-    if (job.status === "pending") return res.json({ status: "pending" });
-    if (job.status === "error") return res.json({ status: "error", error: job.error });
-    return res.json({ status: "done", result: job.result });
+    const ageSeconds = Math.floor((Date.now() - job.createdAt) / 1000);
+    const stage = job.stage || "starting";
+    if (job.status === "pending") return res.json({ status: "pending", ageSeconds, stage });
+    if (job.status === "error") return res.json({ status: "error", error: job.error, ageSeconds });
+    return res.json({ status: "done", result: job.result, ageSeconds });
   });
 
   app.post("/api/scan-page", aiLimiter, requireAuth, async (req: Request, res: Response) => {
@@ -4141,8 +4143,17 @@ export async function registerRoutes(server: Server, app: Express) {
 
     // Create async job and return immediately — scan runs in background
     const jobId = "scan_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
-    scanJobs.set(jobId, { status: "pending", createdAt: Date.now() });
+    const jobCreatedAt = Date.now();
+    scanJobs.set(jobId, { status: "pending", createdAt: jobCreatedAt, stage: "fetching_page", stageAt: Date.now() });
     res.json({ jobId });
+
+    // Helper so the background task can update its stage without losing createdAt
+    const setStage = (stage: string) => {
+      const existing = scanJobs.get(jobId);
+      if (existing && existing.status === "pending") {
+        scanJobs.set(jobId, { ...existing, stage, stageAt: Date.now() });
+      }
+    };
 
     // Run the actual scan in the background (not awaited — response already sent)
     (async () => {
@@ -4205,6 +4216,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
     const messages = buildPageScanPrompt(url, cleaned);
 
+    setStage("ai_analyzing");
     let rawResponse: string;
     try {
       rawResponse = await callLLM(llmConfigResolved.config, messages, { maxTokens: 32000 });
@@ -4212,6 +4224,7 @@ export async function registerRoutes(server: Server, app: Express) {
       console.error("Page scan LLM call failed:", err);
       scanJobs.set(jobId, { status: "error", error: err.message || "AI provider error. Check your API key and credits in Settings.", createdAt: Date.now() }); return;
     }
+    setStage("building_sections");
 
     // Parse the JSON response — robust extraction + truncation recovery
     let scanResult: { pageName: string; pageType: string; pageGoal?: string; pricePoint?: string; niche?: string; sections: any[] };
