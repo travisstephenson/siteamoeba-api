@@ -10069,13 +10069,141 @@ ${observationText}`;
         quality: "standard",
       });
 
-      const imageUrl = response.data[0]?.url;
-      if (!imageUrl) throw new Error("No image generated");
+      const dalleUrl = response.data[0]?.url;
+      if (!dalleUrl) throw new Error("No image generated");
 
-      res.json({ url: imageUrl });
+      // DALL-E URLs expire within an hour, so we mirror the image into our own
+      // uploaded_images table and serve it from /api/images/:id. This way a
+      // variant that references it never goes stale.
+      try {
+        const imgResp = await fetch(dalleUrl);
+        if (!imgResp.ok) throw new Error("Failed to fetch generated image");
+        const buf = Buffer.from(await imgResp.arrayBuffer());
+        const mime = imgResp.headers.get("content-type") || "image/png";
+        const { createHash } = await import("crypto");
+        const sha = createHash("sha256").update(buf).digest("hex");
+        const ins = await pool.query(
+          `INSERT INTO uploaded_images (user_id, mime_type, size_bytes, data, source, source_url, sha256)
+             VALUES ($1, $2, $3, $4, 'ai_generated', $5, $6)
+           ON CONFLICT (user_id, sha256) DO UPDATE SET created_at = uploaded_images.created_at
+           RETURNING id`,
+          [req.userId, mime, buf.length, buf, dalleUrl, sha]
+        );
+        const hostedUrl = `${req.protocol}://${req.get("host")}/api/images/${ins.rows[0].id}`;
+        res.json({ url: hostedUrl, prompt, source: "ai_generated" });
+      } catch (mirrorErr: any) {
+        // If mirroring fails, return DALL-E URL directly — it'll work for an hour.
+        console.warn("[generate-image] mirror failed, returning DALL-E URL:", mirrorErr.message);
+        res.json({ url: dalleUrl, prompt, source: "ai_generated", warning: "Image URL expires in ~1 hour; download and re-host if you need a stable URL." });
+      }
     } catch (err: any) {
       console.error("[generate-image]", err.message);
       res.status(500).json({ error: "Image generation failed: " + err.message });
+    }
+  });
+
+  // ============== IMAGE UPLOAD / STORAGE ==============
+  //
+  // Three ways to get an image into the system:
+  //   1. POST /api/ai/generate-image  (DALL-E + auto-mirror, already handled above)
+  //   2. POST /api/images/upload  (user picks a file from their machine)
+  //   3. POST /api/images/from-url  (user pastes any public URL, we mirror it)
+  //
+  // All three return { url } pointing at our own /api/images/:id so the variant
+  // row never depends on an external URL that could expire or change.
+  //
+  // Storage: bytes in Postgres. Cap at 5MB/image. Adequate for A/B tests where
+  // we'll accumulate maybe 50-200 images total across the whole customer base.
+  // If/when we need to scale, swap in S3/R2 behind this endpoint — the public
+  // URL shape (/api/images/:id) stays the same so variants won't break.
+
+  const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+
+  // Parse base64 dataURL or raw bytes submitted as JSON. Avoids adding multer.
+  function parseImagePayload(body: any): { buf: Buffer; mime: string } | null {
+    if (!body) return null;
+    if (typeof body.dataUrl === "string") {
+      // data:image/jpeg;base64,XXXX
+      const m = body.dataUrl.match(/^data:([a-z0-9+/.-]+);base64,(.+)$/i);
+      if (!m) return null;
+      const mime = m[1];
+      try { return { buf: Buffer.from(m[2], "base64"), mime }; } catch { return null; }
+    }
+    return null;
+  }
+
+  // POST /api/images/upload — user file upload via dataURL (simplest client path: FileReader.readAsDataURL)
+  // Route-specific 10MB JSON parser so base64-encoded 5MB images fit (+33% for base64 overhead, +buffer).
+  // This does NOT change the global 1MB limit used by every other endpoint.
+  const expressModule = await import("express");
+  const imageJsonParser = expressModule.default.json({ limit: "10mb" });
+  app.post("/api/images/upload", imageJsonParser, requireAuth, async (req: Request, res: Response) => {
+    try {
+      const parsed = parseImagePayload(req.body);
+      if (!parsed) return res.status(400).json({ error: "Provide an image as dataUrl (base64)" });
+      if (!parsed.mime.startsWith("image/")) return res.status(400).json({ error: "Not an image" });
+      if (parsed.buf.length > IMAGE_MAX_BYTES) {
+        return res.status(413).json({ error: `Image too large — max ${IMAGE_MAX_BYTES / 1024 / 1024}MB` });
+      }
+      const { createHash } = await import("crypto");
+      const sha = createHash("sha256").update(parsed.buf).digest("hex");
+      const ins = await pool.query(
+        `INSERT INTO uploaded_images (user_id, mime_type, size_bytes, data, source, sha256)
+           VALUES ($1, $2, $3, $4, 'upload', $5)
+         ON CONFLICT (user_id, sha256) DO UPDATE SET created_at = uploaded_images.created_at
+         RETURNING id`,
+        [req.userId, parsed.mime, parsed.buf.length, parsed.buf, sha]
+      );
+      const hostedUrl = `${req.protocol}://${req.get("host")}/api/images/${ins.rows[0].id}`;
+      res.json({ url: hostedUrl, id: ins.rows[0].id, size: parsed.buf.length, mime: parsed.mime });
+    } catch (err: any) {
+      console.error("[images/upload]", err.message);
+      res.status(500).json({ error: "Upload failed: " + err.message });
+    }
+  });
+
+  // POST /api/images/from-url — mirror a public image URL into our storage
+  app.post("/api/images/from-url", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const sourceUrl: string = req.body?.url || "";
+      if (!/^https?:\/\//.test(sourceUrl)) return res.status(400).json({ error: "Invalid URL" });
+      const r = await fetch(sourceUrl, { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) return res.status(400).json({ error: `Could not fetch: HTTP ${r.status}` });
+      const mime = r.headers.get("content-type") || "image/jpeg";
+      if (!mime.startsWith("image/")) return res.status(400).json({ error: "URL does not point to an image" });
+      const buf = Buffer.from(await r.arrayBuffer());
+      if (buf.length > IMAGE_MAX_BYTES) return res.status(413).json({ error: `Image too large — max ${IMAGE_MAX_BYTES / 1024 / 1024}MB` });
+      const { createHash } = await import("crypto");
+      const sha = createHash("sha256").update(buf).digest("hex");
+      const ins = await pool.query(
+        `INSERT INTO uploaded_images (user_id, mime_type, size_bytes, data, source, source_url, sha256)
+           VALUES ($1, $2, $3, $4, 'url_paste', $5, $6)
+         ON CONFLICT (user_id, sha256) DO UPDATE SET created_at = uploaded_images.created_at
+         RETURNING id`,
+        [req.userId, mime, buf.length, buf, sourceUrl, sha]
+      );
+      const hostedUrl = `${req.protocol}://${req.get("host")}/api/images/${ins.rows[0].id}`;
+      res.json({ url: hostedUrl, id: ins.rows[0].id, size: buf.length, mime });
+    } catch (err: any) {
+      console.error("[images/from-url]", err.message);
+      res.status(500).json({ error: "Mirror failed: " + err.message });
+    }
+  });
+
+  // GET /api/images/:id — public image serve (CORS-allowed so it works cross-domain on customer pages)
+  app.get("/api/images/:id", async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (!id) return res.status(404).end();
+      const r = await pool.query(`SELECT mime_type, data FROM uploaded_images WHERE id = $1`, [id]);
+      if (r.rows.length === 0) return res.status(404).end();
+      res.setHeader("Content-Type", r.rows[0].mime_type);
+      res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.send(r.rows[0].data);
+    } catch (err: any) {
+      console.error("[images/serve]", err.message);
+      res.status(500).end();
     }
   });
 

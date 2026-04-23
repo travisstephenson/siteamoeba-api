@@ -23,7 +23,7 @@ import { useToast } from "@/hooks/use-toast";
 import { invalidateActiveTests } from "@/hooks/use-active-tests";
 import {
   X, Save, RefreshCw, Type, Sparkles, PencilLine, Smartphone, Monitor,
-  Rocket, Check, Eye, Wand2, AlertTriangle,
+  Rocket, Check, Eye, Wand2, AlertTriangle, Image as ImageIcon, Upload, Link as LinkIcon, Loader2,
 } from "lucide-react";
 
 // ---------- Types ----------
@@ -73,6 +73,12 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [variantText, setVariantText] = useState<string>("");
+  // Image-mode state — only used when the selection is an <img>
+  const [imageUrl, setImageUrl] = useState<string>("");             // final URL to save as variant.text
+  const [imageMode, setImageMode] = useState<"choose" | "upload" | "ai" | "url">("choose");
+  const [imagePrompt, setImagePrompt] = useState<string>("");
+  const [imageBusy, setImageBusy] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [mode, setMode] = useState<"choose" | "manual" | "ai">("choose");
   const [aiLoading, setAiLoading] = useState(false);
   const [aiSuggestions, setAiSuggestions] = useState<AISuggestion[]>([]);
@@ -101,6 +107,10 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
         setChosenAiIndex(null);
         // Brief pause so the reset propagates before the new selection lands
         // (prevents a stale SA_COMMAND_PREVIEW_TEXT from firing on the new el)
+        // Reset image-mode state too when the selection changes
+        setImageUrl("");
+        setImageMode("choose");
+        setImagePrompt("");
         setTimeout(() => {
           setSelection({
             tagName: d.tagName,
@@ -229,16 +239,138 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
     );
   }
 
+  // ---------- Image helpers ----------
+  // Convert a File to a base64 dataURL for our /api/images/upload endpoint.
+  // (We deliberately avoid multer on the server so there's no extra dependency.)
+  function fileToDataUrl(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(String(r.result));
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
+    });
+  }
+
+  async function handleImageFileSelect(file: File) {
+    if (!file.type.startsWith("image/")) {
+      toast({ title: "Not an image", description: "Pick a JPG, PNG, WebP, or GIF file.", variant: "destructive" });
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast({ title: "Image too large", description: "Max 5MB. Try compressing or resizing first.", variant: "destructive" });
+      return;
+    }
+    setImageBusy(true);
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      const r = await apiRequest("POST", "/api/images/upload", { dataUrl });
+      const j = await r.json();
+      if (!j.url) throw new Error(j.error || "Upload failed");
+      setImageUrl(j.url);
+      // Push to the iframe so the user sees it instantly
+      iframeRef.current?.contentWindow?.postMessage({ type: "SA_COMMAND_PREVIEW_TEXT", text: j.url }, "*");
+      toast({ title: "Image ready", description: "Previewed on the page. Hit Deploy to launch the test." });
+    } catch (err: any) {
+      toast({ title: "Upload failed", description: err?.message || "Try a different file.", variant: "destructive" });
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function handleImageGenerate() {
+    if (!imagePrompt.trim()) {
+      toast({ title: "Prompt required", description: "Describe the image you want to test.", variant: "destructive" });
+      return;
+    }
+    setImageBusy(true);
+    try {
+      const r = await apiRequest("POST", "/api/ai/generate-image", { prompt: imagePrompt });
+      const j = await r.json();
+      if (!j.url) throw new Error(j.error || "Generation failed");
+      setImageUrl(j.url);
+      iframeRef.current?.contentWindow?.postMessage({ type: "SA_COMMAND_PREVIEW_TEXT", text: j.url }, "*");
+      toast({ title: "Image generated", description: "Previewed on the page. Hit Deploy to launch." });
+    } catch (err: any) {
+      toast({ title: "Generation failed", description: err?.message || "Try a different prompt.", variant: "destructive" });
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function handleImageFromUrl(url: string) {
+    const trimmed = url.trim();
+    if (!/^https?:\/\//.test(trimmed)) {
+      toast({ title: "Invalid URL", description: "Paste a full image URL (https://...)", variant: "destructive" });
+      return;
+    }
+    setImageBusy(true);
+    try {
+      const r = await apiRequest("POST", "/api/images/from-url", { url: trimmed });
+      const j = await r.json();
+      if (!j.url) throw new Error(j.error || "Mirror failed");
+      setImageUrl(j.url);
+      iframeRef.current?.contentWindow?.postMessage({ type: "SA_COMMAND_PREVIEW_TEXT", text: j.url }, "*");
+      toast({ title: "Image mirrored", description: "Previewed on the page. Hit Deploy to launch." });
+    } catch (err: any) {
+      toast({ title: "Mirror failed", description: err?.message || "The URL may be unreachable.", variant: "destructive" });
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
   // ---------- Save ----------
   async function handleSave(activateAfter: boolean) {
     if (!selection) {
-      toast({ title: "Pick an element", description: "Click the text on the page you want to vary.", variant: "destructive" });
+      toast({ title: "Pick an element", description: "Click the element on the page you want to vary.", variant: "destructive" });
       return;
     }
+
+    // Image branch — save variant.text = image URL (widget auto-detects and does an src swap)
     if (selection.isImage) {
-      toast({ title: "Images not supported yet", description: "Pick a text element.", variant: "destructive" });
+      if (!imageUrl) {
+        toast({ title: "No image selected", description: "Upload, generate, or paste an image URL first.", variant: "destructive" });
+        return;
+      }
+      setIsSaving(true);
+      try {
+        const payload = {
+          type: section.category,
+          testSectionId: section.id,
+          text: imageUrl,
+          capturedStyles: selection.computedStyles,
+          capturedTreePath: selection.treePath,
+          capturedTagName: selection.tagName,
+          captureOriginalText: selection.originalText,
+          capturedElementHash: selection.elementHash,
+          device,
+          isActive: activateAfter,
+        };
+        let variant;
+        if (editingVariant) {
+          const r = await apiRequest("PATCH", `/api/variants/${editingVariant.id}/builder`, payload);
+          variant = await r.json();
+        } else {
+          const r = await apiRequest("POST", `/api/campaigns/${campaignId}/builder-variants`, payload);
+          variant = await r.json();
+        }
+        setSavedVariantId(variant.id);
+        queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId] });
+        queryClient.invalidateQueries({ queryKey: ["/api/campaigns", campaignId, "stats"] });
+        invalidateActiveTests(queryClient, campaignId);
+        if (activateAfter) {
+          toast({ title: "Image test deployed", description: "The new image is live and splitting traffic." });
+          onClose();
+        } else {
+          toast({ title: "Image variant saved", description: "Ready to deploy when you are." });
+        }
+      } catch (err: any) {
+        toast({ title: "Save failed", description: err?.message || "Something went wrong.", variant: "destructive" });
+      } finally {
+        setIsSaving(false);
+      }
       return;
     }
+
     const trimmed = variantText.trim();
     if (!trimmed) {
       toast({ title: "Text is empty", description: "Write or generate new copy first.", variant: "destructive" });
@@ -444,6 +576,162 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
 
             {/* Main body: scrollable. min-h-0 here too, belt and braces. */}
             <div className="flex-1 overflow-y-auto min-h-0">
+              {/* Image mode — only when the selected element is an <img> */}
+              {selection && selection.isImage && (
+                <div className="p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-sm font-semibold">
+                    <ImageIcon className="w-4 h-4 text-primary" />
+                    Image variant
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Pick a new image. The widget will swap the image source for
+                    visitors in the variant group. Original stays for control visitors.
+                  </div>
+
+                  {/* Mode toggle */}
+                  <div className="grid grid-cols-3 gap-2">
+                    <Button
+                      size="sm"
+                      variant={imageMode === "upload" ? "default" : "outline"}
+                      onClick={() => setImageMode("upload")}
+                      data-testid="button-image-mode-upload"
+                      className="gap-1.5 h-9"
+                    >
+                      <Upload className="w-3.5 h-3.5" /> Upload
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={imageMode === "ai" ? "default" : "outline"}
+                      onClick={() => setImageMode("ai")}
+                      data-testid="button-image-mode-ai"
+                      className="gap-1.5 h-9"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" /> AI
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={imageMode === "url" ? "default" : "outline"}
+                      onClick={() => setImageMode("url")}
+                      data-testid="button-image-mode-url"
+                      className="gap-1.5 h-9"
+                    >
+                      <LinkIcon className="w-3.5 h-3.5" /> URL
+                    </Button>
+                  </div>
+
+                  {/* Upload panel */}
+                  {imageMode === "upload" && (
+                    <div className="border-2 border-dashed rounded-md p-4 text-center">
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          if (f) handleImageFileSelect(f);
+                          e.target.value = ""; // allow re-select of same file
+                        }}
+                        data-testid="input-image-file"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={imageBusy}
+                        onClick={() => fileInputRef.current?.click()}
+                        className="gap-1.5"
+                        data-testid="button-pick-image-file"
+                      >
+                        {imageBusy
+                          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Uploading…</>
+                          : <><Upload className="w-3.5 h-3.5" /> Choose image</>}
+                      </Button>
+                      <div className="text-[11px] text-muted-foreground mt-2">
+                        JPG, PNG, WebP or GIF. Max 5MB.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* AI generate panel */}
+                  {imageMode === "ai" && (
+                    <div className="space-y-2">
+                      <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                        Describe the image
+                      </Label>
+                      <Textarea
+                        value={imagePrompt}
+                        onChange={(e) => setImagePrompt(e.target.value)}
+                        rows={3}
+                        className="text-sm"
+                        placeholder="e.g. A confident female entrepreneur with a laptop in a sunlit home office, natural lighting, editorial photography"
+                        data-testid="textarea-image-prompt"
+                      />
+                      <Button
+                        size="sm"
+                        disabled={imageBusy || !imagePrompt.trim()}
+                        onClick={handleImageGenerate}
+                        className="w-full gap-1.5"
+                        data-testid="button-generate-image"
+                      >
+                        {imageBusy
+                          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Generating…</>
+                          : <><Sparkles className="w-3.5 h-3.5" /> Generate (5 credits)</>}
+                      </Button>
+                      <div className="text-[11px] text-muted-foreground">
+                        DALL-E 3 image, auto-hosted on our CDN so it never expires.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* URL paste panel */}
+                  {imageMode === "url" && (
+                    <div className="space-y-2">
+                      <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+                        Image URL
+                      </Label>
+                      <Input
+                        placeholder="https://example.com/image.jpg"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") handleImageFromUrl((e.target as HTMLInputElement).value);
+                        }}
+                        data-testid="input-image-url"
+                      />
+                      <Button
+                        size="sm"
+                        disabled={imageBusy}
+                        onClick={() => {
+                          const input = document.querySelector('[data-testid="input-image-url"]') as HTMLInputElement | null;
+                          if (input) handleImageFromUrl(input.value);
+                        }}
+                        className="w-full gap-1.5"
+                      >
+                        {imageBusy
+                          ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Mirroring…</>
+                          : <><LinkIcon className="w-3.5 h-3.5" /> Use this URL</>}
+                      </Button>
+                      <div className="text-[11px] text-muted-foreground">
+                        We'll copy the image to our storage so it stays available.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Selected-image preview */}
+                  {imageUrl && (
+                    <div className="rounded-md border p-2 bg-muted/30">
+                      <div className="text-[11px] uppercase tracking-wide text-muted-foreground mb-1">
+                        Current challenger image
+                      </div>
+                      <img
+                        src={imageUrl}
+                        alt="Variant preview"
+                        className="w-full h-auto rounded"
+                        style={{ maxHeight: 180, objectFit: "contain" }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Mode chooser */}
               {mode === "choose" && selection && !selection.isImage && (
                 <div className="p-4 space-y-3">

@@ -249,8 +249,19 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   //     Do NOT drill into child spans — that would put the new text inside a colored span
   //     (e.g. the orange "Offer-Ad Loop" span) instead of replacing the whole headline.
   function applyTextToElement(el, text, testMethod, category, styleOverrides) {
-    // IMAGE VARIANT: swap src attribute when text is an image URL
-    if (text && (text.startsWith('http://') || text.startsWith('https://') || text.startsWith('/')) && text.match(/\\.(jpg|jpeg|png|gif|webp|svg)(\\?|$)/i)) {
+    // IMAGE VARIANT: swap src attribute when text is an image URL.
+    // Recognized patterns:
+    //   * Any URL ending in .jpg/.jpeg/.png/.gif/.webp/.svg (+ optional query)
+    //   * Our own image-hosting endpoint: /api/images/<id> (no extension)
+    //   * Common CDNs: imgur, cloudinary, imagekit, supabase storage
+    var looksLikeImage =
+      text && (text.startsWith('http://') || text.startsWith('https://') || text.startsWith('/')) &&
+      (
+        text.match(/\\.(jpg|jpeg|png|gif|webp|svg)(\\?|$|#)/i) ||
+        text.match(/\\/api\\/images\\/\\d+/) ||
+        text.match(/(imgur|cloudinary|imagekit|res\\.cloudinary|supabase\\.co\\/storage)/i)
+      );
+    if (looksLikeImage) {
       var imgEl = (el.tagName && el.tagName.toUpperCase() === 'IMG') ? el : el.querySelector('img');
       if (imgEl) {
         if (!imgEl.style.width) imgEl.style.width = imgEl.offsetWidth + 'px';
