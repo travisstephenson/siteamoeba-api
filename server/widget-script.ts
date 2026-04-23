@@ -1138,12 +1138,27 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   // Safety net: reveal after 2.5s no matter what so no visitor ever sees a
   // stuck-hidden page even if every fetch failed.
   setTimeout(saReveal, 2500);
+  // Fast reveal for visitors assigned to CONTROL: we don't need to hide the
+  // page for them since we're not swapping anything. The assign response
+  // tells us who's on control — reveal as soon as we know.
+  window._saRevealIfControl = function(data) {
+    try {
+      var allControl =
+        (!data.headline || data.headline.isControl) &&
+        (!data.subheadline || data.subheadline.isControl) &&
+        (!data.sections || !data.sections.some(function(s){ return s && !s.isControl; }));
+      if (allControl) saReveal();
+    } catch(e) { saReveal(); }
+  };
   // Expose for the handleAssignData hook below
   window._saReveal = saReveal;
 
   function handleAssignData(data) {
       // Remember this payload so SPA navigation + bfcache can replay it.
       SA_H.lastAssignData = data;
+
+      // Reveal early for control-only assignments (no variant to wait for).
+      if (typeof window._saRevealIfControl === "function") window._saRevealIfControl(data);
 
       // Apply headline variant — SKIP if control (let original page be the control)
       if (data.headline && data.headline.text && !data.headline.isControl) {
