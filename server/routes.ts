@@ -7089,15 +7089,19 @@ export async function registerRoutes(server: Server, app: Express) {
         return res.json({ selectors: [], enabled: false });
       }
 
-      // Selectors for all active non-control variants. Capture columns provide
-      // the most reliable selectors; fall back to the variant's own selector.
+      // Selectors come from the test_section the variant is bound to. Join on
+      // test_section_id so every active non-control variant contributes its
+      // section's CSS selector to the pre-hide list.
       const varRes = await pool.query(
-        `SELECT v.selector, v.capture_tag_name, v.capture_original_text
+        `SELECT DISTINCT ts.selector, ts.category
            FROM variants v
+           JOIN test_sections ts ON ts.id = v.test_section_id
           WHERE v.campaign_id = $1
             AND v.is_active = true
             AND v.is_control = false
-            AND v.test_section_id IS NOT NULL`,
+            AND ts.is_active = true
+            AND ts.selector IS NOT NULL
+            AND ts.selector != ''`,
         [cid]
       );
 
