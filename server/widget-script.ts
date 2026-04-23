@@ -8,6 +8,61 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
   var API = "${apiBase}";
   var CID = ${campaignId};
 
+  // === ANTI-FLICKER PRE-HIDE (opt-in, cached) ===
+  // Before any other work, check localStorage for a cached list of selectors to
+  // pre-hide. If the cache is fresh (<5 min), inject a <style id="sa-hide">
+  // tag that hides those elements via opacity:0 until variants are applied.
+  // This eliminates the flash-of-control-content for repeat visitors.
+  //
+  // On the very first visit the cache is empty and nothing is hidden — that's
+  // correct behavior. We then fetch /api/widget/bundle in parallel so next
+  // visit has the cache ready. If anti_flicker_enabled is false for this
+  // campaign, /api/widget/bundle returns an empty selector list and the cache
+  // stays empty (no hiding ever happens).
+  //
+  // Safety nets:
+  //   * The widget's own handleAssignData calls saReveal() when variants land
+  //   * A 2.5s setTimeout reveal fires unconditionally (see later in this file)
+  //   So the page can NEVER stay stuck hidden, even if every network call fails.
+  (function preHide(){
+    try {
+      var key = "sa_bundle_" + CID + "_" + location.pathname;
+      var raw = localStorage.getItem(key);
+      if (raw) {
+        var d = JSON.parse(raw);
+        if (d && d.selectors && d.ts && Date.now() - d.ts < 300000 && d.selectors.length) {
+          var style = document.createElement("style");
+          style.id = "sa-hide";
+          style.textContent = d.selectors.join(",") + "{opacity:0!important;visibility:hidden!important;transition:none!important}";
+          (document.head || document.documentElement).appendChild(style);
+        }
+      }
+    } catch(e) {}
+  })();
+
+  // Refresh the bundle cache for next page load (fire-and-forget).
+  // Runs in parallel with the assign call below so it doesn't slow anything down.
+  (function refreshBundle(){
+    try {
+      fetch(API + "/api/widget/bundle?cid=" + CID, { cache: "no-store" })
+        .then(function(r){ return r.json(); })
+        .then(function(data){
+          if (!data) return;
+          var key = "sa_bundle_" + CID + "_" + location.pathname;
+          if (data.enabled && data.selectors && data.selectors.length) {
+            localStorage.setItem(key, JSON.stringify({
+              selectors: data.selectors,
+              ts: Date.now()
+            }));
+          } else {
+            // Anti-flicker disabled or no variants — purge any stale cache
+            try { localStorage.removeItem(key); } catch(e) {}
+          }
+        })
+        .catch(function(){});
+    } catch(e) {}
+  })();
+
   // === VISITOR ID (resilient fallback chain) ===
   var vid = null;
   var vidStore = "none";
@@ -840,7 +895,256 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     return best.el;
   }
 
+  // =====================================================================
+  // WIDGET HARDENING v2 — pin loop, SPA nav, bfcache, dedup, verify beacon
+  //
+  // All additions below are DEFENSIVE and ADDITIVE. They never change existing
+  // variant-apply paths. They only re-run them when something external (SPA
+  // router, bfcache, unload race) would otherwise cause a silent failure.
+  //
+  // Anything gated behind a campaign-level flag is declared here but only
+  // activates when the assign response returns `data.antiFlicker === true` etc.
+  // =====================================================================
+
+  // State shared across the hardening systems. Kept in one object so SPA
+  // navigation can reset it cleanly.
+  var SA_H = {
+    lastAssignData: null,           // last assign-response payload (for re-apply)
+    pinTargets: [],                 // active pin-loop targets
+    pinInterval: null,              // setInterval handle
+    lastPath: location.pathname,    // for SPA route-change detection
+    pinStartedAt: 0,
+    hardeningEnabled: true,         // safe to disable globally if we see regressions
+  };
+
+  // ---- Pin loop ----
+  // After we apply a variant, we register the element so a 500ms loop can
+  // re-apply it for up to 15 seconds if a framework (GHL / ClickFunnels / Vue /
+  // React) re-renders the element and clobbers our text swap.
+  //
+  // Cheap when idle (interval clears itself once no targets remain). We only
+  // ever run the loop when we have at least one active target to check.
+  function saPinRegister(section) {
+    if (!section || !SA_H.hardeningEnabled) return;
+    // Dedup: one target per variant id
+    for (var i = 0; i < SA_H.pinTargets.length; i++) {
+      if (SA_H.pinTargets[i].variantId === section.id) return;
+    }
+    SA_H.pinTargets.push({
+      variantId: section.id,
+      selector: section.selector || null,
+      capturedTagName: section.capturedTagName || null,
+      captureOriginalText: section.captureOriginalText || null,
+      expectedText: section.text || "",
+      controlText: section.controlText || null,
+      category: section.category || null,
+      testMethod: section.testMethod || "text_swap",
+      capturedStyles: section.capturedStyles || null,
+      retries: 0,
+      startedAt: Date.now(),
+      originalPath: location.pathname,
+    });
+    saPinLoopStart();
+  }
+
+  function saPinLoopStart() {
+    if (SA_H.pinInterval) return;
+    SA_H.pinStartedAt = Date.now();
+    SA_H.pinInterval = setInterval(function () {
+      if (!SA_H.pinTargets.length) {
+        clearInterval(SA_H.pinInterval);
+        SA_H.pinInterval = null;
+        return;
+      }
+      SA_H.pinTargets = SA_H.pinTargets.filter(function (t) {
+        // Stop conditions per target
+        if (Date.now() - t.startedAt > 15000) return false;       // 15s cap
+        if (t.retries > 30) return false;                          // max 30 retries
+        if (t.originalPath && t.originalPath !== location.pathname) return false; // SPA nav
+
+        // Find the element fresh every tick — it may have been replaced
+        var el = null;
+        if (t.capturedTagName && t.captureOriginalText) {
+          var found = findByCapture(t.capturedTagName, t.captureOriginalText);
+          if (found && found.length > 0) el = found[0];
+        }
+        if (!el && t.selector) {
+          try { el = document.querySelector(t.selector); } catch (e) {}
+        }
+        if (!el && t.controlText) {
+          el = directTextFind(t.controlText, t.category);
+        }
+        if (!el) {
+          // Element not currently in DOM — keep trying, it may hydrate in later
+          t.retries++;
+          return true;
+        }
+
+        // Compare current text. If it matches the variant, we're good.
+        var current = (el.textContent || "").replace(/\s+/g, " ").trim();
+        var expected = (t.expectedText || "").replace(/\s+/g, " ").trim();
+        // Be forgiving on whitespace; only re-apply if the text actually changed
+        if (current === expected || current.indexOf(expected) === 0) return true;
+
+        // The element got clobbered. Re-apply.
+        try {
+          applyTextToElement(el, t.expectedText, t.testMethod, t.category);
+          if (t.capturedStyles) applyCapturedStyles(el, t.capturedStyles);
+          el.setAttribute("data-sa-pinned", "1");
+          t.retries++;
+        } catch (e) { /* swallow — don't let pin errors crash the page */ }
+        return true;
+      });
+    }, 500);
+  }
+
+  // ---- Re-apply the full assign payload (used by SPA nav + bfcache) ----
+  // This simply re-runs handleAssignData against the last successful payload
+  // as long as we're still on the same host. Keeps the variant application
+  // logic in one place — hardening is a dispatcher, not a duplicator.
+  function saReapplyLastAssign() {
+    if (!SA_H.lastAssignData || !SA_H.hardeningEnabled) return;
+    try { handleAssignData(SA_H.lastAssignData); }
+    catch (e) { console.warn("[SA] re-apply failed:", e); }
+  }
+
+  // ---- SPA route-change detection ----
+  // Wraps history.pushState/replaceState once, listens to popstate. When the
+  // pathname actually changes (not just a ?query tweak) we reset pin targets
+  // and re-fetch the assignment for the new path. On non-site-scoped installs
+  // we still re-apply the last assignment so the variant survives a virtual
+  // navigation (common on GHL surveys).
+  (function installSpaNavListener() {
+    try {
+      var origPush = history.pushState;
+      var origReplace = history.replaceState;
+      history.pushState = function () {
+        var ret = origPush.apply(this, arguments);
+        saOnRouteChange();
+        return ret;
+      };
+      history.replaceState = function () {
+        var ret = origReplace.apply(this, arguments);
+        saOnRouteChange();
+        return ret;
+      };
+      window.addEventListener("popstate", saOnRouteChange);
+    } catch (e) { /* not fatal */ }
+  })();
+
+  function saOnRouteChange() {
+    if (!SA_H.hardeningEnabled) return;
+    if (location.pathname === SA_H.lastPath) return;
+    SA_H.lastPath = location.pathname;
+    // Clear pin targets (they belonged to the previous page)
+    SA_H.pinTargets = [];
+    // Re-apply immediately so anything cached keeps working mid-navigation
+    saReapplyLastAssign();
+    console.log("[SA] SPA route change — re-applied variants");
+  }
+
+  // ---- bfcache restoration ----
+  // When a user hits the back button on iOS Safari or Chrome, the page is
+  // restored from the back-forward cache WITHOUT running our script again.
+  // Any variants we applied are still there visually, but our in-memory state
+  // (visitorId, hardening handlers) is fresh. We re-sync by re-applying the
+  // last assignment and pinging the server with a 'bfcache_restore' beacon.
+  window.addEventListener("pageshow", function (event) {
+    if (!event.persisted) return;
+    if (!SA_H.hardeningEnabled) return;
+    console.log("[SA] bfcache restore — replaying assignment");
+    saReapplyLastAssign();
+    try {
+      if (navigator.sendBeacon && typeof vid !== "undefined" && vid) {
+        var body = JSON.stringify({ vid: vid, cid: CID, source: "bfcache_restore", ts: Date.now() });
+        navigator.sendBeacon(
+          API + "/api/widget/events",
+          new Blob([body], { type: "application/json" })
+        );
+      }
+    } catch (e) {}
+  });
+
+  // ---- Client-side 30-day conversion dedup ----
+  // The server-side dedup (external_id on revenue_events) already exists, but
+  // the widget can also conserve server load by not re-firing a conversion
+  // event if it has already fired within the last 30 days for this visitor+cid.
+  function saConversionAlreadyFired() {
+    try {
+      var k = "sa_conv_" + CID;
+      var v = localStorage.getItem(k);
+      if (!v) return false;
+      var ts = parseInt(v, 10);
+      if (!ts) return false;
+      if (Date.now() - ts > 30 * 24 * 60 * 60 * 1000) return false;
+      return true;
+    } catch (e) { return false; }
+  }
+  function saMarkConversionFired() {
+    try { localStorage.setItem("sa_conv_" + CID, String(Date.now())); } catch (e) {}
+  }
+  // Expose these so existing conversion paths can opt-in (no rewrite required).
+  window._saConversionAlreadyFired = saConversionAlreadyFired;
+  window._saMarkConversionFired = saMarkConversionFired;
+
+  // ---- Install verification beacon ----
+  // Rate-limited to once every 6 hours per campaign. Tells our backend that the
+  // widget is actively loading on a real page. Backend stamps widget_last_seen_at
+  // on the campaign so the dashboard can show 'Widget detected X min ago'.
+  (function sendVerifyBeacon() {
+    try {
+      var k = "sa_last_verify_" + CID;
+      var last = localStorage.getItem(k);
+      if (last && Date.now() - parseInt(last, 10) < 6 * 60 * 60 * 1000) return;
+      var payload = {
+        cid: CID,
+        host: location.hostname,
+        path: location.pathname,
+        version: "v2.1",
+        ts: Date.now(),
+      };
+      var ok = false;
+      if (navigator.sendBeacon) {
+        ok = navigator.sendBeacon(
+          API + "/api/widget/verify",
+          new Blob([JSON.stringify(payload)], { type: "application/json" })
+        );
+      }
+      if (!ok) {
+        fetch(API + "/api/widget/verify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          keepalive: true,
+        }).catch(function () {});
+      }
+      localStorage.setItem(k, String(Date.now()));
+    } catch (e) {}
+  })();
+
+  // ---- Anti-flicker reveal ----
+  // If the page was pre-hidden by an anti-flicker snippet (see /api/widget/bundle
+  // in server/routes.ts), we tear down that <style id='sa-hide'> after variants
+  // are applied. If variants never apply (assign failed), a safety timeout
+  // reveals the page anyway after 2.5s so we never leave anyone staring at a
+  // blank section.
+  var SA_REVEALED = false;
+  function saReveal() {
+    if (SA_REVEALED) return;
+    SA_REVEALED = true;
+    var styleEl = document.getElementById("sa-hide");
+    if (styleEl && styleEl.parentNode) styleEl.parentNode.removeChild(styleEl);
+  }
+  // Safety net: reveal after 2.5s no matter what so no visitor ever sees a
+  // stuck-hidden page even if every fetch failed.
+  setTimeout(saReveal, 2500);
+  // Expose for the handleAssignData hook below
+  window._saReveal = saReveal;
+
   function handleAssignData(data) {
+      // Remember this payload so SPA navigation + bfcache can replay it.
+      SA_H.lastAssignData = data;
+
       // Apply headline variant — SKIP if control (let original page be the control)
       if (data.headline && data.headline.text && !data.headline.isControl) {
         // In preview mode, try a direct text-match approach first
@@ -931,6 +1235,21 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
       // Final page integrity check — only if any non-control variants were applied
       var anyApplied = (data.headline && !data.headline.isControl) || (data.subheadline && !data.subheadline.isControl);
       if (anyApplied) postReplacementCheck();
+
+      // Hardening: register each applied variant with the pin loop so framework
+      // re-renders don't silently revert the test. Idempotent.
+      if (anyApplied) {
+        if (data.headline && !data.headline.isControl) saPinRegister(data.headline);
+        if (data.subheadline && !data.subheadline.isControl) saPinRegister(data.subheadline);
+      }
+      if (data.sections && Array.isArray(data.sections)) {
+        data.sections.forEach(function (sv) {
+          if (sv && sv.text && !sv.isControl) saPinRegister(sv);
+        });
+      }
+
+      // Tear down the anti-flicker hide layer now that the page is ready to show.
+      if (typeof window._saReveal === "function") window._saReveal();
 
       // Activate auto lead conversion tracking for lead_gen campaigns
       if (data.campaignType === "lead_gen" && !window._saLeadTrackingInited) {

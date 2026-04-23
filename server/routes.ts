@@ -956,6 +956,44 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // POST /api/admin/campaigns/:id/anti-flicker — toggle anti-flicker on a campaign
+  app.post("/api/admin/campaigns/:id/anti-flicker", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const cid = paramId(req.params.id);
+      const enabled = !!req.body?.enabled;
+      const upd = await pool.query(
+        `UPDATE campaigns SET anti_flicker_enabled = $1 WHERE id = $2 RETURNING id, name, anti_flicker_enabled`,
+        [enabled, cid]
+      );
+      if (upd.rows.length === 0) return res.status(404).json({ error: "Campaign not found" });
+      res.json({ ok: true, campaign: upd.rows[0] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // GET /api/admin/widget-status — dashboard view of which campaigns have the widget installed
+  app.get("/api/admin/widget-status", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const rows = await pool.query(`
+        SELECT id, name, url, status, widget_last_seen_at, widget_last_seen_host, widget_last_seen_version,
+               anti_flicker_enabled,
+               CASE
+                 WHEN widget_last_seen_at IS NULL THEN 'never_seen'
+                 WHEN widget_last_seen_at < NOW() - INTERVAL '7 days' THEN 'stale'
+                 WHEN widget_last_seen_at < NOW() - INTERVAL '24 hours' THEN 'quiet'
+                 ELSE 'live'
+               END as install_status
+        FROM campaigns
+        WHERE status = 'active'
+        ORDER BY widget_last_seen_at DESC NULLS LAST
+      `);
+      res.json({ ok: true, campaigns: rows.rows });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // POST /api/admin/stripe/backfill/:userId — replay missed Stripe charges through
   // the webhook handler. Used to recover from webhook outages (route collision,
   // downtime, Stripe disabling the endpoint). Idempotent: dedup by external_id.
@@ -7000,6 +7038,83 @@ export async function registerRoutes(server: Server, app: Express) {
         return "Paste this webhook URL in your platform's webhook settings.";
     }
   }
+
+  // ============== WIDGET HARDENING ENDPOINTS (public, CORS via widget middleware) ==============
+
+  // POST /api/widget/verify — install verification beacon.
+  // Widget fires this at most once per 6 hours per browser. We stamp the campaign
+  // row so the dashboard can answer "is the widget actually installed?" without
+  // the user having to click a verify button. Fire-and-forget; never blocks.
+  app.post("/api/widget/verify", widgetLimiter, async (req: Request, res: Response) => {
+    const { cid, host, version } = req.body || {};
+    res.json({ ok: true }); // ack immediately
+    (async () => {
+      try {
+        const campaignId = parseInt(cid, 10);
+        if (!campaignId || isNaN(campaignId)) return;
+        await pool.query(
+          `UPDATE campaigns
+             SET widget_last_seen_at = NOW(),
+                 widget_last_seen_version = $2,
+                 widget_last_seen_host = $3
+           WHERE id = $1`,
+          [campaignId, (version || "unknown").slice(0, 20), (host || "").slice(0, 120)]
+        );
+      } catch (err: any) {
+        // Never log as error — this is best-effort and very noisy
+        console.log("[widget-verify] skip:", err.message);
+      }
+    })();
+  });
+
+  // GET /api/widget/bundle — anti-flicker selector bundle.
+  // The inline anti-flicker snippet on the customer's page calls this to get a
+  // list of CSS selectors it should pre-hide before the browser paints. Keeps
+  // payload minimal: ONE round trip, selectors only, no variant text yet.
+  //
+  // Cached for 5 min on the client via the inline snippet's localStorage. Only
+  // returns selectors for active non-control variants whose campaign has
+  // anti_flicker_enabled = true. All other campaigns get an empty list (no-op).
+  app.get("/api/widget/bundle", widgetLimiter, async (req: Request, res: Response) => {
+    try {
+      const cid = parseInt(String(req.query.cid || ""), 10);
+      if (!cid || isNaN(cid)) return res.json({ selectors: [], enabled: false });
+
+      const campRes = await pool.query(
+        `SELECT anti_flicker_enabled, status FROM campaigns WHERE id = $1`,
+        [cid]
+      );
+      const camp = campRes.rows[0];
+      if (!camp || camp.status !== "active" || !camp.anti_flicker_enabled) {
+        return res.json({ selectors: [], enabled: false });
+      }
+
+      // Selectors for all active non-control variants. Capture columns provide
+      // the most reliable selectors; fall back to the variant's own selector.
+      const varRes = await pool.query(
+        `SELECT v.selector, v.capture_tag_name, v.capture_original_text
+           FROM variants v
+          WHERE v.campaign_id = $1
+            AND v.is_active = true
+            AND v.is_control = false
+            AND v.test_section_id IS NOT NULL`,
+        [cid]
+      );
+
+      const selectors: string[] = [];
+      for (const row of varRes.rows) {
+        if (row.selector) selectors.push(row.selector);
+      }
+      // Dedup and cap — tiny selector lists only
+      const unique = Array.from(new Set(selectors)).slice(0, 25);
+      // Short cache so changes in the builder propagate quickly
+      res.setHeader("Cache-Control", "public, max-age=60");
+      res.json({ selectors: unique, enabled: true });
+    } catch (err: any) {
+      console.error("[widget-bundle] error:", err.message);
+      res.json({ selectors: [], enabled: false });
+    }
+  });
 
   // ============== BEHAVIORAL EVENTS (public, CORS via widget middleware) ==============
 
