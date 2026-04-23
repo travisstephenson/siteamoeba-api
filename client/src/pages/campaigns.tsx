@@ -681,6 +681,11 @@ function CampaignWizard({
   const [scanning, setScanning] = useState(false);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [scanError, setScanError] = useState("");
+  // Live status message shown during a long scan so the user sees progress
+  // instead of a silent spinner. Earlier I referenced this without declaring
+  // it — that threw ReferenceError inside handleScan and made the scan fail
+  // silently (the error was swallowed by React's promise boundary).
+  const [scanStatus, setScanStatus] = useState("");
   const [selectedSections, setSelectedSections] = useState<Set<string>>(new Set());
   const [campaignName, setCampaignName] = useState("");
   const [campaignType, setCampaignType] = useState<"purchase" | "lead_gen">("purchase");
