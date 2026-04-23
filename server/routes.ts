@@ -956,6 +956,100 @@ export async function registerRoutes(server: Server, app: Express) {
     }
   });
 
+  // POST /api/admin/stripe/backfill/:userId — replay missed Stripe charges through
+  // the webhook handler. Used to recover from webhook outages (route collision,
+  // downtime, Stripe disabling the endpoint). Idempotent: dedup by external_id.
+  app.post("/api/admin/stripe/backfill/:userId", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const userId = paramId(req.params.userId);
+      const sinceStr = req.body?.since as string | undefined;   // ISO date, e.g. '2026-04-13'
+      const untilStr = req.body?.until as string | undefined;   // optional, defaults to now
+
+      if (!sinceStr) return res.status(400).json({ error: "since is required (ISO date)" });
+
+      const user = await storage.getUserById(userId);
+      if (!user || !(user as any).stripeAccessToken) {
+        return res.status(404).json({ error: "User has no Stripe connection" });
+      }
+
+      const stripeKey = decryptApiKey((user as any).stripeAccessToken);
+      const sc = new Stripe(stripeKey);
+
+      const sinceTs = Math.floor(new Date(sinceStr).getTime() / 1000);
+      const untilTs = untilStr ? Math.floor(new Date(untilStr).getTime() / 1000) : Math.floor(Date.now() / 1000);
+
+      let total = 0;
+      let attributed = 0;
+      let newRevenue = 0;
+      let skippedExisting = 0;
+      let starting_after: string | undefined = undefined;
+
+      const host = `${req.protocol}://${req.get("host")}`;
+      const webhookUrl = `${host}/api/webhooks/stripe/account/${userId}`;
+
+      while (true) {
+        const page: any = await sc.charges.list({
+          created: { gte: sinceTs, lte: untilTs },
+          limit: 100,
+          ...(starting_after ? { starting_after } : {}),
+        });
+        const charges = (page.data || []).filter((c: any) => c.status === "succeeded");
+        if (charges.length === 0 && !page.has_more) break;
+
+        for (const ch of charges) {
+          total++;
+          // Quick dedup check so we don't make pointless webhook hops
+          const exists = await pool.query(
+            `SELECT 1 FROM revenue_events WHERE external_id = $1 LIMIT 1`,
+            [ch.id]
+          );
+          if (exists.rows.length > 0) {
+            skippedExisting++;
+            continue;
+          }
+          // POST a synthetic webhook event to our own endpoint
+          const eventBody = {
+            id: `evt_backfill_${ch.id}`,
+            type: "charge.succeeded",
+            data: { object: ch },
+          };
+          try {
+            const r = await fetch(webhookUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(eventBody),
+            });
+            const json: any = await r.json().catch(() => ({}));
+            if (json?.attributed) {
+              attributed++;
+              newRevenue += (ch.amount || 0) / 100;
+            }
+          } catch (e: any) {
+            console.error(`[stripe-backfill] replay failed for ${ch.id}:`, e.message);
+          }
+        }
+
+        if (!page.has_more) break;
+        starting_after = charges[charges.length - 1]?.id;
+        if (!starting_after) break;
+      }
+
+      res.json({
+        ok: true,
+        userId,
+        since: sinceStr,
+        until: untilStr ?? "now",
+        total_charges_seen: total,
+        skipped_already_recorded: skippedExisting,
+        newly_attributed: attributed,
+        new_revenue_usd: Number(newRevenue.toFixed(2)),
+      });
+    } catch (err: any) {
+      console.error("[stripe-backfill] error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // GET /api/admin/stats — overview numbers
   app.get("/api/admin/stats", requireAdmin, async (req: Request, res: Response) => {
     const allUsers = await storage.getAllUsers();
