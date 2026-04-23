@@ -6172,16 +6172,20 @@ export async function registerRoutes(server: Server, app: Express) {
     const headlineVariants = creditExhausted ? [] : await storage.getActiveVariantsByCampaign(campaignId, "headline");
     const subheadlineVariants = creditExhausted ? [] : await storage.getActiveVariantsByCampaign(campaignId, "subheadline");
 
-    // TWO GATES:
-    //   (1) test_sections.is_active  — authoritative ON/OFF switch. If OFF, never serve a
-    //       challenger. Travis saw variant 519 serving 335 visitors on C17 despite every
-    //       section being OFF in the dashboard because this gate was missing here.
-    //   (2) trafficPercentage  — % of visitors who enter the test pool. Visitors NOT in
-    //       the pool see the control (no assignment recorded so control stats stay clean).
-    //       Visitors IN the pool are split EVENLY across {control, challenger_1, ..., challenger_N}.
-    //       This is what standard A/B testing means: at 100% pool, half of traffic sees
-    //       control, half sees challenger. Previously 100% meant "100% of traffic sees a
-    //       challenger" which is why Travis's control had 1 visitor and challenger had 337.
+    // TRAFFIC SPLIT SEMANTICS (matched to the UI):
+    //   (1) test_sections.is_active  — authoritative ON/OFF switch. If OFF, the visitor
+    //       sees control (no challenger assignment recorded).
+    //   (2) trafficPercentage  — the % of visitors who go to CHALLENGERS (combined).
+    //       This matches the UI directly: at trafficPercentage=50 with 1 challenger,
+    //       the UI shows 50% control / 50% challenger and that's what happens. At
+    //       trafficPercentage=60 with 3 challengers, each challenger gets 20% and
+    //       control gets 40%.
+    //
+    //       Previously this field meant "% of visitors who enter a test pool, then
+    //       split evenly across {control, ...challengers} inside the pool" — which
+    //       made a 50 setting actually produce 75% control / 25% challenger. That
+    //       caused Travis's C92 test to run at effective 75/25 instead of the 50/50
+    //       shown in the UI. Fixed 2026-04-23.
     const headlineSection    = allTestSections.find((s: any) => s.isActive && s.category === "headline");
     const subheadlineSection = allTestSections.find((s: any) => s.isActive && s.category === "subheadline");
     const headlineSectionActive    = !!headlineSection;
@@ -6189,30 +6193,57 @@ export async function registerRoutes(server: Server, app: Express) {
 
     const headlineTrafficPct    = (headlineSection as any)?.trafficPercentage ?? 100;
     const subheadlineTrafficPct = (subheadlineSection as any)?.trafficPercentage ?? 100;
-    const inHeadlinePool    = headlineSectionActive    && Math.random() * 100 < headlineTrafficPct;
-    const inSubheadlinePool = subheadlineSectionActive && Math.random() * 100 < subheadlineTrafficPct;
 
     const headlineControl        = headlineVariants.find((v: any) => v.isControl);
     const subheadlineControl     = subheadlineVariants.find((v: any) => v.isControl);
     const headlineChallengers    = headlineVariants.filter((v: any) => !v.isControl);
     const subheadlineChallengers = subheadlineVariants.filter((v: any) => !v.isControl);
 
-    // Pick uniformly from {control, ...challengers}. Uniform split means fair A/B statistics.
-    // If section is OFF or visitor is outside the traffic pool, they get control.
-    function pickVariant(control: any, challengers: any[], sectionActive: boolean, inPool: boolean, fallback: any) {
+    /**
+     * Pick a variant matching the UI's stated split.
+     *
+     *   challengerTrafficPct  = "combined challenger share in %" (from the UI).
+     *   controlShare          = 100 - challengerTrafficPct
+     *   perChallengerShare    = challengerTrafficPct / N
+     *
+     * Example: 1 challenger, challengerTrafficPct=50
+     *   control 50%, challenger 50%
+     * Example: 3 challengers, challengerTrafficPct=60
+     *   control 40%, each challenger 20%
+     *
+     * If section is OFF or there are no challengers, the visitor sees control.
+     * If there is no control record (legacy data), the fallback is still returned.
+     */
+    function pickVariant(
+      control: any,
+      challengers: any[],
+      sectionActive: boolean,
+      challengerTrafficPct: number,
+      fallback: any,
+    ) {
       if (!sectionActive) return control || fallback;
-      if (!inPool) return control || fallback;
       if (challengers.length === 0) return control || fallback;
-      // Build the full test pool: control + all challengers, split evenly
-      const pool = control ? [control, ...challengers] : [...challengers];
-      return pool[Math.floor(Math.random() * pool.length)];
+      const pct = Math.max(0, Math.min(100, challengerTrafficPct));
+      // Roll once on [0, 100). Below controlShare → control. Otherwise pick a
+      // challenger proportional to their share.
+      const roll = Math.random() * 100;
+      const controlShare = 100 - pct;
+      if (roll < controlShare) return control || fallback;
+      // Distribute the remaining [controlShare, 100) evenly across challengers.
+      const challengerRange = 100 - controlShare;
+      const offset = roll - controlShare;
+      const idx = Math.min(
+        challengers.length - 1,
+        Math.floor((offset / challengerRange) * challengers.length),
+      );
+      return challengers[idx];
     }
 
     const hVariant = headlineVariants.length > 0
-      ? pickVariant(headlineControl, headlineChallengers, headlineSectionActive, inHeadlinePool, headlineVariants[0])
+      ? pickVariant(headlineControl, headlineChallengers, headlineSectionActive, headlineTrafficPct, headlineVariants[0])
       : null;
     const sVariant = subheadlineVariants.length > 0
-      ? pickVariant(subheadlineControl, subheadlineChallengers, subheadlineSectionActive, inSubheadlinePool, subheadlineVariants[0])
+      ? pickVariant(subheadlineControl, subheadlineChallengers, subheadlineSectionActive, subheadlineTrafficPct, subheadlineVariants[0])
       : null;
 
     // === SECTION-LEVEL TESTS: assign variants for all active non-headline/subheadline sections ===
@@ -6222,23 +6253,14 @@ export async function registerRoutes(server: Server, app: Express) {
     for (const section of allTestSections) {
       if (!section.isActive) continue;
       if (section.category === "headline" || section.category === "subheadline") continue;
-      // Traffic percentage check: if section has e.g. 20% traffic allocation,
-      // 80% of visitors skip the test and see control (original page)
+      // trafficPercentage = combined challenger share (matches the UI directly).
       const trafficPct = (section as any).trafficPercentage ?? 100;
-      const inTestPool = Math.random() * 100 < trafficPct;
       // Get active variants for this section's category
       const sectionVars = await storage.getActiveVariantsByCampaign(campaignId, section.category);
       if (sectionVars.length === 0) continue;
       const sectionControl = sectionVars.find((v: any) => v.isControl);
       const sectionChallengers = sectionVars.filter((v: any) => !v.isControl);
-      // Same semantics as headline/subheadline: visitors IN the pool are split evenly
-      // across {control, ...challengers}. Visitors NOT in the pool see the control.
-      const chosen = (!inTestPool || sectionChallengers.length === 0)
-        ? (sectionControl || sectionVars[0])
-        : (() => {
-            const pool = sectionControl ? [sectionControl, ...sectionChallengers] : [...sectionChallengers];
-            return pool[Math.floor(Math.random() * pool.length)];
-          })();
+      const chosen = pickVariant(sectionControl, sectionChallengers, true, trafficPct, sectionVars[0]);
       sectionAssignments[String(section.id)] = chosen.id;
       sectionPayloads.push({
         id: chosen.id,
