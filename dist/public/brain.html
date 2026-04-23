@@ -1,0 +1,868 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SiteAmoeba Brain — Full Knowledge Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#080c14;--surface:#0d1117;--surface-2:#151b25;--border:#1e2a3a;
+  --text:#e2e8f0;--text-muted:#94a3b8;--text-faint:#475569;
+  --emerald:#10b981;--blue-teal:#0ea5e9;--purple:#8b5cf6;
+  --amber:#f59e0b;--cyan:#06b6d4;--green:#10b981;--red:#ef4444;
+  --teal:#14b8a6;
+  --font-body:'Inter',system-ui,sans-serif;
+  --font-mono:'JetBrains Mono',monospace;
+}
+html{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;scroll-behavior:smooth}
+body{min-height:100dvh;font-family:var(--font-body);font-size:15px;color:var(--text);background:var(--bg);line-height:1.6;overflow-x:hidden}
+
+/* ============ HEADER ============ */
+.header{padding:16px 24px;display:flex;align-items:center;gap:14px;border-bottom:1px solid var(--border);position:relative;z-index:10}
+.logo-mark{width:32px;height:32px;position:relative}
+.logo-mark svg{width:100%;height:100%}
+.header-title{font-size:17px;font-weight:700;letter-spacing:-.02em;color:var(--text)}
+.header-title span{color:var(--emerald)}
+.header-subtitle{font-size:11px;color:var(--text-muted);font-weight:400;letter-spacing:.06em;text-transform:uppercase;margin-top:1px}
+.header-right{margin-left:auto;display:flex;align-items:center;gap:16px}
+.live-badge{display:flex;align-items:center;gap:6px;font-size:10px;color:var(--emerald);text-transform:uppercase;letter-spacing:.1em;font-weight:600}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--emerald);animation:pulse-dot 2s ease-in-out infinite}
+@keyframes pulse-dot{0%,100%{opacity:1;box-shadow:0 0 4px var(--emerald)}50%{opacity:.4;box-shadow:0 0 10px var(--emerald)}}
+.total-knowledge{font-size:12px;color:var(--text-muted);font-family:var(--font-mono)}
+.total-knowledge strong{color:var(--emerald);font-weight:600}
+
+/* ============ CANVAS SECTION ============ */
+.canvas-section{position:relative;width:100%;height:min(62vh, 600px);min-height:380px}
+canvas#brainCanvas{width:100%;height:100%;display:block}
+.canvas-tooltip{position:fixed;pointer-events:none;background:rgba(10,14,22,.96);border:1px solid rgba(30,42,58,.8);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text);opacity:0;transition:opacity .12s;z-index:100;backdrop-filter:blur(12px);max-width:280px;box-shadow:0 8px 32px rgba(0,0,0,.5)}
+.canvas-tooltip.visible{opacity:1}
+.canvas-tooltip .tt-label{font-weight:600;font-size:13px;margin-bottom:3px}
+.canvas-tooltip .tt-desc{color:var(--text-muted);font-size:11px;line-height:1.5}
+.canvas-tooltip .tt-stat{font-family:var(--font-mono);font-size:11px;margin-top:5px}
+
+/* ============ STATS ============ */
+.stats-section{padding:28px 24px 16px;max-width:1200px;margin:0 auto}
+.stats-row-label{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--text-faint);margin-bottom:10px;font-weight:600}
+.stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:24px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 10px;text-align:center;position:relative;overflow:hidden}
+.stat-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.stat-card.emerald::before{background:linear-gradient(90deg,transparent,var(--emerald),transparent)}
+.stat-card.blue::before{background:linear-gradient(90deg,transparent,var(--blue-teal),transparent)}
+.stat-card.purple::before{background:linear-gradient(90deg,transparent,var(--purple),transparent)}
+.stat-card.amber::before{background:linear-gradient(90deg,transparent,var(--amber),transparent)}
+.stat-card.cyan::before{background:linear-gradient(90deg,transparent,var(--cyan),transparent)}
+.stat-card.green::before{background:linear-gradient(90deg,transparent,var(--green),transparent)}
+.stat-card.teal::before{background:linear-gradient(90deg,transparent,var(--teal),transparent)}
+.stat-value{font-size:22px;font-weight:700;font-family:var(--font-mono);color:var(--text);line-height:1.2}
+.stat-label{font-size:10px;color:var(--text-muted);margin-top:4px;line-height:1.4}
+
+/* ============ KNOWLEDGE CARDS ============ */
+.cards-section{padding:8px 24px 48px;max-width:1200px;margin:0 auto}
+.cards-section-title{font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px;letter-spacing:-.01em}
+.cards-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px;margin-bottom:28px}
+.knowledge-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px;position:relative;overflow:hidden;transition:border-color .2s,transform .2s}
+.knowledge-card:hover{transform:translateY(-1px)}
+.knowledge-card::before{content:'';position:absolute;top:0;left:0;width:3px;height:100%;border-radius:3px 0 0 3px}
+.knowledge-card.blue-border::before{background:var(--blue-teal)}
+.knowledge-card.blue-border:hover{border-color:rgba(14,165,233,.3)}
+.knowledge-card.purple-border::before{background:var(--purple)}
+.knowledge-card.purple-border:hover{border-color:rgba(139,92,246,.3)}
+.knowledge-card.green-border::before{background:var(--green)}
+.knowledge-card.green-border:hover{border-color:rgba(16,185,129,.3)}
+.knowledge-card.teal-border::before{background:var(--teal)}
+.knowledge-card.teal-border:hover{border-color:rgba(20,184,166,.3)}
+.knowledge-card.amber-border::before{background:var(--amber)}
+.knowledge-card.amber-border:hover{border-color:rgba(245,158,11,.3)}
+.knowledge-card.cyan-border::before{background:var(--cyan)}
+.knowledge-card.cyan-border:hover{border-color:rgba(6,182,212,.3)}
+.card-header{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.card-icon{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.card-title{font-size:12px;font-weight:600;color:var(--text)}
+.card-body{font-size:11px;color:var(--text-muted);line-height:1.55}
+.card-tag{display:inline-block;font-size:10px;padding:2px 8px;border-radius:99px;font-weight:600;margin-top:6px;letter-spacing:.03em}
+.card-tag.win{background:rgba(16,185,129,.15);color:var(--green)}
+.card-tag.loss{background:rgba(239,68,68,.15);color:var(--red)}
+.card-stat{font-family:var(--font-mono);font-size:10px;margin-top:5px;color:var(--text-faint)}
+
+/* ============ RESPONSIVE ============ */
+@media(max-width:900px){
+  .stats-row{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}
+}
+@media(max-width:768px){
+  .header{flex-wrap:wrap;padding:12px 16px}
+  .header-right{width:100%;justify-content:flex-start;margin-left:0;margin-top:6px}
+  .canvas-section{height:min(85vw,500px);min-height:340px}
+  .stats-row{grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px}
+  .stat-value{font-size:16px}
+  .cards-grid{grid-template-columns:1fr}
+}
+@media(max-width:480px){
+  .canvas-section{min-height:300px}
+  .stats-section{padding:16px 12px 10px}
+  .cards-section{padding:4px 12px 36px}
+}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="logo-mark">
+    <svg viewBox="0 0 36 36" fill="none">
+      <circle cx="18" cy="18" r="16" stroke="#10b981" stroke-width="1.5" opacity=".25"/>
+      <circle cx="18" cy="18" r="10" stroke="#10b981" stroke-width="1.5" opacity=".5"/>
+      <circle cx="18" cy="18" r="4" fill="#10b981"/>
+      <line x1="18" y1="2" x2="18" y2="8" stroke="#10b981" stroke-width="1" opacity=".35"/>
+      <line x1="18" y1="28" x2="18" y2="34" stroke="#10b981" stroke-width="1" opacity=".35"/>
+      <line x1="2" y1="18" x2="8" y2="18" stroke="#10b981" stroke-width="1" opacity=".35"/>
+      <line x1="28" y1="18" x2="34" y2="18" stroke="#10b981" stroke-width="1" opacity=".35"/>
+    </svg>
+  </div>
+  <div>
+    <div class="header-title">Site<span>Amoeba</span> Brain</div>
+    <div class="header-subtitle">Full Knowledge Architecture</div>
+  </div>
+  <div class="header-right">
+    <div class="live-badge"><span class="live-dot"></span> Live</div>
+    <div class="total-knowledge"><strong id="totalKpCount">0</strong> knowledge points</div>
+  </div>
+</header>
+
+<section class="canvas-section">
+  <canvas id="brainCanvas"></canvas>
+</section>
+<div class="canvas-tooltip" id="tooltip">
+  <div class="tt-label" id="ttLabel"></div>
+  <div class="tt-desc" id="ttDesc"></div>
+  <div class="tt-stat" id="ttStat"></div>
+</div>
+
+<section class="stats-section">
+  <div class="stats-row-label">Knowledge Foundation</div>
+  <div class="stats-row" id="foundationStats"></div>
+  <div class="stats-row-label">Live Network Data</div>
+  <div class="stats-row" id="liveStats"></div>
+</section>
+
+<section class="cards-section" id="cardsSection"></section>
+
+<script>
+// =========================================================
+// FALLBACK DATA
+// =========================================================
+const FALLBACK = {
+  stats:{pagesScanned:37,testsWon:4,totalTests:5,visitorsAnalyzed:8277,conversionsTracked:338,behavioralSignals:32823,sessionsAnalyzed:4430,strategiesTested:7,totalPreTaughtKnowledge:323,totalKnowledgePoints:33151},
+  knowledgeSources:{
+    croResearch:{label:"CRO Research",description:"Data-backed conversion optimization intelligence from CXL, Baymard, NNGroup",totalDataPoints:145,categories:[{name:"General CRO Principles",dataPoints:12},{name:"Headline Optimization",dataPoints:14},{name:"CTA Optimization",dataPoints:15},{name:"Social Proof",dataPoints:10},{name:"Pricing Psychology",dataPoints:11},{name:"Behavioral Psychology",dataPoints:12},{name:"Form Optimization",dataPoints:10},{name:"Testing Methodology",dataPoints:9},{name:"Page Speed",dataPoints:6},{name:"Mobile Optimization",dataPoints:7},{name:"Scroll & Engagement",dataPoints:8},{name:"Trust & Guarantee",dataPoints:8},{name:"Video Impact",dataPoints:7},{name:"Hero Section",dataPoints:6},{name:"Checkout Flow",dataPoints:8},{name:"Subheadline",dataPoints:5},{name:"Benefits & Copy Length",dataPoints:9},{name:"Traffic Source Patterns",dataPoints:6}]},
+    salesPsychology:{label:"Sales Psychology & Frameworks",description:"Pre-taught persuasion mechanisms, offer architecture, and conversion frameworks",totalDataPoints:88,categories:[{name:"Authority Placement",dataPoints:4},{name:"Pattern Interrupt",dataPoints:5},{name:"The Lego Method",dataPoints:3},{name:"Pre-Suasion & Priming",dataPoints:6},{name:"Commitment & Consistency",dataPoints:4},{name:"R.I.C.E. Framework",dataPoints:5},{name:"New Bad Guy Technique",dataPoints:3},{name:"Buyer Loop",dataPoints:5},{name:"Offer Architecture",dataPoints:6},{name:"6 Cognitive Biases",dataPoints:6},{name:"Irresistible Offer",dataPoints:4},{name:"Before/After Bridge",dataPoints:4},{name:"Unique Mechanism",dataPoints:8},{name:"AIDA Framework",dataPoints:4},{name:"15-Section Sales Page",dataPoints:15}]},
+    pageContextRules:{label:"Page Context Rules",description:"Dynamic rules engine that adapts based on page type, goal, price point, and niche",totalDataPoints:53,categories:[{name:"Sales Page Rules",dataPoints:8},{name:"Opt-in Page Rules",dataPoints:6},{name:"Webinar Rules",dataPoints:6},{name:"SaaS Landing Rules",dataPoints:7},{name:"E-commerce Rules",dataPoints:7},{name:"High-Ticket Rules",dataPoints:5},{name:"Low-Ticket Rules",dataPoints:4},{name:"Niche Adaptations",dataPoints:10}]},
+    autopilotPlaybooks:{label:"Autopilot Playbooks",description:"Section-by-section optimization sequences for 6 page types",totalDataPoints:37,categories:[{name:"Sales Page (10 steps)",dataPoints:10},{name:"Opt-in Page",dataPoints:5},{name:"Webinar Registration",dataPoints:6},{name:"Product Page",dataPoints:6},{name:"SaaS Landing",dataPoints:5},{name:"Generic Landing",dataPoints:5}]}
+  },
+  tests:[{sectionType:"headline",winnerStrategy:"Transformation",loserStrategy:"How-To",liftPercent:37.4,sampleSize:2082},{sectionType:"cta",winnerStrategy:"Urgency",loserStrategy:"Loss Aversion",liftPercent:125.3,sampleSize:342},{sectionType:"headline",winnerStrategy:"Transformation",loserStrategy:"How-To",liftPercent:49.8,sampleSize:127},{sectionType:"headline",winnerStrategy:"Contrarian",loserStrategy:"Social Proof",liftPercent:92.0,sampleSize:623}],
+  strategies:[{name:"Transformation",wins:2,losses:0,avgWinLift:43.6},{name:"Urgency",wins:1,losses:0,avgWinLift:125.3},{name:"Contrarian",wins:1,losses:1,avgWinLift:92.0},{name:"How-To",wins:0,losses:2,avgWinLift:0},{name:"Social Proof",wins:0,losses:1,avgWinLift:0},{name:"Loss Aversion",wins:0,losses:1,avgWinLift:0}],
+  behavioral:{converterScroll:42.0,nonconverterScroll:27.0,converterTime:423,nonconverterTime:212,converterClicks:5.5,nonconverterClicks:1.3}
+};
+
+let DATA = null;
+
+async function loadData() {
+  try {
+    const res = await fetch('https://api.siteamoeba.com/api/public/brain-graph');
+    if (!res.ok) throw new Error('API error');
+    DATA = await res.json();
+  } catch(e) {
+    DATA = FALLBACK;
+  }
+  init();
+}
+
+// =========================================================
+// GLOBALS
+// =========================================================
+const canvas = document.getElementById('brainCanvas');
+const ctx = canvas.getContext('2d');
+let W, H, CX, CY, R;
+let dpr = Math.min(window.devicePixelRatio || 1, 2);
+let nodes = [];
+let connections = [];
+let particles = [];
+let orbParticles = [];
+let hoveredNode = null;
+let mouseX = -9999, mouseY = -9999;
+let time = 0;
+let animFrame;
+
+const COLORS = {
+  brain: '#10b981',
+  croResearch: '#0ea5e9',
+  salesPsychology: '#8b5cf6',
+  pageContextRules: '#f59e0b',
+  autopilotPlaybooks: '#06b6d4',
+  testWin: '#10b981',
+  testLoss: '#ef4444',
+  behavioral: '#14b8a6'
+};
+
+// =========================================================
+// RESIZE
+// =========================================================
+function resize() {
+  const rect = canvas.parentElement.getBoundingClientRect();
+  W = rect.width;
+  H = rect.height;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  CX = W / 2;
+  CY = H * 0.5;
+  R = Math.min(W, H) * 0.44;
+  if (DATA) buildGraph();
+}
+
+// =========================================================
+// BUILD GRAPH
+// =========================================================
+function buildGraph() {
+  nodes = [];
+  connections = [];
+
+  const ks = DATA.knowledgeSources;
+
+  // --- BRAIN CORE (Ring 1) ---
+  nodes.push({
+    id: 'brain', x: CX, y: CY, r: R * 0.075,
+    color: COLORS.brain, label: 'Brain Core',
+    desc: 'SiteAmoeba Intelligence Engine',
+    stat: DATA.stats.totalKnowledgePoints.toLocaleString() + ' total knowledge points',
+    ring: 1, type: 'core', glow: true
+  });
+
+  // --- RING 2: PRE-TAUGHT KNOWLEDGE ---
+  const ring2R = R * 0.42;
+  const clusters = [
+    { key: 'croResearch', angle: -Math.PI * 0.5, color: COLORS.croResearch, data: ks.croResearch, shortLabel: 'CRO Research' },
+    { key: 'pageContextRules', angle: 0, color: COLORS.pageContextRules, data: ks.pageContextRules, shortLabel: 'Rules Engine' },
+    { key: 'salesPsychology', angle: Math.PI * 0.5, color: COLORS.salesPsychology, data: ks.salesPsychology, shortLabel: 'Sales Psychology' },
+    { key: 'autopilotPlaybooks', angle: Math.PI, color: COLORS.autopilotPlaybooks, data: ks.autopilotPlaybooks, shortLabel: 'Autopilot' }
+  ];
+
+  clusters.forEach(cl => {
+    const cx = CX + Math.cos(cl.angle) * ring2R;
+    const cy = CY + Math.sin(cl.angle) * ring2R;
+    const clusterNode = {
+      id: cl.key, x: cx, y: cy, r: R * 0.045,
+      color: cl.color, label: cl.shortLabel,
+      desc: cl.data.description,
+      stat: cl.data.totalDataPoints + ' data points',
+      ring: 2, type: 'cluster', glow: true
+    };
+    nodes.push(clusterNode);
+    connections.push({ from: 'brain', to: cl.key, color: cl.color, width: 2, glow: true });
+
+    // Satellites — distributed around cluster, avoiding label zone below
+    const cats = cl.data.categories;
+    const maxDp = Math.max(...cats.map(c => c.dataPoints));
+    cats.forEach((cat, i) => {
+      // Spread satellites avoiding the label zone (below each cluster node)
+      // Label is always at the bottom of a cluster, so avoid the PI/2 direction in screen space
+      const avoidAngle = Math.PI * 0.5; // straight down in screen coords
+      const arcSpan = Math.PI * 1.6;
+      const arcStart = avoidAngle + (Math.PI * 2 - arcSpan) / 2;
+      const a = arcStart + (i / cats.length) * arcSpan;
+      const ringLayer = (i % 2 === 0) ? 0.16 : 0.12;
+      const dist = R * ringLayer;
+      const sx = cx + Math.cos(a) * dist;
+      const sy = cy + Math.sin(a) * dist;
+      const sizeScale = 0.4 + 0.6 * (cat.dataPoints / maxDp);
+      const satNode = {
+        id: cl.key + '_' + i, x: sx, y: sy, r: R * 0.013 * sizeScale + R * 0.007,
+        color: cl.color, label: cat.name,
+        desc: cl.data.label + ' category',
+        stat: cat.dataPoints + ' data points',
+        ring: 2, type: 'satellite', parentCluster: cl.key
+      };
+      nodes.push(satNode);
+      connections.push({ from: cl.key, to: satNode.id, color: cl.color, width: 0.7 });
+    });
+  });
+
+  // --- RING 3: LIVE-LEARNED ---
+  const ring3R = R * 0.85;
+
+  // Strategy nodes — spread across upper half
+  const strats = DATA.strategies;
+  const stratAngles = [-2.4, -1.9, -1.4, -0.8, -0.3, 0.2];
+  strats.forEach((s, i) => {
+    const a = stratAngles[i] || (-Math.PI * 0.6 + i * 0.4);
+    const jit = 0.9 + (i % 2) * 0.08;
+    const sx = CX + Math.cos(a) * ring3R * jit;
+    const sy = CY + Math.sin(a) * ring3R * jit;
+    const sz = s.wins > 0 ? R * 0.025 + s.wins * R * 0.008 : R * 0.018;
+    const col = s.wins > s.losses ? COLORS.testWin : (s.losses > 0 ? COLORS.testLoss : COLORS.behavioral);
+    nodes.push({
+      id: 'strat_' + i, x: sx, y: sy, r: sz,
+      color: col, label: s.name + ' Strategy',
+      desc: s.wins + ' wins / ' + s.losses + ' losses',
+      stat: s.avgWinLift > 0 ? '+' + s.avgWinLift + '% avg lift' : 'No wins yet',
+      ring: 3, type: 'strategy'
+    });
+    connections.push({ from: 'brain', to: 'strat_' + i, color: col, width: 0.5, dashed: true });
+  });
+
+  // Test nodes — spread in lower right
+  const testAngles = [0.5, 0.9, 1.3, 1.7];
+  DATA.tests.forEach((t, i) => {
+    const a = testAngles[i] || (0.5 + i * 0.4);
+    const jit = 0.88 + (i % 2) * 0.1;
+    const tx = CX + Math.cos(a) * (ring3R * jit);
+    const ty = CY + Math.sin(a) * (ring3R * jit);
+    const isWin = t.liftPercent > 0;
+    nodes.push({
+      id: 'test_' + i, x: tx, y: ty, r: R * 0.016,
+      color: isWin ? COLORS.testWin : COLORS.testLoss,
+      label: capitalize(t.sectionType) + ' Test',
+      desc: (isWin ? t.winnerStrategy + ' beat ' + t.loserStrategy : t.winnerStrategy + ' lost to ' + t.loserStrategy),
+      stat: (isWin ? '+' : '') + t.liftPercent + '% lift · n=' + t.sampleSize.toLocaleString(),
+      ring: 3, type: 'test'
+    });
+  });
+
+  // Behavioral nodes — spread in lower left
+  const behav = DATA.behavioral;
+  const behavData = [
+    { label: 'Scroll Depth Gap', desc: 'Converters: ' + behav.converterScroll + '% vs Non: ' + behav.nonconverterScroll + '%', stat: Math.round(behav.converterScroll - behav.nonconverterScroll) + '% deeper scroll' },
+    { label: 'Time on Page', desc: 'Converters: ' + behav.converterTime + 's vs Non: ' + behav.nonconverterTime + 's', stat: Math.round(behav.converterTime - behav.nonconverterTime) + 's longer' },
+    { label: 'Click Density', desc: 'Converters: ' + behav.converterClicks + ' vs Non: ' + behav.nonconverterClicks, stat: (behav.converterClicks - behav.nonconverterClicks).toFixed(1) + ' more clicks' }
+  ];
+  const behavAngles = [2.2, 2.7, 3.2];
+  behavData.forEach((b, i) => {
+    const a = behavAngles[i];
+    const bx = CX + Math.cos(a) * ring3R * 0.93;
+    const by = CY + Math.sin(a) * ring3R * 0.93;
+    nodes.push({
+      id: 'behav_' + i, x: bx, y: by, r: R * 0.02,
+      color: COLORS.behavioral, label: b.label,
+      desc: b.desc, stat: b.stat,
+      ring: 3, type: 'behavioral'
+    });
+    connections.push({ from: 'brain', to: 'behav_' + i, color: COLORS.behavioral, width: 0.4, dashed: true });
+  });
+
+  // --- CROSS-CONNECTIONS for density ---
+  // Connect some satellites across clusters to brain (faint)
+  nodes.filter(n => n.type === 'satellite').forEach((n, i) => {
+    if (i % 3 === 0) {
+      connections.push({ from: 'brain', to: n.id, color: n.color, width: 0.3, dashed: true });
+    }
+  });
+  // Interconnect adjacent clusters
+  for (let i = 0; i < clusters.length; i++) {
+    const j = (i + 1) % clusters.length;
+    connections.push({ from: clusters[i].key, to: clusters[j].key, color: '#1e3a4a', width: 0.4, dashed: true });
+  }
+
+  // --- INITIALIZE PARTICLES ---
+  particles = [];
+  for (let i = 0; i < 80; i++) spawnParticle();
+
+  // --- ORBITAL PARTICLES on ring guides ---
+  orbParticles = [];
+  const orbRings = [R * 0.25, R * 0.62, R * 0.95];
+  const orbColors = ['rgba(16,185,129,0.4)', 'rgba(14,165,233,0.3)', 'rgba(139,92,246,0.25)'];
+  orbRings.forEach((r, ri) => {
+    const count = 8 + ri * 6;
+    for (let i = 0; i < count; i++) {
+      orbParticles.push({
+        angle: Math.random() * Math.PI * 2,
+        radius: r,
+        speed: (0.0004 + Math.random() * 0.0006) * (ri % 2 === 0 ? 1 : -1),
+        size: 1 + Math.random() * 1.5,
+        color: orbColors[ri],
+        phase: Math.random() * Math.PI * 2
+      });
+    }
+  });
+}
+
+// =========================================================
+// PARTICLES
+// =========================================================
+function spawnParticle() {
+  const angle = Math.random() * Math.PI * 2;
+  const dist = R * (0.88 + Math.random() * 0.15);
+  const px = CX + Math.cos(angle) * dist;
+  const py = CY + Math.sin(angle) * dist;
+  const dx = CX - px;
+  const dy = CY - py;
+  const d = Math.sqrt(dx*dx + dy*dy);
+  const speed = 0.0015 + Math.random() * 0.003;
+  particles.push({
+    x: px, y: py,
+    vx: (dx / d) * speed * d,
+    vy: (dy / d) * speed * d,
+    life: 1,
+    decay: 0.0015 + Math.random() * 0.003,
+    size: 0.8 + Math.random() * 1.8
+  });
+}
+
+function updateParticles() {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= p.decay;
+    if (p.life <= 0) {
+      particles.splice(i, 1);
+      spawnParticle();
+    }
+  }
+}
+
+// =========================================================
+// DRAW
+// =========================================================
+function draw() {
+  time += 0.016;
+  ctx.clearRect(0, 0, W, H);
+
+  // Background radial
+  const bgGrad = ctx.createRadialGradient(CX, CY, 0, CX, CY, R * 1.3);
+  bgGrad.addColorStop(0, 'rgba(16,185,129,0.035)');
+  bgGrad.addColorStop(0.35, 'rgba(14,165,233,0.012)');
+  bgGrad.addColorStop(1, 'transparent');
+  ctx.fillStyle = bgGrad;
+  ctx.fillRect(0, 0, W, H);
+
+  drawRingGuides();
+  drawOrbitalParticles();
+  drawConnections();
+  updateParticles();
+  drawParticles();
+  drawNodes();
+  drawRingLabels();
+
+  animFrame = requestAnimationFrame(draw);
+}
+
+function drawRingGuides() {
+  const rings = [R * 0.25, R * 0.62, R * 0.95];
+  const alphas = [0.12, 0.1, 0.08];
+  rings.forEach((r, i) => {
+    ctx.beginPath();
+    ctx.arc(CX, CY, r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(30,58,80,' + alphas[i] + ')';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  });
+}
+
+function drawOrbitalParticles() {
+  orbParticles.forEach(p => {
+    p.angle += p.speed;
+    const flicker = 0.6 + Math.sin(time * 3 + p.phase) * 0.4;
+    const x = CX + Math.cos(p.angle) * p.radius;
+    const y = CY + Math.sin(p.angle) * p.radius;
+    ctx.beginPath();
+    ctx.arc(x, y, p.size * flicker, 0, Math.PI * 2);
+    ctx.fillStyle = p.color;
+    ctx.fill();
+  });
+}
+
+function drawRingLabels() {
+  ctx.save();
+  ctx.font = '600 8px Inter, sans-serif';
+  ctx.letterSpacing = '1px';
+
+  // Ring 2 label - top
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(148,163,184,0.3)';
+  ctx.fillText('PRE-TAUGHT KNOWLEDGE', CX, CY - R * 0.62 - 6);
+
+  // Ring 3 label - top
+  ctx.fillStyle = 'rgba(148,163,184,0.22)';
+  ctx.fillText('LIVE-LEARNED INTELLIGENCE', CX, CY - R * 0.95 - 6);
+
+  ctx.restore();
+}
+
+function drawConnections() {
+  connections.forEach(conn => {
+    const fromNode = nodes.find(n => n.id === conn.from);
+    const toNode = nodes.find(n => n.id === conn.to);
+    if (!fromNode || !toNode) return;
+
+    const isHighlighted = hoveredNode && (
+      hoveredNode.id === conn.from ||
+      hoveredNode.id === conn.to ||
+      hoveredNode.parentCluster === conn.from ||
+      hoveredNode.parentCluster === conn.to
+    );
+    const alpha = isHighlighted ? 0.7 : (hoveredNode ? 0.06 : 0.2);
+
+    ctx.beginPath();
+    if (conn.dashed && !isHighlighted) {
+      ctx.setLineDash([2, 4]);
+    }
+
+    const dx = toNode.x - fromNode.x;
+    const dy = toNode.y - fromNode.y;
+    const mx = (fromNode.x + toNode.x) / 2 + dy * 0.06;
+    const my = (fromNode.y + toNode.y) / 2 - dx * 0.06;
+
+    ctx.moveTo(fromNode.x, fromNode.y);
+    ctx.quadraticCurveTo(mx, my, toNode.x, toNode.y);
+    ctx.strokeStyle = hexToRgba(conn.color, alpha);
+    ctx.lineWidth = conn.width || 1;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Glow on highlighted thick connections
+    if (conn.glow && isHighlighted) {
+      ctx.beginPath();
+      ctx.moveTo(fromNode.x, fromNode.y);
+      ctx.quadraticCurveTo(mx, my, toNode.x, toNode.y);
+      ctx.strokeStyle = hexToRgba(conn.color, 0.12);
+      ctx.lineWidth = (conn.width || 1) + 6;
+      ctx.stroke();
+    }
+  });
+}
+
+function drawParticles() {
+  particles.forEach(p => {
+    const alpha = p.life * 0.35;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(190,255,230,' + alpha + ')';
+    ctx.fill();
+  });
+}
+
+function drawNodes() {
+  // Draw order: satellites → ring3 → clusters → core
+  const order = [
+    ...nodes.filter(n => n.type === 'satellite'),
+    ...nodes.filter(n => n.ring === 3),
+    ...nodes.filter(n => n.type === 'cluster'),
+    ...nodes.filter(n => n.type === 'core')
+  ];
+  order.forEach(n => drawNode(n));
+}
+
+function drawNode(n) {
+  const isHovered = hoveredNode && hoveredNode.id === n.id;
+  const isRelated = hoveredNode && (
+    hoveredNode.parentCluster === n.id ||
+    n.parentCluster === hoveredNode.id ||
+    n.parentCluster === hoveredNode.parentCluster ||
+    (hoveredNode.id === 'brain') ||
+    (n.id === 'brain' && hoveredNode)
+  );
+  const dimmed = hoveredNode && !isHovered && !isRelated;
+  const alpha = dimmed ? 0.15 : 1;
+
+  const pulse = n.type === 'core' ? 0.7 + Math.sin(time * 2) * 0.3 : 1;
+  const glowPulse = n.glow ? 0.8 + Math.sin(time * 1.5 + hashId(n.id)) * 0.2 : 1;
+
+  // Outer glow
+  if ((n.glow || n.type === 'core') && !dimmed) {
+    const glowR = n.r * (n.type === 'core' ? 4 : 2.8) * glowPulse;
+    const glow = ctx.createRadialGradient(n.x, n.y, n.r * 0.2, n.x, n.y, glowR);
+    glow.addColorStop(0, hexToRgba(n.color, 0.2 * alpha * pulse));
+    glow.addColorStop(0.5, hexToRgba(n.color, 0.06 * alpha));
+    glow.addColorStop(1, hexToRgba(n.color, 0));
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, glowR, 0, Math.PI * 2);
+    ctx.fillStyle = glow;
+    ctx.fill();
+  }
+
+  // Node body
+  const drawR = n.r * (isHovered ? 1.25 : 1);
+  ctx.beginPath();
+  ctx.arc(n.x, n.y, drawR, 0, Math.PI * 2);
+  const grad = ctx.createRadialGradient(n.x - drawR * 0.3, n.y - drawR * 0.3, 0, n.x, n.y, drawR);
+  grad.addColorStop(0, hexToRgba(lighten(n.color, 35), alpha * pulse));
+  grad.addColorStop(1, hexToRgba(n.color, alpha * pulse));
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Border ring
+  ctx.beginPath();
+  ctx.arc(n.x, n.y, drawR, 0, Math.PI * 2);
+  ctx.strokeStyle = hexToRgba(lighten(n.color, 20), alpha * 0.5);
+  ctx.lineWidth = n.type === 'core' ? 2 : (n.type === 'cluster' ? 1.5 : 0.8);
+  ctx.stroke();
+
+  // Labels for clusters and core
+  if ((n.type === 'cluster' || n.type === 'core') && !dimmed) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const labelY = n.y + drawR + 8;
+
+    // Draw a subtle dark rect behind label for readability
+    if (n.type === 'cluster') {
+      ctx.font = '600 10px Inter, sans-serif';
+      const tw = Math.max(ctx.measureText(n.label).width, ctx.measureText(n.stat).width);
+      ctx.fillStyle = 'rgba(8,12,20,0.65)';
+      ctx.fillRect(n.x - tw/2 - 6, labelY - 2, tw + 12, 28);
+    }
+
+    if (n.type === 'core') {
+      ctx.font = '700 11px Inter, sans-serif';
+      ctx.fillStyle = hexToRgba('#e2e8f0', alpha * 0.95);
+      ctx.fillText(n.label, n.x, labelY);
+    } else {
+      ctx.font = '600 10px Inter, sans-serif';
+      ctx.fillStyle = hexToRgba('#e2e8f0', alpha * 0.9);
+      ctx.fillText(n.label, n.x, labelY);
+      ctx.font = '500 9px "JetBrains Mono", monospace';
+      ctx.fillStyle = hexToRgba(n.color, alpha * 0.75);
+      ctx.fillText(n.stat, n.x, labelY + 13);
+    }
+    ctx.restore();
+  }
+}
+
+// =========================================================
+// TOOLTIP / HOVER
+// =========================================================
+function handleMouseMove(e) {
+  const rect = canvas.getBoundingClientRect();
+  mouseX = e.clientX - rect.left;
+  mouseY = e.clientY - rect.top;
+
+  let found = null;
+  const ordered = [...nodes].reverse();
+  for (const n of ordered) {
+    const dx = mouseX - n.x;
+    const dy = mouseY - n.y;
+    const hitR = Math.max(n.r + 8, 14);
+    if (dx * dx + dy * dy < hitR * hitR) {
+      found = n;
+      break;
+    }
+  }
+
+  hoveredNode = found;
+  const tooltip = document.getElementById('tooltip');
+  if (found) {
+    canvas.style.cursor = 'pointer';
+    document.getElementById('ttLabel').textContent = found.label;
+    document.getElementById('ttDesc').textContent = found.desc;
+    const statEl = document.getElementById('ttStat');
+    statEl.textContent = found.stat;
+    statEl.style.color = found.color;
+    tooltip.classList.add('visible');
+    let tx = e.clientX + 16;
+    let ty = e.clientY - 12;
+    if (tx + 280 > window.innerWidth) tx = e.clientX - 290;
+    if (ty + 100 > window.innerHeight) ty = e.clientY - 100;
+    if (ty < 10) ty = 10;
+    tooltip.style.left = tx + 'px';
+    tooltip.style.top = ty + 'px';
+  } else {
+    canvas.style.cursor = 'default';
+    tooltip.classList.remove('visible');
+  }
+}
+
+canvas.addEventListener('mousemove', handleMouseMove);
+canvas.addEventListener('mouseleave', () => {
+  hoveredNode = null;
+  document.getElementById('tooltip').classList.remove('visible');
+  canvas.style.cursor = 'default';
+});
+canvas.addEventListener('touchstart', e => {
+  const t = e.touches[0];
+  handleMouseMove({ clientX: t.clientX, clientY: t.clientY });
+}, { passive: true });
+
+// =========================================================
+// STATS & CARDS
+// =========================================================
+function buildStats() {
+  const s = DATA.stats;
+  const ks = DATA.knowledgeSources;
+
+  const foundation = [
+    { value: s.totalPreTaughtKnowledge, label: 'Pre-Taught Intelligence Points', cls: 'emerald' },
+    { value: ks.croResearch.totalDataPoints, label: 'CRO Research Facts', cls: 'blue' },
+    { value: ks.salesPsychology.totalDataPoints, label: 'Sales Psychology Frameworks', cls: 'purple' },
+    { value: ks.pageContextRules.totalDataPoints, label: 'Page Context Rules', cls: 'amber' },
+    { value: ks.autopilotPlaybooks.totalDataPoints, label: 'Autopilot Playbook Steps', cls: 'cyan' }
+  ];
+
+  const live = [
+    { value: s.visitorsAnalyzed, label: 'Visitors Analyzed', cls: 'teal' },
+    { value: s.conversionsTracked, label: 'Conversions Tracked', cls: 'green' },
+    { value: s.behavioralSignals, label: 'Behavioral Signals', cls: 'teal' },
+    { value: s.testsWon, label: 'Tests Won', cls: 'green' },
+    { value: s.pagesScanned, label: 'Pages Scanned', cls: 'emerald' }
+  ];
+
+  renderStatRow('foundationStats', foundation);
+  renderStatRow('liveStats', live);
+  animateCounter(document.getElementById('totalKpCount'), s.totalKnowledgePoints);
+}
+
+function renderStatRow(containerId, items) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = items.map(item => `
+    <div class="stat-card ${item.cls}">
+      <div class="stat-value" data-target="${item.value}">0</div>
+      <div class="stat-label">${item.label}</div>
+    </div>
+  `).join('');
+  container.querySelectorAll('.stat-value').forEach(el => {
+    animateCounter(el, parseInt(el.dataset.target));
+  });
+}
+
+function animateCounter(el, target) {
+  const duration = 2000;
+  const start = performance.now();
+  function tick(now) {
+    const progress = Math.min((now - start) / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = Math.round(target * eased).toLocaleString();
+    if (progress < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function buildCards() {
+  const container = document.getElementById('cardsSection');
+  const ks = DATA.knowledgeSources;
+  let html = '';
+
+  // CRO Research
+  html += '<div class="cards-section-title" style="color:var(--blue-teal)">CRO Research Intelligence</div><div class="cards-grid">';
+  ks.croResearch.categories.slice(0, 6).forEach(cat => {
+    html += cardHTML('blue-border', '--blue-teal', cat.name, 'Research-backed optimization data for ' + cat.name.toLowerCase() + '.', cat.dataPoints + ' data points');
+  });
+  html += '</div>';
+
+  // Sales Psychology
+  html += '<div class="cards-section-title" style="color:var(--purple)">Sales Psychology Frameworks</div><div class="cards-grid">';
+  ks.salesPsychology.categories.slice(0, 6).forEach(cat => {
+    html += cardHTML('purple-border', '--purple', cat.name, 'Persuasion framework: ' + cat.name + '.', cat.dataPoints + ' data points');
+  });
+  html += '</div>';
+
+  // Test Results
+  html += '<div class="cards-section-title" style="color:var(--green)">Live Test Results</div><div class="cards-grid">';
+  DATA.tests.forEach(t => {
+    const isPositive = t.liftPercent > 0;
+    const borderCls = isPositive ? 'green-border' : 'green-border';
+    const tagCls = isPositive ? 'win' : 'loss';
+    const liftStr = isPositive ? '+' + t.liftPercent + '%' : t.liftPercent + '%';
+    const verb = isPositive ? 'beat' : 'lost to';
+    html += `<div class="knowledge-card ${borderCls}">
+      <div class="card-header"><div class="card-icon" style="background:var(${isPositive ? '--green' : '--red'})"></div><div class="card-title">${capitalize(t.sectionType)} Test</div></div>
+      <div class="card-body">${t.winnerStrategy} ${verb} ${t.loserStrategy} with ${liftStr} lift across ${t.sampleSize.toLocaleString()} visitors.</div>
+      <span class="card-tag ${tagCls}">${liftStr} Lift</span>
+    </div>`;
+  });
+  html += '</div>';
+
+  // Behavioral Patterns
+  html += '<div class="cards-section-title" style="color:var(--teal)">Behavioral Patterns</div><div class="cards-grid">';
+  const b = DATA.behavioral;
+  const behavCards = [
+    { title: 'Scroll Depth Gap', body: `Converters scroll ${b.converterScroll}% vs ${b.nonconverterScroll}% for non-converters — ${(b.converterScroll - b.nonconverterScroll).toFixed(0)}% deeper engagement.` },
+    { title: 'Time on Page', body: `Converters spend ${b.converterTime}s vs ${b.nonconverterTime}s — ${Math.round(b.converterTime / b.nonconverterTime)}x longer on page.` },
+    { title: 'Click Density', body: `Converters: ${b.converterClicks} clicks vs ${b.nonconverterClicks} — ${(b.converterClicks / b.nonconverterClicks).toFixed(1)}x more interaction.` }
+  ];
+  behavCards.forEach(bc => {
+    html += cardHTML('teal-border', '--teal', bc.title, bc.body, '');
+  });
+  html += '</div>';
+
+  // Page Context Rules
+  html += '<div class="cards-section-title" style="color:var(--amber)">Page Context Rules</div><div class="cards-grid">';
+  ks.pageContextRules.categories.slice(0, 4).forEach(cat => {
+    html += cardHTML('amber-border', '--amber', cat.name, 'Dynamic rules for ' + cat.name.toLowerCase() + ' optimization.', cat.dataPoints + ' rules');
+  });
+  html += '</div>';
+
+  // Autopilot Playbooks
+  html += '<div class="cards-section-title" style="color:var(--cyan)">Autopilot Playbooks</div><div class="cards-grid">';
+  ks.autopilotPlaybooks.categories.forEach(cat => {
+    html += cardHTML('cyan-border', '--cyan', cat.name, 'Step-by-step optimization sequence.', cat.dataPoints + ' steps');
+  });
+  html += '</div>';
+
+  container.innerHTML = html;
+}
+
+function cardHTML(borderClass, colorVar, title, body, stat) {
+  return `<div class="knowledge-card ${borderClass}">
+    <div class="card-header"><div class="card-icon" style="background:var(${colorVar})"></div><div class="card-title">${title}</div></div>
+    <div class="card-body">${body}</div>
+    ${stat ? '<div class="card-stat">' + stat + '</div>' : ''}
+  </div>`;
+}
+
+// =========================================================
+// HELPERS
+// =========================================================
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${Math.max(0, Math.min(1, alpha))})`;
+}
+
+function lighten(hex, pct) {
+  let r = parseInt(hex.slice(1,3),16);
+  let g = parseInt(hex.slice(3,5),16);
+  let b = parseInt(hex.slice(5,7),16);
+  r = Math.min(255, r + Math.round((255 - r) * pct / 100));
+  g = Math.min(255, g + Math.round((255 - g) * pct / 100));
+  b = Math.min(255, b + Math.round((255 - b) * pct / 100));
+  return '#' + [r,g,b].map(c => c.toString(16).padStart(2,'0')).join('');
+}
+
+function capitalize(s) {
+  if (!s) return '';
+  return s.replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function hashId(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = ((h << 5) - h) + str.charCodeAt(i);
+  return h;
+}
+
+// =========================================================
+// INIT
+// =========================================================
+function init() {
+  resize();
+  buildStats();
+  buildCards();
+  if (!animFrame) draw();
+}
+
+window.addEventListener('resize', () => {
+  cancelAnimationFrame(animFrame);
+  animFrame = null;
+  resize();
+  draw();
+});
+
+loadData();
+</script>
+</body>
+</html>

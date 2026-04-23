@@ -46,16 +46,39 @@ export interface SectionForCarrot {
 
 /**
  * Detect page language from the first meaningful heading we have.
- * Cheap heuristic — the LLM gets the sample text too and will write
- * in the right language regardless.
+ *
+ * Heuristic that requires THREE distinct language-specific token matches
+ * before declaring a non-English language. Single "a" / "o" / "la" / "el"
+ * are ambiguous across languages (especially on English caps pages like
+ * "A HIGH PROFIT DIGITAL PRODUCT") so we only count multi-letter tokens
+ * or tokens with diacritics as strong signals.
+ *
+ * The LLM still gets the actual sample text and will write in the right
+ * language regardless — this is only used to bias the instruction label.
  */
 function detectLang(sample: string): string {
   const s = sample.toLowerCase();
-  if (/\b(il|la|che|sono|questo|non|per|della|come funziona|garanzia|prezzo|acquist)\b/.test(s)) return "it";
-  if (/\b(el|la|que|este|cómo|para|garantía|precio|comprar)\b/.test(s)) return "es";
-  if (/\b(o|a|que|este|como|para|garantia|preço|comprar|ver como)\b/.test(s)) return "pt";
-  if (/\b(le|la|que|ce|comme|pour|garantie|prix|acheter)\b/.test(s)) return "fr";
-  if (/\b(der|die|das|wie|für|garantie|preis|kaufen)\b/.test(s)) return "de";
+  const hit = (re: RegExp): number => {
+    const m = s.match(re);
+    return m ? m.length : 0;
+  };
+
+  const scores: Record<string, number> = {
+    it: hit(/\b(che|sono|questo|della|delle|quando|come funziona|garanzia|prezzo|acquist|ordina|adesso|più|perché|anche|ancora|hanno|vuoi)\b/g),
+    es: hit(/\b(que|este|esta|cómo|para|garantía|precio|comprar|ahora|también|usted|tu |más|porque|después|además)\b/g),
+    pt: hit(/\b(que|este|esta|como|para|garantia|preço|comprar|agora|você|também|mais|porque|depois|não|são|aqui)\b/g),
+    fr: hit(/\b(que|ce|comme|pour|garantie|acheter|maintenant|vous|aussi|plus|parce|avec|à présent|déjà|très|merci)\b/g),
+    de: hit(/\b(der|die|das|wie|für|garantie|preis|kaufen|jetzt|auch|mehr|weil|sehr|mit|nicht|sind|können)\b/g),
+  };
+
+  // Require at least 2 distinct hits AND a clear winner (2x the next language)
+  let best: [string, number] = ["en", 0];
+  let runnerUp = 0;
+  for (const [lang, n] of Object.entries(scores)) {
+    if (n > best[1]) { runnerUp = best[1]; best = [lang, n]; }
+    else if (n > runnerUp) { runnerUp = n; }
+  }
+  if (best[1] >= 2 && best[1] >= runnerUp * 2) return best[0];
   return "en";
 }
 
