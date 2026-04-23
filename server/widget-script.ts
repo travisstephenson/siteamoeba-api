@@ -788,10 +788,21 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     }
 
     // === SAFETY CHECK for multi-element ===
-    // Validate that the primary element shows a reasonable portion of the variant text.
-    // If distribution looks wrong, revert all elements to originals.
-    var renderOk = validateRender(allElements[0], text);
-    console.log("[SA] validateRender:", renderOk, "| el text after swap:", (allElements[0].textContent||"").substring(0,60));
+    // Validate that, ACROSS ALL elements combined, a reasonable portion of the
+    // variant text is visible. In multi-element mode the text was split by
+    // proportion across N elements, so no single element contains the full
+    // variant — the old check against allElements[0] produced false positives
+    // (especially when the first element is shorter than the second, which
+    // happens on Elementor / multi-h1 hero layouts like C92's subheadline).
+    //
+    // Build a combined text of everything we just wrote and validate against
+    // that. Only revert if truly nothing of the variant shows up.
+    var combinedText = "";
+    for (var cv = 0; cv < allElements.length; cv++) {
+      combinedText += " " + (allElements[cv].textContent || "");
+    }
+    var renderOk = validateRender({ textContent: combinedText }, text);
+    console.log("[SA] validateRender(multi):", renderOk, "| combined text after swap:", combinedText.trim().substring(0, 80));
     if (!renderOk) {
       for (var rv = 0; rv < allElements.length; rv++) {
         allElements[rv].textContent = originals[rv];
