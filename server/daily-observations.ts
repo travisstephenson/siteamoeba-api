@@ -3,6 +3,7 @@ import { callLLM, type LLMConfig } from "./llm";
 import { getBrainPageAuditKnowledge } from "./brain-selector";
 import { getNetworkIntelligence } from "./network-intelligence";
 import { getCROKnowledge } from "./brain-cro-knowledge";
+import { getCarrotForCampaign, type CarrotCache } from "./carrot-recommendation";
 import type { LLMMessage } from "./llm";
 
 // Valid observation categories — rotated to avoid repetition
@@ -70,11 +71,13 @@ function buildObservationPrompt(params: {
   category: ObservationCategory;
   brainKnowledge: string;
   recentObservationTexts: string[];
+  carrot?: CarrotCache | null;
 }): LLMMessage[] {
   const {
     campaignName, campaignUrl, niche, pageType, pricePoint,
     sessionStats, variantStats, totalVisitors, totalConversions,
     conversionRate, category, brainKnowledge, recentObservationTexts,
+    carrot,
   } = params;
 
   const scrollDiff = sessionStats.convertedAvgScroll - sessionStats.nonConvertedAvgScroll;
@@ -108,8 +111,17 @@ function buildObservationPrompt(params: {
 - Average scroll depth: ${avgScrollPct}% (how far visitors scroll on average)
 - Converters scroll to: ${convertedScrollPct}% vs non-converters: ${nonConvertedScrollPct}%
 - Scroll depth gap (converters vs non-converters): ${scrollDiff > 0 ? "+" : ""}${scrollDiff.toFixed(0)}%
-- Average time on page: ${avgTimeSec} seconds
-Generate an insight about what the scroll data reveals — e.g. where visitors drop off, whether key content is being seen, whether the guarantee/CTA is being reached.`,
+- Average time on page: ${avgTimeSec} seconds${carrot ? `
+
+BIGGEST DROP-OFF ON THIS PAGE (use this as the core of your observation):
+- ${carrot.dropPct}% of visitors leave after section "${carrot.prevHeading}" before reaching "${carrot.nextHeading}"
+- Diagnosis: ${carrot.diagnosis}
+- Suggested cliffhanger copy (in the page's language: ${carrot.lang}): "${carrot.cliffhangers[0]}"` : ""}
+Generate an insight about what the scroll data reveals${carrot ? `. You MUST:
+1. Name the specific drop-off point (with the actual section heading from the data)
+2. Reference the diagnosis of WHY readers are leaving
+3. End with the suggested cliffhanger copy in quotes so the user can paste it
+This is a CARROT recommendation — actionable copy, not generic advice.` : " — e.g. where visitors drop off, whether key content is being seen, whether the guarantee/CTA is being reached."}`,
 
     conversion_pattern: `Focus on CONVERSION PATTERN data:
 - Overall conversion rate: ${conversionRate.toFixed(2)}% (visitor-based — conversions divided by total visitors across all variants)
@@ -124,8 +136,17 @@ Generate an insight about conversion patterns — what behaviors correlate with 
 - Average scroll depth: ${avgScrollPct}% (sections below this depth are unseen by most visitors)
 - Converters reach: ${convertedScrollPct}% vs non-converters: ${nonConvertedScrollPct}%
 - Time on page: ${avgTimeSec}s
-- Video play rate: ${videoRatePct}% of visitors play video (if present)
-Generate an insight about which page sections are being seen vs. missed, and what this means for the page structure.`,
+- Video play rate: ${videoRatePct}% of visitors play video (if present)${carrot ? `
+
+BIGGEST DROP-OFF ON THIS PAGE (use this as the core of your observation):
+- ${carrot.dropPct}% of visitors leave after section "${carrot.prevHeading}" before reaching "${carrot.nextHeading}"
+- Diagnosis: ${carrot.diagnosis}
+- Suggested cliffhanger copy (in the page's language: ${carrot.lang}): "${carrot.cliffhangers[0]}"` : ""}
+Generate an insight about which page sections are being seen vs. missed${carrot ? `. You MUST:
+1. Name the specific section where the biggest drop is happening (with the actual heading)
+2. Reference the diagnosis of WHY that section closes the loop
+3. End with the suggested cliffhanger copy in quotes so the user can paste it
+This is a CARROT recommendation — actionable copy for a specific section, not generic advice about "moving content above the fold".` : ", and what this means for the page structure."}`,
 
     traffic_quality: `Focus on TRAFFIC QUALITY data:
 - Average scroll depth: ${avgScrollPct}% (high depth = engaged traffic)
@@ -252,6 +273,18 @@ export async function generateDailyObservation(
     networkIntel = await getNetworkIntelligence();
   } catch { /* non-fatal */ }
 
+  // 8b. If the rotated category is scroll-related, fetch the carrot so the
+  // observation ends with actionable cliffhanger copy instead of vague
+  // "test improving the problem section" advice. Non-fatal if it fails.
+  let carrot: CarrotCache | null = null;
+  if (category === "scroll_behavior" || category === "section_engagement") {
+    try {
+      carrot = await getCarrotForCampaign(campaignId, llmConfig);
+    } catch (err) {
+      console.warn("[daily-observation] carrot fetch failed:", (err as Error).message);
+    }
+  }
+
   // 9. Build prompt
   const messages = buildObservationPrompt({
     campaignName: campaign.name,
@@ -268,6 +301,7 @@ export async function generateDailyObservation(
     category,
     brainKnowledge: brainKnowledge.substring(0, 4000), // keep prompt lean
     recentObservationTexts: recentObs.slice(0, 3).map(o => o.observation),
+    carrot,
   });
 
   // 9. Call LLM

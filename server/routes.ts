@@ -22,7 +22,7 @@ import { evaluateAutopilotTests, advanceAutopilot, generateAutopilotVariants, de
 import { getPlaybook } from "./autopilot-playbooks";
 import { generateWidgetScript } from "./widget-script";
 import { generateDailyObservation, CATEGORY_LABELS } from "./daily-observations";
-import { getCarrotRecommendation, type SectionForCarrot } from "./carrot-recommendation";
+import { getCarrotRecommendation, getCarrotForCampaign, type SectionForCarrot } from "./carrot-recommendation";
 
 // ===== Rate limiters =====
 
@@ -5648,6 +5648,32 @@ export async function registerRoutes(server: Server, app: Express) {
       campaign.niche || undefined
     );
 
+    // === CARROT CONTEXT ===
+    // Always fetch the current carrot recommendation for the campaign so the
+    // Brain can reference the biggest drop-off point + its fix in ANY answer.
+    // Even unrelated questions ("what should I test next?", "why am I losing
+    // traffic?") benefit from knowing where the real leak is.
+    let carrotContext = "";
+    try {
+      const carrot = await getCarrotForCampaign(campaign.id, llmConfigResolved.config);
+      if (carrot && carrot.cliffhangers && carrot.cliffhangers.length > 0) {
+        carrotContext = [
+          "",
+          "",
+          "CURRENT BIGGEST DROP-OFF (the single most important retention problem on this page):",
+          `- ${carrot.dropPct}% of visitors leave after section "${carrot.prevHeading}" and never reach "${carrot.nextHeading}"`,
+          `- Diagnosis: ${carrot.diagnosis}`,
+          `- Page language: ${carrot.lang}`,
+          `- Ready-to-paste cliffhanger lines for the END of "${carrot.prevHeading}":`,
+          ...carrot.cliffhangers.slice(0, 3).map((c: string, i: number) => `    ${i + 1}. "${c}"`),
+          "",
+          "If the user's question touches retention, drop-off, scroll depth, \"what to test next\", why visitors leave, or how to improve the page flow — you MUST reference this drop-off point with the actual section names, explain the carrot principle (closing a loop makes readers leave), and offer the cliffhanger copy above. Do not offer generic \"test your headline\" advice while a known retention leak exists.",
+        ].join("\n");
+      }
+    } catch (err) {
+      console.warn("[brain-chat] carrot context lookup failed:", (err as Error).message);
+    }
+
     // === CRITICAL: Get THIS campaign's own test history ===
     // The Brain MUST know what has already been tested and proven on this specific campaign.
     // Without this, the AI will suggest changes that directly contradict proven winners.
@@ -5718,7 +5744,12 @@ export async function registerRoutes(server: Server, app: Express) {
       testLessons: testLessonsText || undefined,
       campaignTestHistory,
       networkIntelligence: networkIntel || undefined,
+      // Carrot recommendation appended to brainKnowledge so it reaches the
+      // LLM regardless of which prompt-builder path is taken below.
     };
+    if (carrotContext) {
+      chatContext.brainKnowledge = (chatContext.brainKnowledge || "") + carrotContext;
+    }
 
     const llmConfig = llmConfigResolved.config;
 

@@ -393,3 +393,81 @@ export async function getCarrotRecommendation(params: {
 
   return result;
 }
+
+/**
+ * Convenience wrapper: read the campaign's section_map + live visitor
+ * scroll data and return the current carrot.
+ *
+ * Used by Daily Observations, Autopilot, and Brain Chat so they share
+ * the exact same insight data as the UI. Returns null if there isn't
+ * enough data to produce a meaningful carrot.
+ */
+export async function getCarrotForCampaign(
+  campaignId: number,
+  llmConfig: LLMConfig | null,
+): Promise<CarrotCache | null> {
+  // Load section map + campaign metadata
+  const campaignRow = await pool.query(
+    "SELECT id, name, url, niche, page_type, section_map FROM campaigns WHERE id = $1",
+    [campaignId]
+  );
+  const campaign = campaignRow.rows[0];
+  if (!campaign) return null;
+
+  const sectionMap = campaign.section_map;
+  if (!sectionMap || !Array.isArray(sectionMap) || sectionMap.length < 2) return null;
+
+  // Pull scroll distribution across visitors (same query the dropoff route uses)
+  const scrollResult = await pool.query(
+    `SELECT vs.max_scroll_depth, v.converted, COUNT(*) as cnt
+     FROM visitor_sessions vs
+     JOIN visitors v ON v.id = vs.visitor_id AND v.campaign_id = vs.campaign_id
+     WHERE vs.campaign_id = $1 AND vs.max_scroll_depth > 0
+     GROUP BY vs.max_scroll_depth, v.converted`,
+    [campaignId]
+  );
+  if (scrollResult.rows.length === 0) return null;
+
+  let totalVisitors = 0;
+  const scrollCounts: Record<number, { total: number; converted: number }> = {};
+  for (const row of scrollResult.rows) {
+    const depth = parseInt(row.max_scroll_depth);
+    const count = parseInt(row.cnt);
+    if (!scrollCounts[depth]) scrollCounts[depth] = { total: 0, converted: 0 };
+    scrollCounts[depth].total += count;
+    if (row.converted) scrollCounts[depth].converted += count;
+    totalVisitors += count;
+  }
+
+  // Build per-section reach + drop
+  const sections: SectionForCarrot[] = sectionMap.map((s: any, i: number) => {
+    let reached = 0;
+    for (const [depthStr, counts] of Object.entries(scrollCounts)) {
+      if (parseInt(depthStr) >= s.offsetPct) reached += (counts as any).total;
+    }
+    const reachPct = totalVisitors > 0 ? Math.round(reached / totalVisitors * 100) : 0;
+    return {
+      idx: i,
+      label: s.label,
+      heading: s.heading || "",
+      offsetPct: s.offsetPct,
+      reachPct,
+    };
+  });
+  for (let i = 1; i < sections.length; i++) {
+    sections[i].dropFromPrev = sections[i - 1].reachPct - sections[i].reachPct;
+  }
+  if (sections.length > 0) sections[0].dropFromPrev = 0;
+
+  return getCarrotRecommendation({
+    campaignId,
+    campaign: {
+      name: campaign.name,
+      url: campaign.url,
+      niche: campaign.niche,
+      pageType: campaign.page_type,
+    },
+    sections,
+    llmConfig,
+  });
+}

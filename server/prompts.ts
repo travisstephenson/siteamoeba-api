@@ -28,11 +28,48 @@ export interface GenerationContext {
   campaignTestHistory?: string;
   // Winning patterns from ALL test_lessons — used for Brain's Choice ranking
   winningPatterns?: string;
+  // CARROT HINT — when the section being tested sits just before a big
+  // drop-off point, this nudges the generator to include cliffhanger/open-loop
+  // variants so the test actually attacks the retention problem instead of
+  // just reshuffling angles.
+  carrotHint?: {
+    dropPct: number;       // % of readers who leave after this section
+    prevHeading: string;   // heading of THIS section (the one leaking readers)
+    nextHeading: string;   // heading of the section they're not reaching
+    diagnosis: string;     // why the loop closes
+    lang: string;          // page language code
+    suggested: string[];   // up to 3 pre-generated cliffhanger lines
+  };
 }
 
 // ============================================================
 // CORE COPYWRITING SYSTEM PROMPT
 // ============================================================
+
+/**
+ * Build a "carrot hint" block for generation prompts. When the section being
+ * tested is where readers bail out, we want the LLM to generate at least one
+ * open-loop / cliffhanger variant. Returns empty string when carrotHint is
+ * absent.
+ */
+function carrotHintBlock(ctx: GenerationContext): string {
+  const h = ctx.carrotHint;
+  if (!h) return "";
+  const suggestions = (h.suggested || []).slice(0, 3).map((s, i) => `  ${i + 1}. "${s}"`).join("\n");
+  return `\n\n🥕 CARROT MODE — THIS SECTION IS LEAKING READERS
+Real visitor data shows ${h.dropPct}% of readers leave after THIS section ("${h.prevHeading}") and never reach the next section ("${h.nextHeading}").
+
+Diagnosis: ${h.diagnosis}
+
+The section ends by closing a psychological loop — readers feel "done" so they bounce. The fix is an OPEN-LOOP CLIFFHANGER at the end of this section that pulls them into the next one.
+
+AT LEAST ONE of your 3 generated variants MUST be a cliffhanger designed to re-open the loop and pull readers forward. Think: specificity gap, surprise, contrarian tease, promised reveal, pattern interrupt. Use the "carrot" strategy tag.
+
+Pre-generated cliffhanger options for reference (match the style, don't copy verbatim unless they're clearly best; write in ${h.lang}):
+${suggestions}
+
+Even when adapting these, STAY IN THE PAGE'S VOICE. If the page uses exclamation points sparingly, your cliffhanger should too. If the section is clinical/medical, be restrained.`;
+}
 
 const COPYWRITING_SYSTEM_PROMPT = `You are a world-class direct-response copywriter with deep expertise in A/B testing, conversion rate optimization, and behavioral psychology. You have studied the techniques of David Ogilvy, Gary Halbert, Dan Kennedy, and modern CRO pioneers.
 
@@ -188,7 +225,7 @@ RULES:
 7. Do NOT include existing variants or close rewrites
 
 BRAIN'S CHOICE: After generating all 3 variants, select the ONE you believe has the highest probability of winning based on the proven winning patterns provided. Set "brainChoice": true on that variant and provide a "brainReasoning" field explaining WHY — reference specific winning patterns, data, or CRO principles that support your recommendation. The other two should have "brainChoice": false.
-
+${carrotHintBlock(context)}
 Return ONLY the JSON array with objects containing: text, strategy, reasoning, brainChoice (boolean), brainReasoning (string, only on the chosen variant). No other text.`;
 
   const brainKnowledge = getBrainKnowledgeForSection("headline");
@@ -268,7 +305,7 @@ INSTRUCTIONS:
 7. Do NOT repeat any existing variants
 
 BRAIN'S CHOICE: After generating all 3 variants, select the ONE you believe has the highest probability of winning based on the proven winning patterns provided. Set "brainChoice": true on that variant and provide a "brainReasoning" field explaining WHY. The other two should have "brainChoice": false.
-
+${carrotHintBlock(context)}
 Return ONLY the JSON array with objects containing: text, strategy, reasoning, brainChoice (boolean), brainReasoning (string, only on the chosen variant). No other text.`;
 
   const brainKnowledge = getBrainKnowledgeForSection("subheadline");
@@ -744,7 +781,7 @@ ${context.existingPersuasionTags?.length ? `Strategies already being tested: ${c
 Generate 3 new test variants.
 
 BRAIN'S CHOICE: After generating all 3 variants, select the ONE you believe has the highest probability of winning based on the proven winning patterns provided. Set "brainChoice": true on that variant and provide a "brainReasoning" field explaining WHY. The other two should have "brainChoice": false.
-
+${carrotHintBlock(context)}
 Return ONLY a JSON array with objects containing: text, strategy, reasoning, brainChoice (boolean), brainReasoning (string, only on the chosen variant). No other text.`;
 
   let finalSystem = systemPrompt;

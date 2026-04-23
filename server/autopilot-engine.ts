@@ -503,6 +503,44 @@ export async function generateAutopilotVariants(
     }
   } catch { /* non-fatal */ }
 
+  // 4. CARROT HINT — when the section being tested is where readers bail out,
+  // pass the cliffhanger context so the LLM generates at least one open-loop
+  // variant. This turns autopilot from a blind variant generator into a
+  // targeted retention fix.
+  try {
+    const { getCarrotForCampaign } = await import("./carrot-recommendation");
+    const carrot = await getCarrotForCampaign(campaignId, llmConfig);
+    if (carrot && matchingSection) {
+      // Only apply the carrot hint if THIS section (the one we're testing)
+      // is the section that comes BEFORE the biggest drop-off. We match on
+      // heading first (more reliable), then fall back to label match.
+      const currentSectionHeading = (matchingSection.label || "").toLowerCase().trim();
+      const carrotPrevHeading = (carrot.prevHeading || "").toLowerCase().trim();
+      const carrotPrevLabel = (carrot.prevLabel || "").toLowerCase().trim();
+      const isLeakingSection = (
+        currentSectionHeading.length > 0 && (
+          carrotPrevHeading.includes(currentSectionHeading) ||
+          currentSectionHeading.includes(carrotPrevHeading) ||
+          currentSectionHeading === carrotPrevLabel
+        )
+      ) || (matchingSection.category === carrot.prevLabel);
+
+      if (isLeakingSection) {
+        context.carrotHint = {
+          dropPct: carrot.dropPct,
+          prevHeading: carrot.prevHeading,
+          nextHeading: carrot.nextHeading,
+          diagnosis: carrot.diagnosis,
+          lang: carrot.lang,
+          suggested: carrot.cliffhangers || [],
+        };
+        console.log(`[autopilot] Carrot hint applied: campaign ${campaignId} section ${matchingSection.id} is the ${carrot.dropPct}% drop-off point`);
+      }
+    }
+  } catch (err) {
+    console.warn(`[autopilot] Carrot hint lookup failed for campaign ${campaignId}:`, (err as Error).message);
+  }
+
   let messages;
   if (type === "headline") {
     messages = buildHeadlineGenerationPrompt(context);
