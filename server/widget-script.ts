@@ -1676,18 +1676,55 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
         // Footer — multilingual
         if (/copyright|\u00a9|all rights reserved|tutti i diritti riservati|todos los derechos reservados|todos os direitos reservados|tous droits réservés|privacy|privacidad|privacidade|confidentialité|terms of (use|service)|termini d'uso|términos|termos de uso|conditions d'utilisation/i.test(bodyText) && bodyText.length < 250) return "footer";
 
-        // LAST-RESORT HEADING FALLBACK: If we still don't know what this is but we have
-        // a clear heading, return it as a slug instead of the generic "content". Gives
-        // Alberto a meaningful drop-off label for his Italian sections even when we don't
-        // have a perfect classifier match.
-        if (headingText && headingText.length >= 5 && headingText.length <= 80) {
-          var slug = headingText.toLowerCase()
-            .replace(/[^a-z0-9\\s]/g, "")
-            .trim()
-            .split(/\\s+/)
-            .slice(0, 4)
-            .join("_");
-          if (slug.length >= 3) return slug.substring(0, 40);
+        // LAST-RESORT FALLBACK: instead of the meaningless "content" label, pick
+        // the most identifiable text in the section so the drop-off chart actually
+        // tells the user where they are on the page. Preference order:
+        //   1. Any heading (h1-h4)
+        //   2. First button/CTA visible text
+        //   3. First 8 words of visible body text (for Elementor/Divi decorative
+        //      sections that have no heading but real copy)
+        //   4. First image's alt text
+        //   5. "content" if the section is genuinely featureless
+        function slugFrom(s, maxWords) {
+          if (!s) return "";
+          var words = s.replace(/[^a-z0-9\\u00c0-\\u024f\\s]/gi, " ").trim().split(/\\s+/);
+          if (words.length === 0) return "";
+          return words.slice(0, maxWords).join(" ").substring(0, 50);
+        }
+
+        if (headingText && headingText.length >= 5 && headingText.length <= 100) {
+          var hSlug = slugFrom(headingText, 6);
+          if (hSlug.length >= 3) return hSlug;
+        }
+
+        // Button / CTA text
+        var btn = el.querySelector("button, a.button, a.btn, [class*='cta'], [class*='button'], input[type='submit']");
+        if (btn) {
+          var btnText =
+            (btn.getAttribute && btn.getAttribute("aria-label")) ||
+            (btn.value) ||
+            (btn.innerText || btn.textContent || "");
+          btnText = (btnText || "").trim();
+          if (btnText.length >= 3 && btnText.length <= 80) {
+            return slugFrom(btnText, 6);
+          }
+        }
+
+        // First 8 words of visible body text. Trimmed bodyText is already lowercased
+        // so we re-read raw innerText for casing + readability.
+        var raw = (el.innerText || el.textContent || "").trim();
+        if (raw.length >= 40) {
+          var textSlug = slugFrom(raw, 8);
+          if (textSlug.length >= 10) return textSlug;
+        }
+
+        // Image alt
+        var firstImg = el.querySelector("img[alt]:not([alt=''])");
+        if (firstImg) {
+          var altText = (firstImg.getAttribute("alt") || "").trim();
+          if (altText.length >= 5 && altText.length <= 100) {
+            return slugFrom(altText, 6);
+          }
         }
 
         return "content";
@@ -1770,6 +1807,14 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
           var sampleText = (el.innerText || "").trim();
           if (sampleText.length < 200) return;
         }
+
+        // Second quality gate: drop sections that are both
+        //   - tiny in page height (< 3% of the page)  AND
+        //   - have no heading
+        // These are almost always spacer/decoration blocks on Elementor/Divi that
+        // otherwise produce a wall of "Content" entries on Alberto-style pages.
+        var heightPctCheck = Math.round(rect.height / pageH * 100);
+        if (heightPctCheck < 3 && !headingText) return;
 
         accepted.push(el);
         var offsetPct = Math.round(absTop / pageH * 100);
