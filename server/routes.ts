@@ -10089,7 +10089,8 @@ ${observationText}`;
            RETURNING id`,
           [req.userId, mime, buf.length, buf, dalleUrl, sha]
         );
-        const hostedUrl = `${req.protocol}://${req.get("host")}/api/images/${ins.rows[0].id}`;
+        const publicBase = process.env.PUBLIC_API_URL || `${req.protocol}://${req.get("host")}`;
+        const hostedUrl = `${publicBase}/api/images/${ins.rows[0].id}`;
         res.json({ url: hostedUrl, prompt, source: "ai_generated" });
       } catch (mirrorErr: any) {
         // If mirroring fails, return DALL-E URL directly — it'll work for an hour.
@@ -10154,7 +10155,8 @@ ${observationText}`;
          RETURNING id`,
         [req.userId, parsed.mime, parsed.buf.length, parsed.buf, sha]
       );
-      const hostedUrl = `${req.protocol}://${req.get("host")}/api/images/${ins.rows[0].id}`;
+      const publicBase = process.env.PUBLIC_API_URL || `${req.protocol}://${req.get("host")}`;
+      const hostedUrl = `${publicBase}/api/images/${ins.rows[0].id}`;
       res.json({ url: hostedUrl, id: ins.rows[0].id, size: parsed.buf.length, mime: parsed.mime });
     } catch (err: any) {
       console.error("[images/upload]", err.message);
@@ -10182,7 +10184,8 @@ ${observationText}`;
          RETURNING id`,
         [req.userId, mime, buf.length, buf, sourceUrl, sha]
       );
-      const hostedUrl = `${req.protocol}://${req.get("host")}/api/images/${ins.rows[0].id}`;
+      const publicBase = process.env.PUBLIC_API_URL || `${req.protocol}://${req.get("host")}`;
+      const hostedUrl = `${publicBase}/api/images/${ins.rows[0].id}`;
       res.json({ url: hostedUrl, id: ins.rows[0].id, size: buf.length, mime });
     } catch (err: any) {
       console.error("[images/from-url]", err.message);
