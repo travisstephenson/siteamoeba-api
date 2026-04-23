@@ -6753,10 +6753,22 @@ export async function registerRoutes(server: Server, app: Express) {
   // POST /api/webhooks/:platform/:userId/:secret — receive purchase webhooks from course platforms
   // This endpoint is PUBLIC (no auth) — it's called by external platforms.
   // Security: validated by the secret token unique to each user+platform.
-  app.post("/api/webhooks/:platform/:userId/:secret", async (req: Request, res: Response) => {
+  //
+  // IMPORTANT: this route must NOT match /api/webhooks/stripe/account/:userId —
+  // that lives at a different handler (line ~7544) and gets called with Stripe's
+  // signed events. Express route ordering + path structure (3 segments vs 3 segments)
+  // made these collide for 9 days. We explicitly short-circuit the stripe prefix
+  // below so Stripe events always fall through to the real handler.
+  app.post("/api/webhooks/:platform/:userId/:secret", async (req: Request, res: Response, next: any) => {
     const { platform, userId, secret } = req.params;
-    const numericUserId = parseInt(userId);
 
+    // Route collision guard: the dedicated Stripe endpoint uses this same path shape
+    // (/api/webhooks/stripe/account/<userId>). If we see that prefix, pass to next handler.
+    if (platform === "stripe") {
+      return next();
+    }
+
+    const numericUserId = parseInt(userId);
     if (!numericUserId || !secret) {
       return res.status(400).json({ error: "Invalid webhook URL" });
     }
