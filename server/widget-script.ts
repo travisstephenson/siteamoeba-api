@@ -3,29 +3,49 @@
  * This is served via GET /api/widget/script/:campaignId with Content-Type: application/javascript.
  * It includes variant assignment + behavioral tracking.
  */
-export function generateWidgetScript(apiBase: string, campaignId: number): string {
+export function generateWidgetScript(
+  apiBase: string,
+  campaignId: number,
+  preBakedSelectors: string[] = [],
+  antiFlickerEnabled: boolean = false,
+): string {
   return `(function(){
   var API = "${apiBase}";
   var CID = ${campaignId};
 
-  // === ANTI-FLICKER PRE-HIDE (opt-in, cached) ===
-  // Before any other work, check localStorage for a cached list of selectors to
-  // pre-hide. If the cache is fresh (<5 min), inject a <style id="sa-hide">
-  // tag that hides those elements via opacity:0 until variants are applied.
-  // This eliminates the flash-of-control-content for repeat visitors.
+  // === ANTI-FLICKER PRE-HIDE ===
+  // Two-stage hiding so the page NEVER flashes the control text:
   //
-  // On the very first visit the cache is empty and nothing is hidden — that's
-  // correct behavior. We then fetch /api/widget/bundle in parallel so next
-  // visit has the cache ready. If anti_flicker_enabled is false for this
-  // campaign, /api/widget/bundle returns an empty selector list and the cache
-  // stays empty (no hiding ever happens).
+  // STAGE 1 (FIRST VISIT) — Inline pre-baked selectors
+  // The campaign-specific selectors are baked into this widget script at
+  // generation time. As soon as the script parses (before assign() runs),
+  // we inject a <style id="sa-hide"> that hides those elements. This protects
+  // even brand-new visitors who have no localStorage cache yet.
+  // (Travis caught the flash on his first visit to thecareerstack.co —
+  //  this stage is what fixes that.)
+  //
+  // STAGE 2 (REPEAT VISITS) — localStorage cache
+  // If the bundle cache is fresh (<5 min), we re-apply the same hide style
+  // (already done in stage 1, this is a no-op). The cache exists for cases
+  // where the script generator's pre-baked selectors are stale (campaign
+  // edited within the 30s widget cache TTL).
   //
   // Safety nets:
   //   * The widget's own handleAssignData calls saReveal() when variants land
   //   * A 2.5s setTimeout reveal fires unconditionally (see later in this file)
   //   So the page can NEVER stay stuck hidden, even if every network call fails.
+  var SA_PREHIDE_SELECTORS = ${JSON.stringify(antiFlickerEnabled ? preBakedSelectors : [])};
   (function preHide(){
     try {
+      // STAGE 1: pre-baked selectors (works on first visit)
+      if (SA_PREHIDE_SELECTORS && SA_PREHIDE_SELECTORS.length) {
+        var st1 = document.createElement("style");
+        st1.id = "sa-hide";
+        st1.textContent = SA_PREHIDE_SELECTORS.join(",") + "{opacity:0!important;visibility:hidden!important;transition:none!important}";
+        (document.head || document.documentElement).appendChild(st1);
+        return; // Don't add a second style block from cache
+      }
+      // STAGE 2: localStorage fallback (used only when no pre-baked selectors)
       var key = "sa_bundle_" + CID + "_" + location.pathname;
       var raw = localStorage.getItem(key);
       if (raw) {
@@ -304,12 +324,85 @@ export function generateWidgetScript(apiBase: string, campaignId: number): strin
     // the deepest single wrapper. This handles any level of nesting while
     // correctly bailing out on the GHL multi-span case.
     var target = el;
+    var collapsedMulti = false;
 
     if (category === "cta") {
       // Buttons: drill through any wrapper class to the leaf text node.
       target = findTextTarget(el);
     } else {
-      target = findSingleWrapperText(el);
+      // === NEW: multi-styled-children collapse (Travis's C65 bug) ===
+      // Funnel builders like Funnel.com / Brizy / GoHighLevel sometimes render
+      // a single visual headline as TWO sibling styled chains separated by a
+      // <br>, e.g.:
+      //
+      //   <h1>
+      //     <strong><em><span style="color:white">Line one</span></em></strong>
+      //     <br>
+      //     <strong><em><span style="color:gold"><u>Line two</u></span></em></strong>
+      //   </h1>
+      //
+      // findSingleWrapperText bails here (h1 has multiple element children),
+      // so we used to overwrite el.textContent and DESTROY all the inline
+      // styling — the new text rendered in the H1's default color. That's
+      // exactly what Travis saw on thecareerstack.co (white headline turned
+      // black after the swap).
+      //
+      // The fix: when the only "real" children of the H1 are styled wrappers
+      // (strong/em/span/b/i/u/font/mark) and a few presentational nodes
+      // (br/hr or text whitespace), pick the first styled wrapper, descend
+      // into its deepest styled wrapper, write the new text there, and
+      // remove every other element child from the H1.
+      //
+      // Result: the styled chain (<strong><em><span style="color:white">)
+      // is preserved and the new variant renders in the SAME visual style.
+      var styledTags = { SPAN:1, STRONG:1, EM:1, B:1, I:1, U:1, FONT:1, MARK:1 };
+      var presentationTags = { BR:1, HR:1, IMG:1 };
+      var elChildren = el.children || [];
+      if (
+        category !== "cta" &&
+        elChildren.length >= 2 &&
+        elChildren.length <= 8
+      ) {
+        var firstStyled = null;
+        var allOk = true;
+        for (var ci = 0; ci < elChildren.length; ci++) {
+          var ctag = (elChildren[ci].tagName || "").toUpperCase();
+          if (styledTags[ctag]) {
+            if (!firstStyled) firstStyled = elChildren[ci];
+          } else if (!presentationTags[ctag]) {
+            // Found something that isn't a styled wrapper or filler — bail
+            // back to the original behavior so we don't break unrelated
+            // structures.
+            allOk = false;
+            break;
+          }
+        }
+        if (allOk && firstStyled) {
+          // Remove every OTHER child (later siblings + br/hr/img filler)
+          // so the headline collapses to one continuous styled line.
+          var toRemove = [];
+          for (var rc = 0; rc < elChildren.length; rc++) {
+            if (elChildren[rc] !== firstStyled) toRemove.push(elChildren[rc]);
+          }
+          for (var rr = 0; rr < toRemove.length; rr++) {
+            try { toRemove[rr].parentNode && toRemove[rr].parentNode.removeChild(toRemove[rr]); } catch (e) {}
+          }
+          // Also strip any direct text nodes on el (whitespace between siblings)
+          var nn = el.childNodes;
+          for (var nx = nn.length - 1; nx >= 0; nx--) {
+            if (nn[nx].nodeType === 3 && !/\\S/.test(nn[nx].nodeValue || "")) {
+              try { el.removeChild(nn[nx]); } catch (e) {}
+            }
+          }
+          // Now descend into the styled wrapper to its deepest single-child
+          // span/strong/em — same logic findSingleWrapperText uses.
+          target = findSingleWrapperText(firstStyled);
+          collapsedMulti = true;
+        }
+      }
+      if (!collapsedMulti) {
+        target = findSingleWrapperText(el);
+      }
     }
 
     // Replace the full text content on the chosen target. For the single-

@@ -7355,18 +7355,43 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
 
-  // GET /api/widget/script/:campaignId — serve the widget JS with API base baked in
-  app.get("/api/widget/script/:campaignId", widgetLimiter, (req: Request, res: Response) => {
+  // GET /api/widget/script/:campaignId — serve the widget JS with API base baked in.
+  // We also bake in the campaign's anti-flicker selectors at generation time
+  // so first-time visitors don't see the original headline flash before the
+  // variant lands (Travis's complaint on thecareerstack.co).
+  app.get("/api/widget/script/:campaignId", widgetLimiter, async (req: Request, res: Response) => {
     const campaignId = parseInt(String(req.params.campaignId));
     if (isNaN(campaignId)) {
       return res.status(400).send("/* Invalid campaignId */");
     }
-    // Use the public API domain for the widget — Railway host header gets the internal hostname
-    // when proxied through Cloudflare, so we hardcode the public domain
     const host = req.get("host") || "localhost";
     const PUBLIC_API = process.env.PUBLIC_API_URL || "https://api.siteamoeba.com";
     const baseUrl = host.includes("localhost") ? `http://${host}` : PUBLIC_API;
-    const script = generateWidgetScript(baseUrl, campaignId);
+
+    // Pull anti-flicker config + active section selectors so we can pre-bake
+    // them into the widget. If the lookup fails, we just serve the script with
+    // an empty list (anti-flicker is then a no-op for this request).
+    let antiFlickerEnabled = false;
+    let preBakedSelectors: string[] = [];
+    try {
+      const r = await pool.query(
+        `SELECT c.anti_flicker_enabled,
+                (SELECT json_agg(ts.selector) FROM test_sections ts
+                 WHERE ts.campaign_id = c.id AND ts.is_active = true AND ts.selector IS NOT NULL) AS selectors
+         FROM campaigns c WHERE c.id = $1`,
+        [campaignId]
+      );
+      const row = r.rows[0];
+      if (row) {
+        antiFlickerEnabled = !!row.anti_flicker_enabled;
+        preBakedSelectors = Array.isArray(row.selectors) ? row.selectors.filter((s: any) => typeof s === "string" && s.length > 0 && s.length < 500) : [];
+      }
+    } catch (err) {
+      // Non-fatal — widget will still work, just without first-visit flicker protection.
+      console.warn(`[widget/script] anti-flicker lookup failed for ${campaignId}:`, (err as Error).message);
+    }
+
+    const script = generateWidgetScript(baseUrl, campaignId, preBakedSelectors, antiFlickerEnabled);
     res.set("Content-Type", "application/javascript");
     res.set("Cache-Control", "public, max-age=30"); // short TTL so fixes propagate quickly
     res.send(script);
