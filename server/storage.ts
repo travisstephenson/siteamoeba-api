@@ -229,7 +229,9 @@ export interface IStorage {
   // Pixel verification
   updatePixelVerification(campaignId: number, field: "pixel" | "conversion_pixel", verified: boolean, url?: string): Promise<void>;
 
-  // Revenue events + LTV
+  // Revenue events + LTV.
+  // Returns true if the event was inserted, false if it was deduped.
+  // Callers can ignore the return value safely — dedup logging is internal.
   addRevenueEvent(data: {
     visitorId?: string;
     campaignId: number;
@@ -240,7 +242,7 @@ export interface IStorage {
     externalId?: string;
     customerEmail?: string;
     metadata?: string;
-  }): Promise<void>;
+  }): Promise<boolean>;
   getRevenueEventsByVisitor(visitorId: string): Promise<any[]>;
   getLTVByCampaign(campaignId: number): Promise<{
     totalRevenue: number;
@@ -2031,6 +2033,28 @@ class StorageImpl implements IStorage {
   }
 
   // ===== Revenue Events + LTV =====
+  //
+  // DEDUP STRATEGY (added Apr 27 — fixes Malik's C84 "conversions are
+  // being double counted" report).
+  //
+  // The same Stripe purchase fires TWO events through different paths:
+  //   1. Stripe webhook → source="stripe_webhook", external_id=pi_xxx
+  //   2. Stripe account-poll → source="stripe_account", external_id=ch_xxx
+  // Both events refer to the same purchase but have different external_ids
+  // (PaymentIntent vs Charge), so the previous external_id-based dedup
+  // didn't catch them. Plus, an on-page pixel fires when the buyer hits the
+  // thank-you page — source="pixel", no external_id, no email — producing
+  // a third event for the same purchase.
+  //
+  // We now do three checks before insert:
+  //   1. Exact external_id match (catches webhook retries on the same path)
+  //   2. Cross-source same-email same-amount within 5 minutes
+  //      (catches webhook+account-poll for same Stripe purchase)
+  //   3. Pixel-after-Stripe: if source=pixel and a Stripe event of same
+  //      amount on this campaign exists in the last 5 minutes, skip
+  //      (catches OTO/thank-you-page pixel firing after a Stripe purchase)
+  //
+  // Returns true if inserted, false if deduped.
   async addRevenueEvent(data: {
     visitorId?: string;
     campaignId: number;
@@ -2041,7 +2065,64 @@ class StorageImpl implements IStorage {
     externalId?: string;
     customerEmail?: string;
     metadata?: string;
-  }): Promise<void> {
+  }): Promise<boolean> {
+    // === DEDUP CHECK 1: exact external_id match ===
+    if (data.externalId) {
+      const exact = await pool.query(
+        `SELECT id FROM revenue_events
+           WHERE campaign_id = $1 AND external_id = $2
+           LIMIT 1`,
+        [data.campaignId, data.externalId]
+      );
+      if (exact.rows.length > 0) {
+        console.log(`[revenue dedup] external_id ${data.externalId} already recorded; skipping ${data.source}`);
+        return false;
+      }
+    }
+
+    // === DEDUP CHECK 2: cross-source by email + amount + time window ===
+    // Catches stripe_webhook (pi_xxx) + stripe_account (ch_xxx) for the
+    // same purchase. We only do this for revenue events that have an email
+    // — pixel events without email are handled by check #3.
+    if (data.customerEmail && data.amount > 0) {
+      const crossSource = await pool.query(
+        `SELECT id, source, external_id FROM revenue_events
+           WHERE campaign_id = $1
+             AND customer_email = $2
+             AND amount = $3
+             AND event_type = $4
+             AND created_at::timestamptz > NOW() - INTERVAL '5 minutes'
+           LIMIT 1`,
+        [data.campaignId, data.customerEmail, data.amount, data.eventType]
+      );
+      if (crossSource.rows.length > 0) {
+        const dup = crossSource.rows[0];
+        console.log(`[revenue dedup] cross-source dup: ${data.source} ${data.externalId} matches ${dup.source} ${dup.external_id} (same email/amount within 5min); skipping`);
+        return false;
+      }
+    }
+
+    // === DEDUP CHECK 3: pixel after Stripe ===
+    // Pixel events have no external_id and often no email. If a Stripe
+    // event of the same amount on this campaign was just recorded, the
+    // pixel is reporting on the same purchase — skip the pixel.
+    if (data.source === "pixel" && data.amount > 0) {
+      const stripeRecent = await pool.query(
+        `SELECT id FROM revenue_events
+           WHERE campaign_id = $1
+             AND amount = $2
+             AND event_type = $3
+             AND source IN ('stripe_webhook','stripe_account','whop')
+             AND created_at::timestamptz > NOW() - INTERVAL '5 minutes'
+           LIMIT 1`,
+        [data.campaignId, data.amount, data.eventType]
+      );
+      if (stripeRecent.rows.length > 0) {
+        console.log(`[revenue dedup] pixel event suppressed — Stripe recorded same amount $${data.amount} in last 5min on C${data.campaignId}`);
+        return false;
+      }
+    }
+
     await pool.query(
       `INSERT INTO revenue_events
         (visitor_id, campaign_id, source, event_type, amount, currency, external_id, customer_email, metadata, created_at)
@@ -2059,6 +2140,7 @@ class StorageImpl implements IStorage {
         new Date().toISOString(),
       ]
     );
+    return true;
   }
 
   async getRevenueEventsByVisitor(visitorId: string): Promise<any[]> {
