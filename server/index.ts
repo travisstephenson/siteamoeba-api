@@ -4,6 +4,19 @@ import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
 import { storage } from "./storage";
+import { setBYOKSpendReporter } from "./llm";
+
+// Wire up BYOK spend reporting: each successful LLM call updates
+// the user's running monthly spend counter. Side-channel pattern
+// avoids a circular import between llm.ts and storage.ts.
+setBYOKSpendReporter(async (userId, provider, costUsd, tokens) => {
+  try {
+    await storage.addBYOKSpend(userId, provider, costUsd, tokens);
+  } catch (err) {
+    // Never let cost reporting break a user-facing flow
+    console.warn("[byok-spend] reporter failed:", (err as Error).message);
+  }
+});
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 

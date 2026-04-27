@@ -98,6 +98,58 @@ function SiteAmoebaLogo() {
   );
 }
 
+// ---- BYOK Spend Widget (sidebar) ----
+// Shows free-plan users their estimated API spend this month + a comparison
+// against the Pro plan price. Resolves Malik's feature request:
+// "Show how much I've spent with my API. Could easily show how much more
+// valuable it is to switch to using the brain."
+function BYOKSpendWidget() {
+  const { data } = useQuery<{ monthKey: string; costUsd: number; calls: number }>({
+    queryKey: ["/api/me/byok-spend"],
+    queryFn: async () => {
+      const r = await apiRequest("GET", "/api/me/byok-spend");
+      return r.json();
+    },
+    refetchInterval: 60_000,
+  });
+  const cost = data?.costUsd ?? 0;
+  const calls = data?.calls ?? 0;
+  const proPlanPrice = 29; // matches the Pro plan price
+  const wouldSave = cost > proPlanPrice;
+
+  return (
+    <div className="mx-3 mb-1 px-3 py-2 rounded-lg bg-muted/40 border border-border/50" data-testid="widget-byok-spend">
+      <div className="flex items-center justify-between mb-0.5">
+        <div className="flex items-center gap-1.5">
+          <Zap className="w-3 h-3 text-muted-foreground" />
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">API spend (BYOK)</span>
+        </div>
+        <span className="text-[11px] font-bold tabular-nums text-foreground">
+          ${cost.toFixed(2)}
+        </span>
+      </div>
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>{calls.toLocaleString()} calls this month</span>
+        <span className="opacity-60">est.</span>
+      </div>
+      {wouldSave ? (
+        <div className="mt-1.5 rounded-md bg-primary/10 border border-primary/20 px-2 py-1.5">
+          <p className="text-[10px] text-primary font-medium leading-tight">
+            Pro plan ($29) would save you ${(cost - proPlanPrice).toFixed(2)} this month.{" "}
+            <Link href="/billing" className="underline font-semibold">Upgrade</Link>
+          </p>
+        </div>
+      ) : cost > 0 ? (
+        <p className="mt-1 text-[10px] text-muted-foreground leading-snug">
+          Pro plan ($29) starts saving once you cross that.
+        </p>
+      ) : (
+        <p className="mt-1 text-[10px] text-muted-foreground leading-snug">Using your own AI keys.</p>
+      )}
+    </div>
+  );
+}
+
 // ---- Credit Usage Widget (sidebar) ----
 function CreditUsageWidget({ user }: { user: { plan: string; creditsUsed: number; creditsLimit: number } }) {
   const isFree = user.plan === "free";
@@ -109,16 +161,7 @@ function CreditUsageWidget({ user }: { user: { plan: string; creditsUsed: number
   const isExhausted = limit > 0 && pct >= 100;
 
   if (isFree) {
-    // Free users use BYOK — no credit meter needed
-    return (
-      <div className="mx-3 mb-1 px-3 py-2 rounded-lg bg-muted/40 border border-border/50" data-testid="widget-usage-free">
-        <div className="flex items-center gap-1.5 mb-0.5">
-          <Zap className="w-3 h-3 text-muted-foreground" />
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">BYOK Mode</span>
-        </div>
-        <p className="text-[11px] text-muted-foreground leading-snug">Using your own AI keys — unlimited.</p>
-      </div>
-    );
+    return <BYOKSpendWidget />;
   }
 
   return (

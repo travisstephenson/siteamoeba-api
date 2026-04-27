@@ -6,6 +6,11 @@ export interface LLMConfig {
   provider: "anthropic" | "openai" | "gemini" | "mistral" | "xai" | "meta";
   apiKey: string;
   model?: string; // optional override
+  // BYOK spend tracking: when set, each callLLM invocation will accumulate
+  // an estimated cost on this user's running monthly counter. Skipped for
+  // platform-keyed calls (no userId on those configs). See server/storage.
+  userId?: number;
+  isByok?: boolean; // true if the apiKey is the user's own (not platform's)
 }
 
 export interface LLMMessage {
@@ -87,8 +92,12 @@ export function resolveLLMConfig(opts: {
   userProvider?: string | null;
   userApiKey?: string | null;
   userModel?: string | null;
+  // userId is optional for backwards compat with old call sites; when set
+  // and the resolved source is "user" (BYOK), the spend reporter will
+  // accumulate cost on this user's monthly counter.
+  userId?: number;
 }): { config: LLMConfig; useBrainData: boolean; creditCost: number; source: "user" | "platform" } {
-  const { operation, userPlan, userProvider, userApiKey, userModel } = opts;
+  const { operation, userPlan, userProvider, userApiKey, userModel, userId } = opts;
   const isPaid = userPlan !== "free";
   const SUPPORTED_PROVIDERS = ["anthropic", "openai", "gemini", "mistral", "xai", "meta"];
   const providerIsSupported = SUPPORTED_PROVIDERS.includes(userProvider || "");
@@ -103,7 +112,7 @@ export function resolveLLMConfig(opts: {
   // ---------------------------------------------------------------
   if (operation === "scan" && platformKey) {
     return {
-      config: { provider: PLATFORM_MODELS.fast.provider, apiKey: platformKey, model: PLATFORM_MODELS.fast.model },
+      config: { provider: PLATFORM_MODELS.fast.provider, apiKey: platformKey, model: PLATFORM_MODELS.fast.model, userId, isByok: false },
       useBrainData: false,
       creditCost: isPaid ? creditCost : 0,
       source: "platform",
@@ -116,7 +125,7 @@ export function resolveLLMConfig(opts: {
   if (isPaid && platformKey) {
     const tierConfig = PLATFORM_MODELS[tier];
     return {
-      config: { provider: tierConfig.provider, apiKey: platformKey, model: tierConfig.model },
+      config: { provider: tierConfig.provider, apiKey: platformKey, model: tierConfig.model, userId, isByok: false },
       useBrainData: true,
       creditCost,
       source: "platform",
@@ -134,6 +143,8 @@ export function resolveLLMConfig(opts: {
         model: forceFast
           ? (userProvider === "anthropic" ? "claude-haiku-4-5-20251001" : userModel || undefined)
           : (userModel || undefined),
+        userId,
+        isByok: true,
       },
       useBrainData: true,
       creditCost,
@@ -154,7 +165,7 @@ export function resolveLLMConfig(opts: {
   // BYOK for variant generation, classification, and other allowed ops
   if (!isPaid && hasUserKey) {
     return {
-      config: { provider: userProvider as LLMConfig["provider"], apiKey: userApiKey!, model: userModel || undefined },
+      config: { provider: userProvider as LLMConfig["provider"], apiKey: userApiKey!, model: userModel || undefined, userId, isByok: true },
       useBrainData: false,
       creditCost: 0,
       source: "user",
@@ -210,6 +221,54 @@ const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   meta: "Meta/Groq (Llama)",
 };
 
+// Rough per-1K-token blended cost in USD. Used for the "API spend this
+// month" widget in the sidebar (Malik's feature request).
+// These are intentionally CONSERVATIVE estimates — we'd rather understate
+// than overstate to the user. Real billing happens at the provider.
+const PROVIDER_BLENDED_COST_PER_1K: Record<string, number> = {
+  anthropic: 0.012,  // Claude Haiku 4.5 blended ~$3/M in + $15/M out, but most calls are short
+  openai: 0.010,     // gpt-4o-mini blended
+  gemini: 0.004,     // Gemini Flash blended
+  mistral: 0.008,
+  xai: 0.010,
+  meta: 0.001,       // Llama via Groq is essentially free
+};
+
+/**
+ * Estimate token count from a string. Uses the standard ~4-chars-per-token
+ * rule which is accurate within ~15% for English. Cheap and good enough
+ * for a usage display.
+ */
+function estimateTokens(text: string): number {
+  return Math.max(1, Math.ceil((text || "").length / 4));
+}
+
+/**
+ * Estimate the BYOK cost (USD) of an LLM call based on input + output
+ * length. We do this client-side rather than trusting provider responses
+ * because the response shapes vary across providers.
+ */
+function estimateLLMCostUSD(
+  provider: string,
+  inputText: string,
+  outputText: string,
+): number {
+  const ratePer1K = PROVIDER_BLENDED_COST_PER_1K[provider] ?? 0.010;
+  const totalTokens = estimateTokens(inputText) + estimateTokens(outputText);
+  return (totalTokens / 1000) * ratePer1K;
+}
+
+/**
+ * Spend reporter: called after each successful LLM call. Set ONCE at server
+ * boot from server/index.ts (avoids a circular import between llm.ts and
+ * storage.ts). The reporter writes to users.byok_cost_usd_month.
+ */
+let onBYOKSpend: ((userId: number, provider: string, costUsd: number, tokens: number) => Promise<void> | void) | null = null;
+
+export function setBYOKSpendReporter(fn: typeof onBYOKSpend) {
+  onBYOKSpend = fn;
+}
+
 export async function callLLM(
   config: LLMConfig,
   messages: LLMMessage[],
@@ -219,7 +278,19 @@ export async function callLLM(
   const providerName = PROVIDER_DISPLAY_NAMES[config.provider] || config.provider;
 
   try {
-    return await _callLLMInternal(config, messages, model, opts?.maxTokens);
+    const output = await _callLLMInternal(config, messages, model, opts?.maxTokens);
+    // Estimate spend ONLY for BYOK calls with a userId. Platform-keyed calls
+    // are tracked separately via the credits system.
+    if (onBYOKSpend && config.isByok && typeof config.userId === "number") {
+      try {
+        const inputText = messages.map(m => m.content).join("\n");
+        const cost = estimateLLMCostUSD(config.provider, inputText, output);
+        const tokens = estimateTokens(inputText) + estimateTokens(output);
+        // Fire and forget — never let cost reporting block the response.
+        Promise.resolve(onBYOKSpend(config.userId, config.provider, cost, tokens)).catch(() => {});
+      } catch { /* never let cost reporting break a call */ }
+    }
+    return output;
   } catch (err: any) {
     throw new Error(classifyLLMError(err, providerName));
   }

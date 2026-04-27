@@ -97,7 +97,7 @@ import {
   Activity,
   ArrowDown,
   AlertTriangle,
-  Info as InfoIcon,
+  Info,
 } from "lucide-react";
 import {
   Breadcrumb,
@@ -4183,11 +4183,27 @@ function TestSectionCard({
     },
   });
 
+  // Free-plan soft gate: encourage upgrade once a free user crosses 2 active
+  // sections. We don't HARD-block (existing free users with 3+ active stay
+  // working) — we surface an inline upgrade card via the showFreePlanGate
+  // state, which the user can dismiss to proceed. Resolves Malik's feedback
+  // "I added two variables to test, can't add more" by making the limit
+  // visible and the upgrade path obvious.
+  const [showFreePlanGate, setShowFreePlanGate] = useState(false);
+  const activeSectionCount = (allSections || []).filter(s => s.isActive).length;
+  const isFreePlan = userPlan === "free";
+  const willExceedFreeLimit = isFreePlan && activeSectionCount >= 2 && !section.isActive;
+
   // When toggling ON: run preflight first, show results, let user confirm or cancel
   const handleToggle = async (checked: boolean) => {
     if (!checked) {
       // Deactivating — no preflight needed
       toggleMutation.mutate(false);
+      return;
+    }
+    // Free plan limit check — show upgrade gate before preflight
+    if (willExceedFreeLimit) {
+      setShowFreePlanGate(true);
       return;
     }
     // Activating — run preflight
@@ -4464,7 +4480,7 @@ function TestSectionCard({
                 {hasPromotedWinner && (
                   <div className="mt-2 pt-2 border-t border-primary/20 text-xs space-y-1">
                     <div className="flex items-start gap-1.5 text-primary/80">
-                      <InfoIcon className="w-3 h-3 mt-0.5 shrink-0" />
+                      <Info className="w-3 h-3 mt-0.5 shrink-0" />
                       <span>
                         SiteAmoeba is serving a previous winner as the control. Your live page still reads differently.
                       </span>
@@ -4541,25 +4557,122 @@ function TestSectionCard({
             />
 
             {/* Activate prompt if inactive */}
-            {!section.isActive && (
-              <div className="flex items-center gap-3 pt-2">
-                <p className="text-xs text-muted-foreground flex-1">
-                  Activate this section to start A/B testing and adding variants.
-                </p>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    if (!canRunTests) { onNoAIConfig?.(); return; }
-                    toggleMutation.mutate(true);
-                  }}
-                  disabled={toggleMutation.isPending}
-                  data-testid={`button-activate-section-${section.id}`}
+            {!section.isActive && (() => {
+              const challengerCount = sectionVariants.filter(v => !v.isControl).length;
+              const hasUnservedVariants = challengerCount > 0;
+              return (
+                <div
+                  className={
+                    hasUnservedVariants
+                      ? "flex items-start gap-3 p-3 mt-2 rounded-lg border border-amber-500/40 bg-amber-500/8"
+                      : "flex items-center gap-3 pt-2"
+                  }
+                  data-testid={`activate-prompt-${section.id}`}
                 >
-                  {toggleMutation.isPending ? "Activating..." : "Activate Test"}
-                </Button>
-              </div>
-            )}
+                  {hasUnservedVariants ? (
+                    <>
+                      <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
+                      <div className="flex-1">
+                        <p className="text-sm font-medium text-foreground">
+                          {challengerCount === 1
+                            ? "You have 1 challenger variant saved, but the section is paused"
+                            : `You have ${challengerCount} challenger variants saved, but the section is paused`}
+                        </p>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Visitors are still seeing your original page — your variants are not serving until you activate.
+                          Click <strong>Activate Test</strong> to start the split test.
+                        </p>
+                        <Button
+                          size="sm"
+                          className="mt-3"
+                          onClick={() => {
+                            if (!canRunTests) { onNoAIConfig?.(); return; }
+                            toggleMutation.mutate(true);
+                          }}
+                          disabled={toggleMutation.isPending}
+                          data-testid={`button-activate-section-${section.id}`}
+                        >
+                          {toggleMutation.isPending ? "Activating..." : "Activate Test"}
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs text-muted-foreground flex-1">
+                        Activate this section to start A/B testing and adding variants.
+                      </p>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          if (!canRunTests) { onNoAIConfig?.(); return; }
+                          toggleMutation.mutate(true);
+                        }}
+                        disabled={toggleMutation.isPending}
+                        data-testid={`button-activate-section-${section.id}`}
+                      >
+                        {toggleMutation.isPending ? "Activating..." : "Activate Test"}
+                      </Button>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
           </CardContent>
+        </div>
+      )}
+
+      {/* Free-plan upgrade gate — shown when a free user tries to activate the 3rd+ section */}
+      {showFreePlanGate && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => setShowFreePlanGate(false)}
+          data-testid="modal-free-plan-gate"
+        >
+          <div
+            className="bg-background border border-border rounded-xl shadow-2xl w-full max-w-md mx-4 p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-primary/12 flex items-center justify-center flex-shrink-0">
+                <Zap className="w-5 h-5 text-primary" aria-hidden="true" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-semibold text-foreground">You're on the free plan</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Free accounts can run up to <strong>2 active test sections</strong> at a time.
+                  You currently have {activeSectionCount} active.
+                </p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-border bg-muted/30 p-3 mb-4 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Free plan</span>
+                <span className="text-foreground font-medium">2 active tests · BYOK only</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-foreground font-medium">Pro plan</span>
+                <span className="text-primary font-semibold">Unlimited tests · brain included</span>
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground mb-4">
+              Pause one of your active tests to free up a slot, or upgrade to Pro to run as many simultaneously as you want — plus get the trained Brain that picks winners for you.
+            </p>
+
+            <div className="flex items-center justify-end gap-2">
+              <Button variant="ghost" size="sm" onClick={() => setShowFreePlanGate(false)} data-testid="button-free-gate-cancel">
+                Not now
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => { window.location.href = "/#/billing"; }}
+                data-testid="button-free-gate-upgrade"
+              >
+                Upgrade to Pro
+              </Button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -6249,6 +6362,49 @@ export default function CampaignDetailPage() {
             >
               <X className="w-3.5 h-3.5" />
             </button>
+          </div>
+        )}
+
+        {/* No-traffic helper banner — shown when KPIs are all zero, points at the most likely cause */}
+        {!statsLoading && (stats?.totalVisitors ?? 0) === 0 && (stats?.totalConversions ?? 0) === 0 && (
+          <div
+            className="flex items-start gap-3 p-3.5 rounded-lg border border-blue-500/30 bg-blue-500/8"
+            data-testid="banner-no-traffic"
+          >
+            <Info className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-foreground">No visitors recorded yet</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                If you've installed the script and traffic is flowing, this usually means one of three things:
+              </p>
+              <ul className="text-xs text-muted-foreground mt-2 space-y-1.5 ml-4 list-disc">
+                <li>The widget snippet isn't on the page yet — paste it inside <code className="px-1 py-0.5 rounded bg-muted text-foreground">&lt;head&gt;</code> on <span className="font-medium text-foreground">{campaign?.url || "your page"}</span></li>
+                <li>The page URL on the campaign doesn't match the URL where the snippet is installed</li>
+                <li>An ad blocker or your browser's tracking-protection is preventing the beacon (try in an incognito tab)</li>
+              </ul>
+              <div className="flex items-center gap-2 mt-3">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() => {
+                    document.querySelector('[data-testid="section-embed-code"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                  }}
+                  data-testid="button-view-install-snippet"
+                >
+                  View install snippet
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 text-xs"
+                  onClick={() => window.open(campaign?.url || '#', '_blank')}
+                  data-testid="button-test-page"
+                >
+                  Open page in new tab
+                </Button>
+              </div>
+            </div>
           </div>
         )}
 

@@ -229,6 +229,10 @@ export interface IStorage {
   // Pixel verification
   updatePixelVerification(campaignId: number, field: "pixel" | "conversion_pixel", verified: boolean, url?: string): Promise<void>;
 
+  // BYOK spend tracking (per-user monthly counter, see implementation comments).
+  addBYOKSpend(userId: number, provider: string, costUsd: number, tokens: number): Promise<void>;
+  getBYOKSpend(userId: number): Promise<{ monthKey: string; costUsd: number; calls: number }>;
+
   // Revenue events + LTV.
   // Returns true if the event was inserted, false if it was deduped.
   // Callers can ignore the return value safely — dedup logging is internal.
@@ -2030,6 +2034,52 @@ class StorageImpl implements IStorage {
         [verified, verified ? now : null, url || null, campaignId]
       );
     }
+  }
+
+  // ===== BYOK API Spend Tracking =====
+  //
+  // Records each user's estimated LLM API spend for the current month, so the
+  // sidebar widget can show "You've spent $X on API calls this month" — and
+  // the upgrade CTA can compare that to what the Brain plan would cost.
+  //
+  // Stored on users.byok_cost_usd_month + byok_calls_month. The month_key
+  // (YYYY-MM) is used to auto-reset the counter when the month rolls over
+  // — cheaper than a CRON, lazy-evaluated on the next call.
+  async addBYOKSpend(userId: number, provider: string, costUsd: number, tokens: number): Promise<void> {
+    const monthKey = new Date().toISOString().slice(0, 7); // YYYY-MM
+    await pool.query(
+      `UPDATE users
+         SET byok_cost_usd_month = CASE
+               WHEN byok_cost_month_key IS DISTINCT FROM $2 THEN $3
+               ELSE COALESCE(byok_cost_usd_month, 0) + $3
+             END,
+             byok_calls_month = CASE
+               WHEN byok_cost_month_key IS DISTINCT FROM $2 THEN 1
+               ELSE COALESCE(byok_calls_month, 0) + 1
+             END,
+             byok_cost_month_key = $2
+       WHERE id = $1`,
+      [userId, monthKey, costUsd]
+    );
+  }
+
+  async getBYOKSpend(userId: number): Promise<{ monthKey: string; costUsd: number; calls: number }> {
+    const r = await pool.query(
+      `SELECT byok_cost_usd_month, byok_calls_month, byok_cost_month_key FROM users WHERE id = $1`,
+      [userId]
+    );
+    const row = r.rows[0] || {};
+    const currentMonthKey = new Date().toISOString().slice(0, 7);
+    // If the stored month is not the current month, return 0 — next call
+    // will overwrite via addBYOKSpend.
+    if (row.byok_cost_month_key !== currentMonthKey) {
+      return { monthKey: currentMonthKey, costUsd: 0, calls: 0 };
+    }
+    return {
+      monthKey: currentMonthKey,
+      costUsd: parseFloat(row.byok_cost_usd_month) || 0,
+      calls: parseInt(row.byok_calls_month) || 0,
+    };
   }
 
   // ===== Revenue Events + LTV =====

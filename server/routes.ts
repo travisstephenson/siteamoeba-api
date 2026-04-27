@@ -338,7 +338,23 @@ export async function registerRoutes(server: Server, app: Express) {
       );
       unreadFeedback = parseInt(unread.rows[0]?.cnt || "0");
     } catch (e) { /* non-fatal */ }
-    res.json({ user: sanitizeUser(user), unreadFeedback });
+    // Include BYOK spend so the sidebar widget can render without an extra request.
+    let byokSpend: { monthKey: string; costUsd: number; calls: number } | null = null;
+    try {
+      byokSpend = await storage.getBYOKSpend(req.userId!);
+    } catch (e) { /* non-fatal */ }
+    res.json({ user: sanitizeUser(user), unreadFeedback, byokSpend });
+  });
+
+  // GET /api/me/byok-spend — fast endpoint for live updates of the sidebar widget
+  app.get("/api/me/byok-spend", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const spend = await storage.getBYOKSpend(req.userId!);
+      res.json(spend);
+    } catch (err) {
+      console.warn("[byok-spend] read failed:", (err as Error).message);
+      res.json({ monthKey: new Date().toISOString().slice(0, 7), costUsd: 0, calls: 0 });
+    }
   });
 
   // ============== BILLING ==============
