@@ -4336,21 +4336,29 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     // Sanitize sections
-    const validTestMethods = ["text_swap", "html_swap", "visibility_toggle", "reorder", "not_testable"];
+    const validTestMethods = ["text_swap", "html_swap", "image_swap", "visibility_toggle", "reorder", "not_testable"];
+    const imageCategories = new Set(["hero_image", "product_image", "proof_image", "lifestyle_image", "image"]);
     scanResult.sections = scanResult.sections
       .filter((s: any) => s && s.id && s.label && s.selector && s.category)
       .map((s: any, i: number) => {
         const category = String(s.category);
+        const isImageSection = imageCategories.has(category);
         const isLongSection = category === "body_copy" || category === "hero_journey";
         const rawText = s.currentText ? String(s.currentText) : "";
-        // Allow up to 2000 chars for body_copy/hero_journey, 300 for others
-        const currentText = isLongSection ? rawText.slice(0, 2000) : rawText.slice(0, 300);
+        // Image sections preserve the full src URL (URLs can be long); body/hero up to 2000; others 300.
+        const currentText = isImageSection
+          ? rawText.slice(0, 2000)
+          : isLongSection ? rawText.slice(0, 2000) : rawText.slice(0, 300);
         const contentLength = rawText.length;
+        // Image sections must be image_swap; if the LLM returned the wrong testMethod, fix it.
+        const rawTestMethod = isImageSection
+          ? "image_swap"
+          : (validTestMethods.includes(s.testMethod) ? String(s.testMethod) : "text_swap");
         // Persuasion metadata — the canonical "what does this element DO" payload.
         // buildSectionMetadata validates every field against its enum so a
         // hallucinated value from the LLM becomes null instead of poisoning the DB.
         const meta = buildSectionMetadata({ ...s, currentText }, i);
-        return {
+        const out: any = {
           id: String(s.id),
           label: String(s.label),
           purpose: s.purpose ? String(s.purpose) : "",
@@ -4359,7 +4367,7 @@ export async function registerRoutes(server: Server, app: Express) {
           contentLength,
           testPriority: typeof s.testPriority === "number" ? s.testPriority : i + 1,
           category,
-          testMethod: validTestMethods.includes(s.testMethod) ? String(s.testMethod) : "text_swap",
+          testMethod: rawTestMethod,
           // Surface these on the scan result so the frontend can show "Role: Hero Promise"
           // next to every checkbox in the section picker, and pass them to POST /sections.
           persuasionRole: meta.persuasion_role,
@@ -4370,6 +4378,14 @@ export async function registerRoutes(server: Server, app: Express) {
           originalTextHash: meta.original_text_hash,
           positionIndex: meta.position_index,
         };
+        // Image-specific fields so the visual editor can preview the original image
+        // at correct dimensions before the user picks a variant.
+        if (isImageSection) {
+          out.imageSrc = s.imageSrc ? String(s.imageSrc) : currentText;
+          out.imageWidth = typeof s.imageWidth === "number" ? s.imageWidth : null;
+          out.imageHeight = typeof s.imageHeight === "number" ? s.imageHeight : null;
+        }
+        return out;
       })
       .sort((a: any, b: any) => a.testPriority - b.testPriority);
 
@@ -4787,6 +4803,8 @@ export async function registerRoutes(server: Server, app: Express) {
             // NEW section found by rescan — add it (inactive by default so user chooses what to test)
             try {
               const category = (ns.category || "body_copy").toLowerCase();
+              const isImage = ["hero_image","product_image","proof_image","lifestyle_image","image"].includes(category);
+              const testMethod = isImage ? "image_swap" : (ns.testMethod || "text_swap");
               await pool.query(
                 `INSERT INTO test_sections
                     (campaign_id, section_id, label, category, selector, current_text,
@@ -4797,7 +4815,7 @@ export async function registerRoutes(server: Server, app: Express) {
                          $9, $10, $11, $12, $13, $14, $15)
                  ON CONFLICT DO NOTHING`,
                 [campaignId, ns.id, ns.label || ns.id, category, ns.selector || '', ns.currentText || '',
-                 ns.testMethod || 'text_swap', ns.testPriority || 5,
+                 testMethod, ns.testPriority || 5,
                  meta.persuasion_role, meta.funnel_stage, meta.psychological_lever,
                  meta.framework, meta.angle, meta.original_text_hash, meta.position_index]
               );

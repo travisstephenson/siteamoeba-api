@@ -450,9 +450,10 @@ Page Classification Fields (include in your response):
 Test method classification — choose ONE per section:
 - "text_swap": For sections where text can be directly replaced (headlines, subheadlines, CTAs, guarantee text, pricing descriptions, FAQ answers)
 - "html_swap": For multi-paragraph body copy sections where the HTML structure (paragraphs, bold text, lists) needs to be preserved. The variant replaces the innerHTML of the container.
+- "image_swap": For <img> elements (hero images, product photos, screenshot testimonials, lifestyle imagery). The variant replaces the src attribute. Always use this for any visible <img> tag — image testing is a first-class capability of the platform.
 - "visibility_toggle": For sections where you test showing/hiding elements or changing quantity (testimonials, social proof badges, trust seals, bonus items)
 - "reorder": For sections where the order of items can be tested (product stacks, feature lists, pricing tiers)
-- "not_testable": For sections that are images, videos, or embedded content that can't be modified via DOM text manipulation (hero images, video embeds, screenshot testimonials)
+- "not_testable": For sections that are videos or embedded content that can't be modified via DOM (video embeds, iframes, dynamic widgets). Do NOT use this for images — images use image_swap.
 
 CRITICAL CLASSIFICATION RULES:
 
@@ -475,7 +476,20 @@ Section categories to use:
 - faq: Frequently asked questions
 - testimonials: Customer testimonials section
 - body_copy: Multi-paragraph text blocks — problem agitation, solution reveals, story sections, feature descriptions, value propositions. These are the persuasive NARRATIVE sections between headlines and CTAs. Capture the FULL text of these sections including paragraph breaks. A body copy section is typically a container div or section with multiple paragraphs, lists, and bold text inside it.
-- image: Hero image or key visual alt text
+- hero_image: The primary hero/banner image at the top of the page (the big visual paired with the headline). One per page. testMethod=image_swap.
+- product_image: A product photo, mockup, or image showing what the buyer gets. testMethod=image_swap.
+- proof_image: Screenshot testimonial, before/after photo, results screenshot, certification badge image. testMethod=image_swap.
+- lifestyle_image: A non-product photograph used to set tone or evoke desired outcome (a happy customer, a kitchen scene, etc.). testMethod=image_swap.
+
+IMAGE SECTION RULES:
+1. Treat every visible <img> tag as a potential testable section. Don't skip them.
+2. For image sections, set currentText to the FULL src URL of the image (e.g. "https://example.com/wp-content/uploads/hero.jpg"), NOT the alt text. The alt text goes in label/purpose if useful.
+3. Use the most stable CSS selector you can — prefer ID, then a unique class, then a structural path. Image swap relies on a precise selector.
+4. Skip tiny images: if the image looks like it's under 100x100 px (icons, logos under 80px tall, decorative dividers, social media icons, small badges), don't include it as a section.
+5. Do not include background CSS images, only <img> tags. Background-image testing requires a different mechanism we don't support yet.
+6. Test priority for images: hero_image=2 (right after the hero headline), product_image=4-5, proof_image=5-6, lifestyle_image=7+.
+7. persuasionRole for images: hero_image→hero_promise, product_image→offer_stack, proof_image→social_proof_stack, lifestyle_image→transformation_hook.
+8. Each image section must include imageSrc (same as currentText), imageWidth, imageHeight (from the HTML if specified, otherwise null) so the visual editor can preview the original.
 
 GROUPING RULE FOR BODY COPY:
 When you see multiple consecutive paragraphs, bullet lists, and bold text that form a single persuasive narrative, group them as ONE body_copy section with a container selector (e.g. the parent div or section). Do NOT split them into individual paragraph sections. For example, if there's a problem agitation block with 5 paragraphs and a bullet list, that's ONE body_copy section, not 6 separate sections.
@@ -550,6 +564,24 @@ Return ONLY valid JSON in this exact format:
       "psychologicalLever": "curiosity_gap",
       "framework": "AIDA",
       "angle": "Positions the product as the shortcut a beginner needs — curiosity about the specific '12 prompts' hooks the click."
+    },
+    {
+      "id": "hero-image",
+      "label": "Hero Image",
+      "purpose": "Visual reinforcement of the headline promise — first thing the eye lands on after the words",
+      "selector": ".hero-section img",
+      "currentText": "https://example.com/wp-content/uploads/hero.jpg",
+      "imageSrc": "https://example.com/wp-content/uploads/hero.jpg",
+      "imageWidth": 1200,
+      "imageHeight": 600,
+      "testPriority": 2,
+      "category": "hero_image",
+      "testMethod": "image_swap",
+      "persuasionRole": "hero_promise",
+      "funnelStage": "attention",
+      "psychologicalLever": "future_pacing",
+      "framework": "AIDA",
+      "angle": "Anchors the headline promise visually — replacing this with a higher-emotion image can lift attention by 20-40%."
     }
   ]
 }`;

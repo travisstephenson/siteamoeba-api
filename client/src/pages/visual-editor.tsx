@@ -870,16 +870,17 @@ export default function VisualEditorPage() {
                   <div className="space-y-1.5">
                     <h3 className="text-sm font-semibold">Start a Variant Test</h3>
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      Click on the text you want to test in the preview. Then generate AI alternatives or write your own variant.
+                      Click any text or image you want to test in the preview. Then generate AI alternatives, upload your own, or paste a URL.
                     </p>
                   </div>
                   <div className="w-full rounded-lg border border-dashed border-border p-3 space-y-2 text-left">
                     <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">How it works</p>
                     {[
-                      "1. Click any headline, subheading, or text",
-                      "2. Generate alternatives with AI or write your own",
-                      "3. Preview how it looks, adjust styling",
-                      "4. Save and start the test",
+                      "1. Click any headline, button, body copy, or image",
+                      "2. For text: generate alternatives with AI or write your own",
+                      "3. For images: upload, generate with AI, or paste a URL",
+                      "4. Preview how it looks (variants auto-match the original size)",
+                      "5. Save and start the test",
                     ].map((item) => (
                       <div key={item} className="flex items-start gap-2">
                         <CheckCircle2 className="w-3 h-3 text-primary shrink-0 mt-0.5" />
@@ -901,7 +902,7 @@ export default function VisualEditorPage() {
                       Use the preview toggle above to see each variant.
                     </p>
                     <p className="text-xs text-muted-foreground leading-relaxed">
-                      Click on any text element to create a new variant for a different section.
+                      Click on any text or image element to create a new variant for a different section.
                     </p>
                   </div>
                 </div>
