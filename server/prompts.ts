@@ -590,10 +590,10 @@ Return ONLY valid JSON in this exact format:
 
 Page URL: ${url}
 
-Page Content (structured text extracted from HTML — [H1]/[H2]/[BUTTON]/[•] markers indicate element types):
+Page Content (structured text extracted from HTML — [H1]/[H2]/[BUTTON]/[•] markers indicate element types; [IMG src="..." w=N h=N alt="..."] markers indicate testable images that have already passed the 100x100px size filter):
 ${htmlContent}
 
-This is a FULL sales page — expect 15-25+ distinct testable sections including multiple body_copy blocks, CTAs, social proof elements, guarantees, bonuses, pricing, and FAQs. Do NOT stop at 4-5 sections. Identify every distinct section a copywriter could improve. Return valid JSON only.`;
+This is a FULL sales page — expect 15-25+ distinct testable sections including multiple body_copy blocks, CTAs, social proof elements, guarantees, bonuses, pricing, FAQs, AND every [IMG] marker you see in the content. Each [IMG] is a separate testable section — use the src URL as currentText/imageSrc, the w/h as imageWidth/imageHeight, and pick the right image category (hero_image for the first/biggest one, product_image for product photos, proof_image for screenshots/before-after, lifestyle_image for tone-setting photos). Do NOT stop at 4-5 sections. Identify every distinct section a copywriter could improve. Return valid JSON only.`;
 
   return [
     { role: "system", content: systemPrompt },

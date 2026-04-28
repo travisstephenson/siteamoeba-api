@@ -4014,7 +4014,7 @@ export async function registerRoutes(server: Server, app: Express) {
 
   /**
    * extractPageText — strip a raw HTML page down to compact, LLM-friendly structured text.
-   * Returns [H1], [H2], [BUTTON], [•] markers so the AI understands element types
+   * Returns [H1], [H2], [BUTTON], [•], [IMG] markers so the AI understands element types
    * while fitting 10x more content into the same token budget vs raw HTML.
    */
   function extractPageText(html: string): string {
@@ -4039,6 +4039,27 @@ export async function registerRoutes(server: Server, app: Express) {
       .replace(/<\/p>/gi, '\n')
       .replace(/<br\s*\/?>/gi, '\n')
       .replace(/<\/(?:div|section|article|main|header|footer|aside|nav|tr)>/gi, '\n')
+      // Annotate images BEFORE stripping all remaining tags. Format:
+      // [IMG src="https://..." w=1200 h=600 alt="Hero image"]
+      // We extract src, width/height attributes, and alt so the LLM can decide
+      // which images are testable (skip <100x100 icons, prioritize hero/product).
+      .replace(/<img\b[^>]*>/gi, (m) => {
+        const src    = (m.match(/\bsrc\s*=\s*["']([^"']+)["']/i) || [])[1] || '';
+        const width  = (m.match(/\bwidth\s*=\s*["']?(\d+)/i) || [])[1] || '';
+        const height = (m.match(/\bheight\s*=\s*["']?(\d+)/i) || [])[1] || '';
+        const alt    = (m.match(/\balt\s*=\s*["']([^"']*)["']/i) || [])[1] || '';
+        if (!src) return ' ';
+        // Skip data URIs (inline base64) — too long, almost always tracking pixels or icons
+        if (src.startsWith('data:')) return ' ';
+        // Skip tiny images upfront (icons, dividers, social badges) so LLM doesn't waste tokens
+        const w = parseInt(width, 10) || 0;
+        const h = parseInt(height, 10) || 0;
+        if (w > 0 && w < 100) return ' ';
+        if (h > 0 && h < 100) return ' ';
+        const dims = (w && h) ? ` w=${w} h=${h}` : '';
+        const altPart = alt ? ` alt="${alt.slice(0, 80)}"` : '';
+        return `\n[IMG src="${src}"${dims}${altPart}]\n`;
+      })
       // Strip all remaining tags
       .replace(/<[^>]+>/g, ' ')
       // Decode HTML entities
