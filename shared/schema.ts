@@ -55,6 +55,24 @@ export const users = pgTable("users", {
   whopConnectedAt: text("whop_connected_at"),
   // Onboarding metrics
   firstTestEnabledAt: text("first_test_enabled_at"), // ISO string — when user activated their first test section
+  // Login tracking — added Apr 28 to measure DAU/WAU and surface dormant users.
+  // Logins are stateless JWTs, so without these fields we have no way to know
+  // who's actually using the product.
+  firstLoginAt: text("first_login_at"),
+  lastLoginAt: text("last_login_at"),
+  loginCount: integer("login_count").notNull().default(0),
+});
+
+// Login event log — one row per successful login, used for DAU/WAU/cohort
+// retention analysis. Lightweight: ~80 bytes/row, indexed by user_id and
+// created_at. Old rows can be aggregated and deleted by a retention cron
+// once we have summary tables.
+export const loginEvents = pgTable("login_events", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  ip: text("ip"),
+  userAgent: text("user_agent"),
+  createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 
 export const insertUserSchema = createInsertSchema(users).omit({

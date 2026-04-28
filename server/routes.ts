@@ -317,6 +317,28 @@ export async function registerRoutes(server: Server, app: Express) {
     const valid = await bcrypt.compare(parsed.data.password, user.passwordHash);
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
 
+    // Track the login — stateless JWT means this is the only point we know they
+    // came back. Best-effort: failures here must NEVER break authentication.
+    const nowIso = new Date().toISOString();
+    try {
+      const ip = (req.headers["x-forwarded-for"] as string || req.socket?.remoteAddress || "").toString().split(",")[0].trim().slice(0, 64);
+      const ua = (req.headers["user-agent"] || "").toString().slice(0, 500);
+      await pool.query(
+        `UPDATE users
+            SET last_login_at = $1,
+                first_login_at = COALESCE(first_login_at, $1),
+                login_count = login_count + 1
+          WHERE id = $2`,
+        [nowIso, user.id]
+      );
+      await pool.query(
+        `INSERT INTO login_events (user_id, ip, user_agent, created_at) VALUES ($1, $2, $3, $4)`,
+        [user.id, ip, ua, nowIso]
+      );
+    } catch (e) {
+      console.warn("[login] tracking write failed (non-fatal):", (e as any)?.message);
+    }
+
     const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
     res.json({ user: sanitizeUser(user), token });
   });
@@ -1226,6 +1248,126 @@ export async function registerRoutes(server: Server, app: Express) {
       shortestTTFTMinutes: shortestTTFT,
       usersWithFirstTest: ttftMs.length,
     });
+  });
+
+  // ============== LIFECYCLE / ACTIVATION ==============
+
+  // POST /api/admin/lifecycle/classify — run the classifier and persist results.
+  // Idempotent. Safe to call repeatedly. Returns the breakdown counts.
+  app.post("/api/admin/lifecycle/classify", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const { classifyAllUsers, persistClassifications } = await import("./lifecycle-classifier");
+      const classifications = await classifyAllUsers(pool);
+      const result = await persistClassifications(pool, classifications);
+      const counts = classifications.reduce<Record<string, number>>((acc, c) => {
+        acc[c.stage] = (acc[c.stage] || 0) + 1;
+        return acc;
+      }, {});
+      res.json({ ok: true, total: classifications.length, ...result, counts });
+    } catch (err: any) {
+      console.error("[admin/lifecycle/classify] error:", err);
+      res.status(500).json({ error: err.message || "classify failed" });
+    }
+  });
+
+  // GET /api/admin/lifecycle/users?stage=01_signed_up_no_campaign — list users in a given stage
+  app.get("/api/admin/lifecycle/users", requireAdmin, async (req: Request, res: Response) => {
+    const stage = String(req.query.stage || "");
+    const where = stage ? `WHERE uls.stage = $1` : ``;
+    const params = stage ? [stage] : [];
+    const { rows } = await pool.query(
+      `SELECT uls.user_id, uls.stage, uls.entered_stage_at, uls.last_classified_at,
+              uls.campaign_count, uls.total_visitors, uls.visitors_last_7d,
+              uls.variants_count, uls.active_sections_count, uls.has_revenue_event,
+              u.email, u.name, u.plan, u.created_at, u.last_login_at,
+              EXISTS (SELECT 1 FROM lifecycle_emails_sent les
+                       WHERE les.user_id = uls.user_id
+                         AND les.stage = uls.stage) AS already_emailed
+         FROM user_lifecycle_stage uls
+         JOIN users u ON u.id = uls.user_id
+         ${where}
+        ORDER BY uls.entered_stage_at ASC`,
+      params
+    );
+    res.json(rows);
+  });
+
+  // GET /api/admin/lifecycle/queue — list users eligible to receive an email RIGHT NOW.
+  // Used to drive both manual export (download CSV for beehiiv) and the eventual cron sender.
+  app.get("/api/admin/lifecycle/queue", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      const { getUsersEligibleForLifecycleEmail } = await import("./lifecycle-classifier");
+      const { TEMPLATE_VERSIONS, templateForStage } = await import("./lifecycle-emails");
+      const APP_URL = process.env.APP_URL || "https://app.siteamoeba.com";
+      const eligible = await getUsersEligibleForLifecycleEmail(pool, TEMPLATE_VERSIONS as any);
+      const enriched = eligible.map((e) => {
+        const ctx = {
+          firstName: (e.name || "there").split(" ")[0],
+          email: e.email,
+          campaignCount: 0, totalVisitors: 0, variantsCount: 0, activeSectionsCount: 0,
+          appUrl: APP_URL,
+        };
+        const tpl = templateForStage(e.stage as any, ctx);
+        return { ...e, subject: tpl.subject, preheader: tpl.preheader };
+      });
+      res.json({ count: enriched.length, items: enriched });
+    } catch (err: any) {
+      console.error("[admin/lifecycle/queue] error:", err);
+      res.status(500).json({ error: err.message || "queue failed" });
+    }
+  });
+
+  // GET /api/admin/lifecycle/preview?stage=&user_id= — render the actual email a given user would receive
+  app.get("/api/admin/lifecycle/preview", requireAdmin, async (req: Request, res: Response) => {
+    try {
+      const { templateForStage } = await import("./lifecycle-emails");
+      const stage = String(req.query.stage || "");
+      const userId = paramId(String(req.query.user_id || ""));
+      const u = await storage.getUserById(userId);
+      if (!u) return res.status(404).json({ error: "user not found" });
+      const { rows } = await pool.query(
+        `SELECT campaign_count, total_visitors, variants_count, active_sections_count
+           FROM user_lifecycle_stage WHERE user_id = $1`, [userId]);
+      const stats = rows[0] || {};
+      const APP_URL = process.env.APP_URL || "https://app.siteamoeba.com";
+      const tpl = templateForStage(stage as any, {
+        firstName: (u.name || "there").split(" ")[0],
+        email: u.email,
+        campaignCount: stats.campaign_count || 0,
+        totalVisitors: stats.total_visitors || 0,
+        variantsCount: stats.variants_count || 0,
+        activeSectionsCount: stats.active_sections_count || 0,
+        appUrl: APP_URL,
+      });
+      res.json(tpl);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "preview failed" });
+    }
+  });
+
+  // POST /api/admin/lifecycle/mark-sent — record that a batch of users had their
+  // current-stage email sent (e.g. after exporting to beehiiv and pushing send).
+  // Body: { user_ids: number[], stage: string, template_version: number }
+  app.post("/api/admin/lifecycle/mark-sent", requireAdmin, async (req: Request, res: Response) => {
+    const { user_ids, stage, template_version } = req.body || {};
+    if (!Array.isArray(user_ids) || !stage || !template_version) {
+      return res.status(400).json({ error: "missing user_ids, stage, or template_version" });
+    }
+    let inserted = 0;
+    for (const uid of user_ids) {
+      try {
+        await pool.query(
+          `INSERT INTO lifecycle_emails_sent (user_id, stage, template_version, status)
+           VALUES ($1, $2, $3, 'sent')
+           ON CONFLICT (user_id, stage, template_version) DO NOTHING`,
+          [uid, stage, template_version]
+        );
+        inserted++;
+      } catch (e: any) {
+        console.warn("[lifecycle/mark-sent] failed for user", uid, e?.message);
+      }
+    }
+    res.json({ ok: true, inserted });
   });
 
   // GET /api/admin/users — list all users
