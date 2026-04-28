@@ -360,28 +360,103 @@ export function generateEditorBridgeScript(
 
     switch (data.type) {
       case "sa-editor-apply-text":
-        // Apply text from parent (e.g., from variant selection or Brain suggestion)
+        // Apply text from parent (e.g., from variant selection or Brain suggestion).
+        // CRITICAL: must use the same write-strategy as the production widget
+        // (server/widget-script.ts:applyTextToElement) so the visual editor preview
+        // matches what users will actually see when the variant goes live.
+        // Without this, complex headlines (multi-span H1s like FunnelMites/Brizy)
+        // render correctly in production but show garbled "original + variant"
+        // text in the editor preview, breaking trust in the WYSIWYG promise.
         var targetEl = SA_EDITOR.elementMap[data.sectionId];
         if (targetEl) {
           var category = targetEl.getAttribute("data-sa-editor-category") || "";
-          if (data.html && (data.testMethod === "html_swap" || /<[a-z][\\s\\S]*>/i.test(data.text))) {
-            targetEl.innerHTML = data.text;
+          var newText = data.text || "";
+          var isHtml = data.html && (data.testMethod === "html_swap" || /<[a-z][\\s\\S]*>/i.test(newText));
+
+          if (isHtml) {
+            targetEl.innerHTML = newText;
           } else if (category === "cta") {
             var textTarget = findTextTarget(targetEl);
-            textTarget.textContent = data.text;
+            textTarget.textContent = newText;
           } else {
-            // Preserve text color (same logic as the live widget)
+            // === MULTI-STYLED-CHILDREN COLLAPSE ===
+            // Mirror server/widget-script.ts:333-405. When an H1/H2 has multiple
+            // sibling styled wrappers (e.g. Brizy/FunnelMites:
+            //   <h1>
+            //     <strong><em>Original line one</em></strong>
+            //     <br>
+            //     <em>Original line two</em>
+            //   </h1>
+            // ), writing textContent on the H1 sometimes left siblings behind
+            // (depending on whether textContent or innerHTML path was taken).
+            // The widget collapses to the first styled wrapper and removes the
+            // others; we do the same here so the preview matches production.
+            var styledTags = { SPAN:1, STRONG:1, EM:1, B:1, I:1, U:1, FONT:1, MARK:1 };
+            var presentationTags = { BR:1, HR:1, IMG:1 };
+            var elChildren = targetEl.children || [];
+            var collapsedMulti = false;
+            var writeTarget = targetEl;
+
+            if (elChildren.length >= 2 && elChildren.length <= 8) {
+              var firstStyled = null;
+              var allOk = true;
+              for (var ci = 0; ci < elChildren.length; ci++) {
+                var ctag = (elChildren[ci].tagName || "").toUpperCase();
+                if (styledTags[ctag]) {
+                  if (!firstStyled) firstStyled = elChildren[ci];
+                } else if (!presentationTags[ctag]) {
+                  allOk = false;
+                  break;
+                }
+              }
+              if (allOk && firstStyled) {
+                // Remove every OTHER child (later styled siblings + br/hr/img filler)
+                var toRemove = [];
+                for (var rc = 0; rc < elChildren.length; rc++) {
+                  if (elChildren[rc] !== firstStyled) toRemove.push(elChildren[rc]);
+                }
+                for (var rr = 0; rr < toRemove.length; rr++) {
+                  try { toRemove[rr].parentNode && toRemove[rr].parentNode.removeChild(toRemove[rr]); } catch (e) {}
+                }
+                // Strip whitespace-only text nodes between siblings
+                var nn = targetEl.childNodes;
+                for (var nx = nn.length - 1; nx >= 0; nx--) {
+                  if (nn[nx].nodeType === 3 && !/\\S/.test(nn[nx].nodeValue || "")) {
+                    try { targetEl.removeChild(nn[nx]); } catch (e) {}
+                  }
+                }
+                writeTarget = firstStyled;
+                collapsedMulti = true;
+              }
+            }
+
+            // Even when not collapsing, drill into a single styled wrapper so the
+            // variant inherits its color/weight (same as widget findSingleWrapperText).
+            if (!collapsedMulti) {
+              var hop = targetEl;
+              while (hop && hop.children && hop.children.length === 1 &&
+                     styledTags[(hop.children[0].tagName || "").toUpperCase()] &&
+                     (hop.children[0].textContent || "").length === (hop.textContent || "").length) {
+                hop = hop.children[0];
+              }
+              writeTarget = hop;
+            }
+
+            // Preserve text color in case writing on the outer element loses it.
             var computedColor = "";
             try {
-              var colorSource = targetEl.querySelector("span, strong, em, b, i") || targetEl;
+              var colorSource = writeTarget.querySelector("span, strong, em, b, i") || writeTarget;
               computedColor = window.getComputedStyle(colorSource).color || "";
             } catch(e) {}
-            targetEl.textContent = data.text;
+
+            writeTarget.textContent = newText;
+
             if (computedColor && computedColor !== "rgb(0, 0, 0)" && computedColor !== "rgba(0, 0, 0, 0)") {
-              targetEl.style.color = computedColor;
+              writeTarget.style.color = computedColor;
             }
           }
-          SA_EDITOR.appliedTexts[data.sectionId] = data.text;
+
+          SA_EDITOR.appliedTexts[data.sectionId] = newText;
           // Select this element
           selectSection(targetEl);
           // Scroll into view
