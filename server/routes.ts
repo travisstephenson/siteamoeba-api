@@ -9580,7 +9580,40 @@ ${observationText}`;
       }
     }
 
-    const verified = foundUrl !== null;
+    let verified = foundUrl !== null;
+    let runtimeVerified = false;
+
+    // === RUNTIME FALLBACK ===
+    // If raw-HTML fetch can't see the pixel, the page may be a JS-rendered SPA
+    // (HighLevel/Funnel.com Nuxt, Wix, Webflow CMS, Framer, ConvertKit Nuxt,
+    // some Next.js apps with full SSR-skip). For these, the pixel script tag
+    // only appears in the rendered DOM at runtime.
+    //
+    // Instead of pulling in a headless browser (heavy), use the source of truth
+    // we already have: actual visitor traffic. If the campaign has received any
+    // visitors in the last 30 minutes, the pixel IS firing somewhere — by
+    // definition it's installed. This is more reliable than DOM scraping for
+    // SPAs because it catches the pixel anywhere on the user's site, not just
+    // at the configured URL.
+    if (!verified && type === "tracking") {
+      try {
+        const { rows } = await pool.query(
+          `SELECT COUNT(*)::int AS recent_visitors,
+                  MAX(first_seen) AS last_visit
+             FROM visitors
+            WHERE campaign_id = $1
+              AND first_seen > (NOW() - INTERVAL '30 minutes')::text`,
+          [campaignId]
+        );
+        if (rows[0]?.recent_visitors > 0) {
+          verified = true;
+          runtimeVerified = true;
+        }
+      } catch (e) {
+        // ignore — fall through to fail
+      }
+    }
+
     if (type === "conversion") {
       await storage.updatePixelVerification(campaignId, "conversion_pixel", verified, foundUrl || primaryUrl);
     } else {
@@ -9590,22 +9623,25 @@ ${observationText}`;
     // If we found the pixel at a slug-variant URL (not the primary), surface that
     // so the UI can suggest "You installed the pixel at /salespage but your
     // campaign URL is /sales-page — fix one of them."
-    const matchedAtVariant = verified && foundUrl !== primaryUrl;
+    const matchedAtVariant = verified && foundUrl && foundUrl !== primaryUrl;
 
     return res.json({
       verified,
       url: foundUrl || primaryUrl,
       configuredUrl: primaryUrl,
       matchedAtVariant,
+      runtimeVerified,
       foundUrl,
       tried: tried.map(t => ({ url: t.url, status: t.status, matched: t.matched })),
-      hint: !verified && tried.some(t => t.status && t.status >= 200 && t.status < 400)
-        ? "Page loaded but no pixel script tag was found. Make sure you pasted the script INSIDE the <head> or before </body>, and that you saved/published the page."
-        : !verified && lastErr
-          ? lastErr
-          : matchedAtVariant
-            ? `Pixel found at ${foundUrl}, but your campaign URL is ${primaryUrl}. Update one to match the other.`
-            : null,
+      hint: runtimeVerified
+        ? "We couldn't read the pixel from the page source (your page renders client-side via JavaScript), but real visitors are firing the pixel right now — it's working."
+        : !verified && tried.some(t => t.status && t.status >= 200 && t.status < 400)
+          ? "We loaded your page but couldn't see the pixel in the source. If your page is built on HighLevel, Wix, Webflow, Framer, or another no-code builder, the pixel may only appear after JavaScript runs. Open your page in a real browser and check the page source / Network tab — if the pixel script is loading, you're good. Or send some test traffic and re-verify."
+          : !verified && lastErr
+            ? lastErr
+            : matchedAtVariant
+              ? `Pixel found at ${foundUrl}, but your campaign URL is ${primaryUrl}. Update one to match the other.`
+              : null,
     });
   });
 
