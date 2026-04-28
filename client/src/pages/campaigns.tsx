@@ -1455,9 +1455,15 @@ function CampaignWizard({
                       const data = await res.json();
                       if (data.verified) {
                         setPixelVerified(true);
+                        // If pixel was found at a slug-variant URL, show the actionable hint instead of
+                        // silently advancing — the user needs to know which URL to align.
+                        if (data.matchedAtVariant && data.hint) {
+                          setPixelError("");
+                          toast({ title: "Pixel detected", description: data.hint });
+                        }
                         setTimeout(() => setStep(5), 1000);
                       } else {
-                        setPixelError(data.error || "Pixel not found on your page. Make sure you added the script and saved/published your page.");
+                        setPixelError(data.hint || data.error || "Pixel not found on your page. Make sure you added the script and saved/published your page.");
                       }
                     } catch {
                       setPixelError("Failed to check your page. Try again.");
@@ -1499,13 +1505,17 @@ function CampaignWizard({
                       const data = await res.json();
                       if (data.verified) {
                         setConvPixelVerified(true);
+                        if (data.matchedAtVariant && data.hint) {
+                          setConvPixelError("");
+                          toast({ title: "Conversion pixel detected", description: data.hint });
+                        }
                         setTimeout(() => {
                           toast({ title: "Setup complete!", description: "Both pixels verified. Your campaign is live." });
                           handleClose();
                           navigate(`/campaigns/${createdCampaignId}`);
                         }, 1500);
                       } else {
-                        setConvPixelError(data.error || "Conversion pixel not found. Make sure you added the script to your thank-you page and it's published.");
+                        setConvPixelError(data.hint || data.error || "Conversion pixel not found. Make sure you added the script to your thank-you page and it's published.");
                       }
                     } catch {
                       setConvPixelError("Failed to check your page. Try again.");

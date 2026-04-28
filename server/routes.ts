@@ -9493,6 +9493,12 @@ ${observationText}`;
   });
 
   // POST /api/campaigns/:id/verify-pixel — verify pixel is installed on user's page
+  //
+  // Checks BOTH the configured campaign URL and a small set of common variants
+  // (slug normalization). When the pixel is found at a *different* URL than the
+  // one stored on the campaign, return that URL in the response so the user can
+  // either correct the campaign URL or move the pixel — instead of being told
+  // "pixel not detected" while staring at a page where the pixel clearly is.
   app.post("/api/campaigns/:id/verify-pixel", requireAuth, async (req: Request, res: Response) => {
     const campaignId = paramId(req.params.id);
     const { type } = req.body; // "tracking" or "conversion"
@@ -9501,42 +9507,106 @@ ${observationText}`;
       return res.status(404).json({ error: "Campaign not found" });
     }
 
-    const urlToCheck = type === "conversion" ? req.body.url : campaign.url;
-    if (!urlToCheck) {
+    const primaryUrl = type === "conversion" ? req.body.url : campaign.url;
+    if (!primaryUrl) {
       return res.status(400).json({ error: "No URL to check", verified: false });
     }
 
+    // Build a list of slug-variant URLs that are 95%-likely to be the same page.
+    // We try these in order; the first one returning a pixel match wins.
+    const candidates: string[] = [primaryUrl];
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 15000);
-      const response = await fetch(urlToCheck, {
-        headers: { "User-Agent": "SiteAmoeba-PixelVerifier/1.0" },
-        signal: controller.signal,
-      });
-      clearTimeout(timeout);
-      const html = await response.text();
-
-      if (type === "conversion") {
-        // Check for conversion pixel: sa_vid + /api/widget/convert
-        const hasConvPixel = html.includes("sa_vid") && html.includes("/api/widget/convert");
-        await storage.updatePixelVerification(campaignId, "conversion_pixel", hasConvPixel, urlToCheck);
-        return res.json({ verified: hasConvPixel, url: urlToCheck });
-      } else {
-        // Check for tracking pixel: /api/widget/script/ + campaign ID
-        const hasTrackingPixel =
-          html.includes(`/api/widget/script/${campaignId}`) ||
-          html.includes(`cid=${campaignId}`) ||
-          html.includes(`"cid":${campaignId}`) ||
-          html.includes(`siteamoeba`);
-        await storage.updatePixelVerification(campaignId, "pixel", hasTrackingPixel);
-        return res.json({ verified: hasTrackingPixel, url: campaign.url });
+      const u = new URL(primaryUrl);
+      const path = u.pathname.replace(/\/$/, ""); // strip trailing slash
+      const last = path.split("/").pop() || "";
+      // Common slug rewrites people accidentally trip on:
+      //   /sales-page  ↔  /salespage  ↔  /sales_page
+      //   /optin/123   ↔  /optin-123
+      const variants = new Set<string>();
+      if (last.includes("-"))  variants.add(last.replace(/-/g, ""));
+      if (last.includes("_"))  variants.add(last.replace(/_/g, ""));
+      if (!last.includes("-") && /[a-z][a-z]+/i.test(last)) {
+        // can't safely insert hyphens without a dictionary; skip
       }
-    } catch (err: any) {
-      return res.json({
-        verified: false,
-        error: err.name === "AbortError" ? "Page took too long to load" : "Could not reach page: " + (err.message || ""),
-      });
+      // also try with/without trailing slash variant
+      for (const v of variants) {
+        const newPath = path.replace(/[^/]+$/, v);
+        candidates.push(`${u.protocol}//${u.host}${newPath}`);
+        candidates.push(`${u.protocol}//${u.host}${newPath}/`);
+      }
+      if (!u.pathname.endsWith("/")) candidates.push(`${u.protocol}//${u.host}${u.pathname}/`);
+    } catch {}
+
+    const tried: Array<{ url: string; status: number | null; matched: boolean }> = [];
+    let foundUrl: string | null = null;
+    let foundHtml: string | null = null;
+    let lastErr: string | null = null;
+
+    for (const url of candidates) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        // Use a real-browser User-Agent so anti-bot rules / Cloudflare don't
+        // serve us a challenge page that strips out the pixel script.
+        const response = await fetch(url, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          },
+          signal: controller.signal,
+          redirect: "follow",
+        });
+        clearTimeout(timeout);
+        const html = await response.text();
+        let matched = false;
+        if (type === "conversion") {
+          matched = html.includes("sa_vid") && html.includes("/api/widget/convert");
+        } else {
+          matched =
+            html.includes(`/api/widget/script/${campaignId}`) ||
+            html.includes(`cid=${campaignId}`) ||
+            html.includes(`"cid":${campaignId}`) ||
+            html.includes(`siteamoeba`);
+        }
+        tried.push({ url, status: response.status, matched });
+        if (matched) {
+          foundUrl = url;
+          foundHtml = html;
+          break;
+        }
+      } catch (err: any) {
+        tried.push({ url, status: null, matched: false });
+        lastErr = err.name === "AbortError" ? "Page took too long to load" : (err.message || "Could not reach page");
+      }
     }
+
+    const verified = foundUrl !== null;
+    if (type === "conversion") {
+      await storage.updatePixelVerification(campaignId, "conversion_pixel", verified, foundUrl || primaryUrl);
+    } else {
+      await storage.updatePixelVerification(campaignId, "pixel", verified);
+    }
+
+    // If we found the pixel at a slug-variant URL (not the primary), surface that
+    // so the UI can suggest "You installed the pixel at /salespage but your
+    // campaign URL is /sales-page — fix one of them."
+    const matchedAtVariant = verified && foundUrl !== primaryUrl;
+
+    return res.json({
+      verified,
+      url: foundUrl || primaryUrl,
+      configuredUrl: primaryUrl,
+      matchedAtVariant,
+      foundUrl,
+      tried: tried.map(t => ({ url: t.url, status: t.status, matched: t.matched })),
+      hint: !verified && tried.some(t => t.status && t.status >= 200 && t.status < 400)
+        ? "Page loaded but no pixel script tag was found. Make sure you pasted the script INSIDE the <head> or before </body>, and that you saved/published the page."
+        : !verified && lastErr
+          ? lastErr
+          : matchedAtVariant
+            ? `Pixel found at ${foundUrl}, but your campaign URL is ${primaryUrl}. Update one to match the other.`
+            : null,
+    });
   });
 
   // ============== TRAFFIC SOURCES ==============
