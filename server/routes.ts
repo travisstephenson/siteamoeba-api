@@ -5429,15 +5429,25 @@ export async function registerRoutes(server: Server, app: Express) {
     try {
       const winnerPlainText = winningVariant.text.replace(/<[^>]*>/g, '').trim();
       if (winnerPlainText && winningVariant.testSectionId) {
+        // Preserve the page-as-scanned text in original_current_text BEFORE we
+        // overwrite current_text with the winning variant. The widget uses
+        // original_current_text as the verification fingerprint so post-promotion
+        // selector targets still resolve to the right element.
         await pool.query(
-          `UPDATE test_sections SET current_text = $1, mismatch_detected = false WHERE id = $2`,
+          `UPDATE test_sections
+              SET original_current_text = COALESCE(original_current_text, current_text),
+                  current_text = $1,
+                  mismatch_detected = false
+            WHERE id = $2`,
           [winnerPlainText, winningVariant.testSectionId]
         );
       } else {
-        // Fallback: update any section matching this type for this campaign
         await pool.query(
-          `UPDATE test_sections SET current_text = $1, mismatch_detected = false
-           WHERE campaign_id = $2 AND category = $3`,
+          `UPDATE test_sections
+              SET original_current_text = COALESCE(original_current_text, current_text),
+                  current_text = $1,
+                  mismatch_detected = false
+            WHERE campaign_id = $2 AND category = $3`,
           [winnerPlainText, campaign.id, sectionType]
         );
       }
@@ -6469,7 +6479,11 @@ export async function registerRoutes(server: Server, app: Express) {
         category: section.category,
         // currentText = actual page text captured at scan time (platform-agnostic fingerprint)
         // controlText = the control variant text (may differ slightly from currentText)
-        currentText: section.currentText || sectionControl?.text || "",
+        // originalCurrentText = the page-as-scanned text, preserved across winner promotions
+        //   (winner promotion overwrites currentText with the winning variant's text so future
+        //    rescans don't flag a mismatch — but the widget still needs the original to verify
+        //    selector targets correctly).
+        currentText: (section as any).originalCurrentText || section.currentText || sectionControl?.text || "",
         controlText: sectionControl?.text || "",
         // Visual Builder capture — widget replays the exact styles the user saw
         capturedStyles: (chosen as any).capturedStyles || null,

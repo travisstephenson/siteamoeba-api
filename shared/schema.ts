@@ -192,6 +192,12 @@ export const testSections = pgTable("test_sections", {
   persuasionRole: text("persuasion_role"),
   // attention | interest | desire | action | retention
   funnelStage: text("funnel_stage"),
+  // Preserves the page-as-scanned text even after a winner is promoted (which
+  // overwrites current_text). The widget uses this as a fallback verification
+  // anchor so post-promotion the selector + text guard still finds the right
+  // element — fixes the Apr 29 2026 incident where html_swap matched the wrong
+  // H1 because current_text had been replaced by the winning variant.
+  originalCurrentText: text("original_current_text"),
   // curiosity_gap | loss_aversion | social_proof | authority | scarcity | reciprocity
   // | identification | specificity | pattern_interrupt | future_pacing | commitment | risk_reversal
   psychologicalLever: text("psychological_lever"),

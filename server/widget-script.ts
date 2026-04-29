@@ -444,9 +444,22 @@ export function generateWidgetScript(
   //   3. CSS selector, but only if we also verify the result contains the
   //      expected text — otherwise fall through
   //   4. Broader token-overlap scan on block-level elements (last resort)
-  function findElements(selector, currentText, controlText, category) {
+  function findElements(selector, currentText, controlText, category, testMethod) {
     var elements = [];
     var isCTA = category === "cta" || category === "button";
+    // CRITICAL SAFETY: html_swap writes innerHTML which destructively replaces
+    // child nodes. Wrong-target html_swap blew up Travis's paidcreators page on
+    // Apr 29 2026 — fuzzy fallback matched a section_id meant for the hero
+    // subheadline-stack to a downstream paragraph H1, then innerHTML replacement
+    // wrecked the page structure. Fuzzy and broad-token strategies are inherently
+    // probabilistic; for html_swap we ONLY accept exact text match or selector
+    // match that's text-verified. If those fail, we miss the swap rather than
+    // gamble on the wrong element. Same gate for visibility_toggle / reorder /
+    // image_swap (image src writes can also mis-target).
+    var disallowFuzzyFallback = testMethod === "html_swap" ||
+                                testMethod === "image_swap" ||
+                                testMethod === "visibility_toggle" ||
+                                testMethod === "reorder";
 
     // Normalize — lowercase, collapse whitespace, strip non-word chars.
     // Keep the untouched version for a "did it match verbatim" check.
@@ -567,6 +580,12 @@ export function generateWidgetScript(
     // the page's text has drifted slightly since the scan.
     // Works on GHL, Shopify, WordPress, Webflow, Clickfunnels, custom HTML — everything.
     // Uses token scoring so minor text changes (added words, punctuation) still match.
+    //
+    // Skipped for destructive test methods (html_swap, image_swap, etc.) —
+    // see disallowFuzzyFallback gate above.
+    if (disallowFuzzyFallback) {
+      return elements;
+    }
     var fingerprints = [currentText, controlText].filter(Boolean);
     for (var fp = 0; fp < fingerprints.length; fp++) {
       var tokens = (fingerprints[fp] || "").trim().toLowerCase().split(/ +/).filter(function(w) { return w.length > 2; });
@@ -729,7 +748,7 @@ export function generateWidgetScript(
       console.log("[SA] capture-first: no match for captured element, falling back to text/selector");
     }
 
-    var allElements = findElements(selector, currentText, controlText, category);
+    var allElements = findElements(selector, currentText, controlText, category, testMethod);
     console.log("[SA] applySectionVariant", category, "found", allElements.length, "elements", "selector:", selector);
 
     // === CONTENT MISMATCH DETECTION ===
