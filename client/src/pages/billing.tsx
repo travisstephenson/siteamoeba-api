@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { BrainSnapshot } from "@/components/brain-snapshot";
 // New plan data with updated pricing structure
 const NEW_PLANS = [
   {
@@ -310,6 +311,13 @@ export default function BillingPage() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Brain snapshot — shows the live moat sitting behind every plan.
+            Surfaced here on Apr 29 2026 so users converting see exactly what
+            they're getting, and existing users see the system getting smarter.  */}
+        <div className="py-2">
+          <BrainSnapshot />
+        </div>
 
         {/* Plan comparison */}
         <div>
