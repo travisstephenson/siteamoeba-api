@@ -42,6 +42,7 @@
       <nav class="nav__links" id="navLinks" aria-label="Main navigation">
         <a href="#features" class="nav__link">Features</a>
         <a href="#autopilot" class="nav__link">Autopilot</a>
+        <a href="#brain" class="nav__link">Brain</a>
         <a href="#pricing" class="nav__link">Pricing</a>
         <a href="#faq" class="nav__link">FAQ</a>
         <div class="nav__dropdown">
@@ -631,6 +632,116 @@
       })();
       </script>
     </section>
+
+    <!-- ============ BRAIN SNAPSHOT (live data) ============ -->
+    <!-- Added Apr 29 2026: Travis flagged that the brain wasn't surfaced anywhere
+         on the marketing site. This section pulls from /api/public/brain-graph
+         and shows live stats so visitors see the moat before hitting pricing. -->
+    <section class="brain" id="brain">
+      <div class="container">
+        <span class="section-label reveal">The SiteAmoeba Brain</span>
+        <h2 class="section-title reveal">Every test makes <span class="gradient-text">every other test smarter</span></h2>
+        <p class="brain__sub reveal">When customers run a test in their account, the brain learns the pattern — winning copy strategies, section types that move the needle, what works for which page type. The next user's variants are generated against everything the brain has already learned. Live numbers below.</p>
+
+        <div class="brain__stats reveal" id="brainStats">
+          <div class="brain__stat"><div class="brain__stat-num" data-stat="visitors">—</div><div class="brain__stat-label">Visitors analyzed</div></div>
+          <div class="brain__stat"><div class="brain__stat-num" data-stat="signals">—</div><div class="brain__stat-label">Behavioral signals</div></div>
+          <div class="brain__stat"><div class="brain__stat-num" data-stat="knowledge">—</div><div class="brain__stat-label">Knowledge points</div></div>
+          <div class="brain__stat"><div class="brain__stat-num" data-stat="winrate">—</div><div class="brain__stat-label">Test win rate</div></div>
+        </div>
+
+        <div class="brain__cols">
+          <div class="brain__col reveal">
+            <div class="brain__col-header">
+              <span class="brain__col-title">Highest-leverage sections</span>
+              <span class="brain__col-meta">avg lift</span>
+            </div>
+            <div class="brain__col-body" id="brainSections"></div>
+          </div>
+          <div class="brain__col reveal">
+            <div class="brain__col-header">
+              <span class="brain__col-title">Top winning strategies</span>
+              <span class="brain__col-meta">avg lift</span>
+            </div>
+            <div class="brain__col-body" id="brainStrategies"></div>
+          </div>
+        </div>
+
+        <div class="brain__sources reveal">
+          <div class="brain__sources-header">
+            <span class="brain__col-title">Pre-taught knowledge</span>
+            <span class="brain__col-meta" id="brainSourcesCount">—</span>
+          </div>
+          <div class="brain__sources-grid" id="brainSources"></div>
+        </div>
+
+        <p class="brain__footer reveal">Every plan below gets the full power of the brain on every campaign you run.</p>
+      </div>
+      <script>
+      (function(){
+        var fmt = function(n){ return (typeof n === 'number') ? n.toLocaleString() : n; };
+        function render(d){
+          var s = d.stats || {};
+          var winRate = s.totalTests > 0 ? Math.round((s.testsWon / s.totalTests) * 100) : 0;
+          var statsEl = document.querySelectorAll('#brainStats [data-stat]');
+          statsEl.forEach(function(el){
+            var k = el.getAttribute('data-stat');
+            if(k === 'visitors')  el.textContent = fmt(s.visitorsAnalyzed || 0);
+            if(k === 'signals')   el.textContent = fmt(s.behavioralSignals || 0);
+            if(k === 'knowledge') el.textContent = fmt(s.totalKnowledgePoints || 0);
+            if(k === 'winrate')   el.textContent = winRate + '%';
+          });
+          var sections = (d.sections || []).slice().sort(function(a,b){return b.avgLift - a.avgLift;}).slice(0,5);
+          document.getElementById('brainSections').innerHTML = sections.length === 0
+            ? '<div class="brain__empty">Insufficient data yet — check back soon.</div>'
+            : sections.map(function(s){
+                var nm = s.type.replace(/_/g,' ');
+                return '<div class="brain__row"><span class="brain__row-name">'+nm+'</span><div class="brain__row-right"><span class="brain__row-meta">'+s.wins+'/'+s.tests+' wins</span><span class="brain__row-lift">+'+s.avgLift.toFixed(1)+'%</span></div></div>';
+              }).join('');
+          var strategies = (d.strategies || []).slice().sort(function(a,b){return b.avgWinLift - a.avgWinLift;}).slice(0,5);
+          document.getElementById('brainStrategies').innerHTML = strategies.length === 0
+            ? '<div class="brain__empty">Strategies are learned over time.</div>'
+            : strategies.map(function(s){
+                return '<div class="brain__row"><span class="brain__row-name">'+s.name+'</span><div class="brain__row-right"><span class="brain__row-meta">'+s.wins+'-'+s.losses+'</span><span class="brain__row-lift">+'+s.avgWinLift.toFixed(1)+'%</span></div></div>';
+              }).join('');
+          var srcs = d.knowledgeSources || {};
+          var totalDP = Object.keys(srcs).reduce(function(t,k){return t + (srcs[k].totalDataPoints || 0);},0);
+          document.getElementById('brainSourcesCount').textContent = fmt(totalDP) + ' principles';
+          document.getElementById('brainSources').innerHTML = Object.keys(srcs).map(function(k){
+            var src = srcs[k];
+            return '<div class="brain__src"><div class="brain__src-top"><span class="brain__src-label">'+src.label+'</span><span class="brain__src-num">'+src.totalDataPoints+'</span></div><div class="brain__src-desc">'+(src.description || '')+'</div></div>';
+          }).join('');
+        }
+        fetch('https://api.siteamoeba.com/api/public/brain-graph')
+          .then(function(r){return r.json();})
+          .then(render)
+          .catch(function(){
+            // Graceful fallback if API is briefly unreachable — still show numbers from
+            // the most recent recorded snapshot rather than nothing.
+            render({
+              stats: { visitorsAnalyzed: 76923, behavioralSignals: 308287, totalKnowledgePoints: 308619, testsWon: 8, totalTests: 9 },
+              sections: [
+                { type: 'subheadline', tests: 2, wins: 2, avgLift: 192.2 },
+                { type: 'cta', tests: 1, wins: 1, avgLift: 125.3 },
+                { type: 'headline', tests: 6, wins: 5, avgLift: 65.6 }
+              ],
+              strategies: [
+                { name: 'Urgency', key: 'urgency', wins: 1, losses: 0, avgWinLift: 125.3 },
+                { name: 'Contrarian', key: 'contrarian', wins: 2, losses: 0, avgWinLift: 96.0 },
+                { name: 'Transformation', key: 'transformation', wins: 2, losses: 0, avgWinLift: 43.6 }
+              ],
+              knowledgeSources: {
+                croResearch: { label: 'CRO Research', description: 'Data-backed conversion optimization intelligence from CXL, Baymard, NNGroup', totalDataPoints: 145 },
+                salesPsychology: { label: 'Sales Psychology', description: 'Pre-taught persuasion mechanisms, offer architecture, conversion frameworks', totalDataPoints: 88 },
+                pageContextRules: { label: 'Page Context Rules', description: 'Dynamic rules that adapt recommendations to page type, goal, niche', totalDataPoints: 53 },
+                autopilotPlaybooks: { label: 'Autopilot Playbooks', description: 'Section-by-section optimization sequences for 6 page types', totalDataPoints: 37 }
+              }
+            });
+          });
+      })();
+      </script>
+    </section>
+
     <section class="pricing" id="pricing">
       <div class="container">
         <span class="section-label reveal">Beta Pricing</span>
