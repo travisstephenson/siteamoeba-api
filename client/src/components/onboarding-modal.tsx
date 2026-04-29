@@ -11,6 +11,7 @@ import {
   ChevronRight, ChevronLeft, Copy, Check,
 } from "lucide-react";
 import { useAuth } from "@/hooks/use-auth";
+import { useQuery } from "@tanstack/react-query";
 
 const STORAGE_KEY = "sa_onboarding_done";
 const _ls = (): Storage => (window as any)[["local", "Storage"].join("")];
@@ -84,9 +85,20 @@ function PlatformGrid({ items }: { items: { platform: string; instruction: strin
   );
 }
 
-const CAMPAIGN_PIXEL = `<script src="https://api.siteamoeba.com/api/widget/script/YOUR_CAMPAIGN_ID"></script>`;
+// Builds the pixel snippet for a real campaign id, or a clearly-labeled placeholder
+// when the user hasn't created a campaign yet (first-time onboarding before any
+// campaign exists). Travis flagged on Apr 29 2026 that the original walkthrough
+// shipped "YOUR_CAMPAIGN_ID" verbatim and asked users to find it themselves
+// instead of just giving them the value once they had a campaign.
+function buildCampaignPixel(campaignId: number | null): string {
+  const idStr = campaignId != null ? String(campaignId) : "YOUR_CAMPAIGN_ID";
+  return `<script src="https://api.siteamoeba.com/api/widget/script/${idStr}"></script>`;
+}
 
-const STEPS = [
+function buildSteps(campaignId: number | null) {
+  const CAMPAIGN_PIXEL = buildCampaignPixel(campaignId);
+  const hasCampaign = campaignId != null;
+  return [
   {
     id: "welcome",
     icon: <Zap className="w-8 h-8 text-primary" />,
@@ -184,7 +196,9 @@ const STEPS = [
         <div>
           <p className="text-xs font-semibold mb-0.5">Your tracking pixel</p>
           <p className="text-xs text-muted-foreground">
-            Replace <code className="bg-muted px-1 rounded text-[11px]">YOUR_CAMPAIGN_ID</code> with the number from your campaign URL.
+            {hasCampaign
+              ? "Copy this script and paste it into the <head> of your offer page. The campaign ID is already filled in for you."
+              : <>Replace <code className="bg-muted px-1 rounded text-[11px]">YOUR_CAMPAIGN_ID</code> with the number from your campaign URL after you create your first campaign.</>}
           </p>
           <CopyBlock code={CAMPAIGN_PIXEL} />
         </div>
@@ -248,12 +262,25 @@ const STEPS = [
       </div>
     ),
   },
-];
+  ];
+}
 
 export function OnboardingModal() {
   const { user, isAuthenticated } = useAuth();
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
+
+  // Pull the user's most recent campaign so the pixel snippet can be pre-filled
+  // with a real ID instead of the YOUR_CAMPAIGN_ID placeholder. Only runs when
+  // the modal is open and the user is authenticated. Cached for 60s.
+  const { data: campaigns } = useQuery<Array<{ id: number; createdAt?: string }>>({
+    queryKey: ["/api/campaigns"],
+    enabled: isAuthenticated && open,
+    staleTime: 60_000,
+  });
+  const latestCampaignId = (campaigns && campaigns.length > 0)
+    ? [...campaigns].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))[0].id
+    : null;
 
   useEffect(() => {
     if (!isAuthenticated || !user) return;
@@ -269,6 +296,7 @@ export function OnboardingModal() {
     setOpen(false);
   }
 
+  const STEPS = buildSteps(latestCampaignId);
   const current = STEPS[step];
   const isLast = step === STEPS.length - 1;
   const isFirst = step === 0;
