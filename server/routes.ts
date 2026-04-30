@@ -1394,12 +1394,34 @@ export async function registerRoutes(server: Server, app: Express) {
         `SELECT COUNT(*) as cnt FROM campaigns WHERE user_id = $1 AND status = 'active'`,
         [u.id]
       );
+      // "Active tests" must reflect what's actually serving variants, not just
+      // sections flagged is_active. The widget serves variants directly when a
+      // campaign has active challenger variants — even if the section flag is
+      // false (e.g., promoted-winner architecture). Count campaigns that have
+      // at least one active non-control variant.
       const tests = await pool.query(
-        `SELECT COUNT(*) as cnt FROM test_sections ts JOIN campaigns c ON c.id = ts.campaign_id WHERE c.user_id = $1 AND ts.is_active = true`,
+        `SELECT COUNT(DISTINCT v.campaign_id) AS cnt
+           FROM variants v
+           JOIN campaigns c ON c.id = v.campaign_id
+          WHERE c.user_id = $1
+            AND v.is_active = true
+            AND v.is_control = false
+            AND c.status = 'active'`,
         [u.id]
       );
       const visitors = await pool.query(
         `SELECT COUNT(*) as cnt FROM visitors v JOIN campaigns c ON c.id = v.campaign_id WHERE c.user_id = $1`,
+        [u.id]
+      );
+      // Visitors in the LAST 7 DAYS — used by the admin filter for "paid users
+      // with traffic but no active test" so we can target outreach to people
+      // for whom this is a live problem, not a year-old account.
+      const visitors7d = await pool.query(
+        `SELECT COUNT(*) AS cnt
+           FROM visitors v
+           JOIN campaigns c ON c.id = v.campaign_id
+          WHERE c.user_id = $1
+            AND v.first_seen > (NOW() - INTERVAL '7 days')::text`,
         [u.id]
       );
       return {
@@ -1419,8 +1441,11 @@ export async function registerRoutes(server: Server, app: Express) {
         stripeCustomerId: u.stripeCustomerId,
         stripeSubscriptionId: u.stripeSubscriptionId,
         activeCampaigns: parseInt(campaigns.rows[0]?.cnt) || 0,
+        // activeTests = number of distinct campaigns with at least one active
+        // challenger variant. Used by the admin "paid · no active tests" filter.
         activeTests: parseInt(tests.rows[0]?.cnt) || 0,
         totalVisitors: parseInt(visitors.rows[0]?.cnt) || 0,
+        visitors7d: parseInt(visitors7d.rows[0]?.cnt) || 0,
         firstTestEnabledAt: (u as any).firstTestEnabledAt || null,
         ttftMinutes: (u as any).firstTestEnabledAt && u.createdAt
           ? Math.max(0, Math.round((new Date((u as any).firstTestEnabledAt).getTime() - new Date(u.createdAt).getTime()) / 60000))

@@ -87,6 +87,108 @@ function statusBadge(status: string) {
   );
 }
 
+/**
+ * ActivationOutreachBar
+ *
+ * Shown above the user list when an activation filter is active. Surfaces:
+ *  - count of users matched
+ *  - quick actions: copy emails to clipboard, copy emails+names CSV, draft outreach
+ *
+ * Built Apr 30 2026 to make it 1-click to take a list of paid-no-test users
+ * and start a setup-call outreach campaign.
+ */
+function ActivationOutreachBar({ users, filter }: { users: any[]; filter: string }) {
+  const [copied, setCopied] = useState<"none" | "emails" | "csv">("none");
+
+  const filterLabel: Record<string, string> = {
+    paid_traffic_no_test: "Paid · Traffic · No test",
+    paid_no_tests: "Paid · No active tests",
+    free_traffic_no_test: "Free · Traffic · No test",
+  };
+  const totalVisitors = users.reduce((s, u) => s + (u.visitors7d || 0), 0);
+
+  function copyEmails() {
+    const emails = users.map(u => u.email).join(", ");
+    navigator.clipboard.writeText(emails).then(() => {
+      setCopied("emails");
+      setTimeout(() => setCopied("none"), 2000);
+    });
+  }
+  function copyCsv() {
+    const header = "email,name,plan,active_campaigns,visitors_7d,user_id";
+    const rows = users.map(u => [
+      u.email, u.name || "", u.plan, u.activeCampaigns, u.visitors7d || 0, u.id
+    ].map(v => `"${String(v).replace(/"/g, '""')}"`).join(","));
+    const csv = [header, ...rows].join("\n");
+    navigator.clipboard.writeText(csv).then(() => {
+      setCopied("csv");
+      setTimeout(() => setCopied("none"), 2000);
+    });
+  }
+  function draftMailtoBcc() {
+    // mailto: with all emails as BCC + a pre-filled subject and body for the
+    // setup-call outreach. Browser's max URL length usually caps around
+    // ~8000 chars; if more emails, we just show the first batch and the
+    // rest can be done via copy-emails.
+    const bcc = users.slice(0, 50).map(u => u.email).join(",");
+    const subject = encodeURIComponent("Quick offer: free 15-min setup call to get your first SiteAmoeba test live");
+    const body = encodeURIComponent(
+`Hi {{first_name}},
+
+Noticed you're getting traffic on your campaign in SiteAmoeba but no test is running yet. That's traffic we can put to work for you.
+
+I'd like to offer you a free 15-min setup call where I'll personally:
+  • Pick the highest-leverage section on your page
+  • Write 2-3 variants for it (in your voice)
+  • Hit "Start test" with you
+
+No upsell, no pitch — just want to make sure you're getting value.
+
+Grab a slot here: [your booking link]
+
+Or just reply with 2-3 times that work and I'll send a Zoom invite.
+
+— Travis
+Founder, SiteAmoeba`);
+    window.open(`mailto:?bcc=${bcc}&subject=${subject}&body=${body}`, "_blank");
+  }
+
+  return (
+    <div className="px-4 py-3 border-b border-border bg-amber-500/5">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-semibold uppercase tracking-wider text-amber-500">
+            {filterLabel[filter] || "Activation filter"}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {users.length} user{users.length === 1 ? "" : "s"} · {totalVisitors.toLocaleString()} visitors / 7d
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={copyEmails}
+            className="text-xs px-2.5 py-1.5 rounded-md border border-border hover:bg-muted/50 transition-colors"
+          >
+            {copied === "emails" ? "✓ Copied!" : "Copy emails"}
+          </button>
+          <button
+            onClick={copyCsv}
+            className="text-xs px-2.5 py-1.5 rounded-md border border-border hover:bg-muted/50 transition-colors"
+          >
+            {copied === "csv" ? "✓ Copied!" : "Copy CSV"}
+          </button>
+          <button
+            onClick={draftMailtoBcc}
+            className="text-xs px-3 py-1.5 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white font-medium transition-colors"
+          >
+            ✍️ Draft setup-call email
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function StatCard({ label, value, sub, icon: Icon, color = "text-muted-foreground" }: {
   label: string; value: string | number; sub?: string; icon: any; color?: string;
 }) {
@@ -522,6 +624,13 @@ export default function AdminPage() {
   const [search, setSearch] = useState("");
   const [filterPlan, setFilterPlan] = useState("all");
   const [filterStatus, setFilterStatus] = useState("all");
+  // "Activation" filter — added Apr 30 2026 to surface users we should
+  // proactively reach out to with a free first-variant-setup call.
+  // - all                = no activation filter
+  // - paid_no_tests      = paid plan, zero campaigns with active challenger variants
+  // - paid_traffic_no_test = paid plan + recent traffic + zero active tests (highest priority)
+  // - free_traffic_no_test = free plan + recent traffic + zero active tests
+  const [filterActivation, setFilterActivation] = useState("all");
   const [sortBy, setSortBy] = useState<"newest" | "ttft" | "visitors" | "credits">("newest");
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
   const [showCreateUser, setShowCreateUser] = useState(false);
@@ -563,7 +672,14 @@ export default function AdminPage() {
       (u.name || "").toLowerCase().includes(search.toLowerCase());
     const matchPlan = filterPlan === "all" || u.plan === filterPlan;
     const matchStatus = filterStatus === "all" || u.accountStatus === filterStatus;
-    return matchSearch && matchPlan && matchStatus;
+    const isPaid = u.plan && u.plan !== "free";
+    const matchActivation =
+      filterActivation === "all"                  ? true :
+      filterActivation === "paid_no_tests"        ? (isPaid && u.activeTests === 0 && u.activeCampaigns > 0) :
+      filterActivation === "paid_traffic_no_test" ? (isPaid && u.activeTests === 0 && (u.visitors7d || 0) >= 50) :
+      filterActivation === "free_traffic_no_test" ? (!isPaid && u.activeTests === 0 && (u.visitors7d || 0) >= 50) :
+      true;
+    return matchSearch && matchPlan && matchStatus && matchActivation;
   }).sort((a, b) => {
     if (sortBy === "ttft") {
       // Users with no TTFT go to end; lower TTFT (faster) first
@@ -701,6 +817,15 @@ export default function AdminPage() {
                   ))}
                 </SelectContent>
               </Select>
+              <Select value={filterActivation} onValueChange={setFilterActivation}>
+                <SelectTrigger className="w-56"><SelectValue placeholder="All activation states" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All activation states</SelectItem>
+                  <SelectItem value="paid_traffic_no_test">⚠️ Paid · Traffic · No test (priority)</SelectItem>
+                  <SelectItem value="paid_no_tests">Paid · No active tests</SelectItem>
+                  <SelectItem value="free_traffic_no_test">Free · Traffic · No test</SelectItem>
+                </SelectContent>
+              </Select>
               <Select value={sortBy} onValueChange={v => setSortBy(v as any)}>
                 <SelectTrigger className="w-36 gap-1"><ArrowUpDown className="w-3 h-3" /><SelectValue /></SelectTrigger>
                 <SelectContent>
@@ -726,6 +851,9 @@ export default function AdminPage() {
                   <span className="text-center w-20">Status</span>
                   <span className="w-4" />
                 </div>
+                {filterActivation !== "all" && filteredUsers.length > 0 && (
+                  <ActivationOutreachBar users={filteredUsers} filter={filterActivation} />
+                )}
                 {usersLoading ? Array.from({ length: 4 }).map((_, i) => (
                   <div key={i} className="px-4 py-3"><Skeleton className="h-10 w-full" /></div>
                 )) : filteredUsers.length === 0 ? (
@@ -743,6 +871,13 @@ export default function AdminPage() {
                     <div className="w-20 flex justify-center">{planBadge(u.plan)}</div>
                     <div className="w-20 text-center"><span className="text-xs tabular-nums">{u.creditsUsed}/{u.creditsLimit}</span></div>
                     <div className="w-20 text-center"><span className="text-xs">{u.activeCampaigns} active</span></div>
+                    {filterActivation !== "all" && (
+                      <div className="w-20 text-center">
+                        <span className={`text-xs font-medium tabular-nums ${(u.visitors7d || 0) > 0 ? 'text-amber-500' : 'text-muted-foreground'}`}>
+                          {(u.visitors7d || 0).toLocaleString()}<span className="text-[10px] opacity-60"> /7d</span>
+                        </span>
+                      </div>
+                    )}
                     <div className="w-16 text-center">
                       {u.ttftMinutes != null
                         ? <span className="text-xs font-medium tabular-nums text-emerald-600 dark:text-emerald-400">{formatTTFT(u.ttftMinutes)}</span>
