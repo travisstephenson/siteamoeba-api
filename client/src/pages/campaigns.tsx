@@ -80,6 +80,7 @@ import { Label } from "@/components/ui/label";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { ActivationSuggestionsBanner } from "@/components/activation-suggestions-banner";
 
 // ============================================================
 // TYPES
@@ -1814,6 +1815,11 @@ export default function CampaignsPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+
+        {/* Activation suggestions — surfaces dormant campaigns with traffic so users
+            see exactly which page is wasting traffic and what action to take. Hidden
+            entirely when there's nothing to surface. */}
+        <ActivationSuggestionsBanner />
 
         {/* KPI Row */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4" data-testid="dashboard-kpi-row">

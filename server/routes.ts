@@ -798,6 +798,21 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json(flat);
   });
 
+  // GET /api/activation-suggestions — for the dashboard banner that surfaces
+  // "this campaign is getting traffic but no test is running." Returns a
+  // ranked list of dormant campaigns + brain-derived lift estimates.
+  // Cached lightly on the client (60s) so it doesn't hammer on every dashboard nav.
+  app.get("/api/activation-suggestions", requireAuth, async (req: Request, res: Response) => {
+    try {
+      const { getActivationSuggestions } = await import("./activation-suggestions");
+      const suggestions = await getActivationSuggestions(pool, req.userId!);
+      res.json({ count: suggestions.length, items: suggestions });
+    } catch (err: any) {
+      console.error("[activation-suggestions] error:", err);
+      res.status(500).json({ error: err.message || "failed" });
+    }
+  });
+
   // GET /api/campaigns/anomaly-counts — MUST be before :id route so Express doesn't swallow it
   app.get("/api/campaigns/anomaly-counts", requireAuth, async (req: Request, res: Response) => {
     try {
