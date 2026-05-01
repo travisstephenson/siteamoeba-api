@@ -1780,13 +1780,35 @@ class StorageImpl implements IStorage {
         const challengers = sectionVars.filter(v => !v.isControl);
         if (!control || challengers.length === 0) continue;
 
-        const bestChallenger = challengers.reduce((best, c) =>
-          (c.conversionRate ?? 0) > (best.conversionRate ?? 0) ? c : best, challengers[0]);
+        // Use the unified winner-math module so revenue-positive wins on a
+        // $0-revenue control don't get lost (Tiffany incident, May 1 2026).
+        const { pickWinner } = await import("./winner-math");
+        const verdict = pickWinner(
+          {
+            variantId: control.variantId, isControl: true,
+            impressions: control.impressions, conversions: control.conversions,
+            revenue: control.revenue || 0,
+            conversionRate: (control.conversionRate ?? 0) / 100, // stored as %, we want fraction
+            revenuePerVisitor: (control.revenuePerVisitor ?? 0),
+            confidence: (control.confidence ?? 0),
+          },
+          challengers.map(c => ({
+            variantId: c.variantId, isControl: false,
+            impressions: c.impressions, conversions: c.conversions,
+            revenue: c.revenue || 0,
+            conversionRate: (c.conversionRate ?? 0) / 100,
+            revenuePerVisitor: (c.revenuePerVisitor ?? 0),
+            confidence: (c.confidence ?? 0),
+          }))
+        );
+        const bestChallenger = verdict.winnerVariantId
+          ? (challengers.find(c => c.variantId === verdict.winnerVariantId) || challengers[0])
+          : challengers.reduce((best, c) =>
+              (c.conversionRate ?? 0) > (best.conversionRate ?? 0) ? c : best, challengers[0]);
 
         const totalVisitorsInTest = sectionVars.reduce((sum, v) => sum + v.impressions, 0);
         const controlCR = control.conversionRate ?? 0;
         const challengerCR = bestChallenger.conversionRate ?? 0;
-        const lift = controlCR > 0 ? ((challengerCR - controlCR) / controlCR) * 100 : 0;
 
         activeTests.push({
           campaignId: campId,
@@ -1796,10 +1818,14 @@ class StorageImpl implements IStorage {
           visitors: totalVisitorsInTest,
           controlCR: Math.round(controlCR * 1000) / 10,
           challengerCR: Math.round(challengerCR * 1000) / 10,
-          lift: Math.round(lift * 10) / 10,
-          confidence: Math.round(bestChallenger.confidence ?? 0),
-          status: (bestChallenger.confidence ?? 0) >= 95 ? 'winner' :
-                  (bestChallenger.confidence ?? 0) >= 80 ? 'promising' :
+          lift: Math.round(verdict.liftPercent * 10) / 10,
+          // Surface the human-friendly lift label + basis so the dashboard can
+          // render "$665 gained" or "+125% revenue" instead of just a number.
+          liftDisplay: verdict.liftDisplay,
+          liftBasis: verdict.liftBasis,
+          confidence: Math.round(verdict.confidence ?? 0),
+          status: verdict.shouldCelebrate ? 'winner' :
+                  verdict.confidence >= 75 ? 'promising' :
                   totalVisitorsInTest < 50 ? 'collecting' : 'testing',
         });
       }

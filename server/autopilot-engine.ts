@@ -103,8 +103,34 @@ export async function declareWinnerForSection(
 
       const winnerCvr = winnerStats.conversionRate;
       const loserCvr = controlStats.conversionRate;
+      // Use winner-math for revenue-aware lift. When control made $0 and the
+      // winning variant generated paid revenue, fall back to revenue lift
+      // (Tiffany incident, May 1 2026 — challenger made $665.60, control made
+      // $0, the old `loserCvr > 0 ? … : 0` ternary stored a 0% lift in the
+      // brain even though the result was clearly money-positive).
+      const { pickWinner } = await import("./winner-math");
+      const verdict = pickWinner(
+        {
+          variantId: controlStats.variantId, isControl: true,
+          impressions: controlStats.impressions, conversions: controlStats.conversions,
+          revenue: (controlStats as any).revenue || 0,
+          conversionRate: (controlStats.conversionRate ?? 0) / 100,
+          revenuePerVisitor: (controlStats as any).revenuePerVisitor || 0,
+          confidence: controlStats.confidence ?? 0,
+        },
+        [{
+          variantId: winnerStats.variantId, isControl: false,
+          impressions: winnerStats.impressions, conversions: winnerStats.conversions,
+          revenue: (winnerStats as any).revenue || 0,
+          conversionRate: (winnerStats.conversionRate ?? 0) / 100,
+          revenuePerVisitor: (winnerStats as any).revenuePerVisitor || 0,
+          confidence: winnerStats.confidence ?? 0,
+        }]
+      );
       const liftPct =
-        loserCvr > 0 ? ((winnerCvr - loserCvr) / loserCvr) * 100 : 0;
+        verdict.liftBasis === "first_revenue"
+          ? Math.max(100, ((winnerStats as any).revenue || 0))   // $X gained → store as bounded number
+          : verdict.liftPercent;
       const sampleSize = winnerStats.impressions + controlStats.impressions;
 
       let winnerStrategy: string | undefined;
