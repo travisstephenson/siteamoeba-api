@@ -9,6 +9,10 @@ function getPool(): Pool {
       connectionString: process.env.DATABASE_URL,
       ssl: process.env.NODE_ENV === "production" ? { rejectUnauthorized: false } : false,
     });
+    // Same crash-prevention pattern as storage.ts pool. See May 2 2026 outage.
+    _pool.on("error", (err) => {
+      console.error("[brain-selector pg pool] idle client error (recovered):", err?.message || err);
+    });
   }
   return _pool;
 }

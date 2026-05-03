@@ -24,6 +24,20 @@ export const pool = new Pool({
   max: 20,                      // maximum connections in pool
   idleTimeoutMillis: 30000,     // close idle connections after 30s
   connectionTimeoutMillis: 5000, // throw if connection not acquired in 5s
+  // Long-running TCP connections die silently on Railway/Cloudflare-fronted
+  // proxies after ~10 minutes; refresh them periodically so a stale-keepalive
+  // connection doesn't get handed out to a request and then ECONNRESET mid-query.
+  // 5 min is well under both the proxy idle timeout and our 30s idle eviction.
+  maxLifetimeSeconds: 300,
+});
+
+// CRITICAL: pg Pool's idle clients can emit 'error' events when the underlying
+// TCP connection drops (Railway internal restart, network blip, Postgres SIGHUP).
+// Without a listener, Node's default behavior is to throw — which on May 2 2026
+// crashed the entire siteamoeba-api process and took every site down for ~36h.
+// This handler logs and lets the pool reclaim/retry the affected client.
+pool.on("error", (err) => {
+  console.error("[pg pool] idle client error (recovered):", err?.message || err);
 });
 
 const db = drizzle(pool);

@@ -20,6 +20,21 @@ setBYOKSpendReporter(async (userId, provider, costUsd, tokens) => {
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 
+// Last-resort safety net. After the May 2 2026 outage where an unhandled pg
+// pool 'error' crashed the process, we add explicit handlers for both
+// uncaughtException and unhandledRejection so that ANY future stray error
+// produces a loud log line instead of a silent process death.
+// Note: pg pool errors are now handled at source in storage.ts; this is the
+// safety net for everything else (third-party libs, async stripe webhooks,
+// llm SDK errors, etc.).
+process.on("uncaughtException", (err) => {
+  console.error("[uncaughtException]", err?.stack || err);
+  // Don't exit — we'd rather serve a stale endpoint than take down the whole site.
+});
+process.on("unhandledRejection", (reason: any, promise) => {
+  console.error("[unhandledRejection]", reason?.stack || reason);
+});
+
 const app = express();
 const httpServer = createServer(app);
 
