@@ -2133,51 +2133,69 @@ export async function registerRoutes(server: Server, app: Express) {
                    category === 'hero_journey' || category === 'pricing' ||
                    qFull.length > 120;
 
-      // Build the search needle — first sentence/line, capped at 80 chars.
-      var firstLine = (msg.text || '').split(/[\\n\\r]/)[0].trim();
-      if (!firstLine) firstLine = msg.text || '';
-      var needle = _saNorm(firstLine).slice(0, 80);
-      // If the section starts with a very short fragment (like "AI Is the Goldmine..."),
-      // pad the needle with the next characters from the full text so we have
-      // enough signal to be unique.
-      if (needle.length < 25 && qFull.length > needle.length) {
-        needle = qFull.slice(0, Math.min(80, qFull.length));
-      }
-      if (!needle) return;
-
-      // Candidate selector — broad. Excludes structural/non-text elements.
-      var SKIP = { SCRIPT:1, STYLE:1, NOSCRIPT:1, IFRAME:1, SVG:1, HEAD:1, META:1, LINK:1, INPUT:1, TEXTAREA:1, SELECT:1, BUTTON:0 };
+      // Build a list of candidate needles — try increasingly forgiving phrases
+      // until one matches an element. Real-world DOMs split sections across
+      // multiple <h1>/<p>/<span> elements, so the FULL section text rarely
+      // fits inside one node. Strategy: try the first ~80 chars, then progressively
+      // shorter prefixes, then SLICES taken from the middle of the section text
+      // (which often survive even when the start is split into wrappers like
+      // 'Introducing...' / 'The Complete Extraction System' as siblings).
+      var SKIP = { SCRIPT:1, STYLE:1, NOSCRIPT:1, IFRAME:1, SVG:1, HEAD:1, META:1, LINK:1, INPUT:1, TEXTAREA:1, SELECT:1 };
       var candidates = document.body ? document.body.getElementsByTagName('*') : [];
-      var matches = [];
-      for (var i = 0; i < candidates.length; i++) {
-        var c = candidates[i];
-        if (!c || !c.tagName) continue;
-        var tag = c.tagName.toUpperCase();
-        if (SKIP[tag]) continue;
-        // Skip elements that are not visible (display:none / 0-size)
-        var ct = _saNorm(c.innerText || c.textContent || '');
-        if (!ct) continue;
-        if (ct.indexOf(needle) === -1) continue;
-        // Filter: must have non-trivial text (we want real text containers,
-        // not the entire <body>). Cap by text length ratio so we prefer the
-        // most specific (smallest) container.
-        matches.push({ el: c, len: ct.length, tag: tag });
+      function _saSearch(needle) {
+        if (!needle || needle.length < 8) return [];
+        var found = [];
+        for (var i = 0; i < candidates.length; i++) {
+          var c = candidates[i];
+          if (!c || !c.tagName) continue;
+          var tag = c.tagName.toUpperCase();
+          if (SKIP[tag]) continue;
+          var ct = _saNorm(c.innerText || c.textContent || '');
+          if (!ct || ct.indexOf(needle) === -1) continue;
+          found.push({ el: c, len: ct.length, tag: tag });
+        }
+        return found;
       }
 
-      // Fallback: try first 6 words if no match.
-      if (matches.length === 0) {
-        var firstWords = qFull.split(' ').slice(0, 6).join(' ');
-        if (firstWords && firstWords.length >= 12) {
-          for (var j = 0; j < candidates.length; j++) {
-            var c2 = candidates[j];
-            if (!c2 || !c2.tagName) continue;
-            var tag2 = c2.tagName.toUpperCase();
-            if (SKIP[tag2]) continue;
-            var ct2 = _saNorm(c2.innerText || c2.textContent || '');
-            if (!ct2 || ct2.indexOf(firstWords) === -1) continue;
-            matches.push({ el: c2, len: ct2.length, tag: tag2 });
-          }
-        }
+      var firstLine = (msg.text || '').split(/[\\n\\r]/)[0].trim();
+      if (!firstLine) firstLine = (msg.text || '');
+      var firstLineNorm = _saNorm(firstLine);
+
+      // Build needle candidates in order of preference.
+      var needles = [];
+      // 1. First 80 chars of first line
+      if (firstLineNorm.length >= 25) needles.push(firstLineNorm.slice(0, 80));
+      // 2. First sentence (up to first period/colon)
+      var firstSent = firstLineNorm.split(/[.!?:]/)[0];
+      if (firstSent.length >= 15 && firstSent.length <= 80) needles.push(firstSent);
+      // 3. Distinctive 30-char slice starting from the first word
+      if (firstLineNorm.length >= 30) needles.push(firstLineNorm.slice(0, 50));
+      // 4. Try slices from the SECOND sentence — often a more verbatim
+      //    chunk in the DOM (the first line might be a styled headline split
+      //    across siblings, while body sentences live in single <p>s).
+      var sentences = qFull.split(/[.!?]\\s+/).filter(function(s) { return s.length >= 25; });
+      for (var si = 0; si < Math.min(sentences.length, 4); si++) {
+        needles.push(sentences[si].slice(0, 80));
+        if (sentences[si].length > 30) needles.push(sentences[si].slice(0, 50));
+      }
+      // 5. First 6 words as last resort
+      var firstWords = firstLineNorm.split(' ').slice(0, 6).join(' ');
+      if (firstWords.length >= 12) needles.push(firstWords);
+      // De-dupe + cap to 8 attempts
+      var seen = {};
+      var uniqueNeedles = [];
+      for (var ni = 0; ni < needles.length && uniqueNeedles.length < 8; ni++) {
+        var nn = needles[ni];
+        if (!nn || seen[nn]) continue;
+        seen[nn] = 1;
+        uniqueNeedles.push(nn);
+      }
+
+      var matches = [];
+      var matchedNeedle = '';
+      for (var attempt = 0; attempt < uniqueNeedles.length; attempt++) {
+        matches = _saSearch(uniqueNeedles[attempt]);
+        if (matches.length > 0) { matchedNeedle = uniqueNeedles[attempt]; break; }
       }
 
       if (matches.length === 0) {
