@@ -304,7 +304,17 @@ async function _callLLMInternal(
 ): Promise<string> {
 
   if (config.provider === "anthropic") {
-    const client = new Anthropic({ apiKey: config.apiKey });
+    // Configure the Anthropic client with a finite timeout + automatic retry.
+    // Default SDK timeout is 600s, but Railway's HTTP layer kills requests after
+    // ~30s and Cloudflare proxies kill after ~60s. Without explicit timeout, a
+    // slow Anthropic response would manifest to the user as a 502 from the proxy
+    // (Gedas Kvedaras, feedback #18, Apr 28). With timeout + maxRetries we get a
+    // clean error path AND a self-healing retry on transient failures.
+    const client = new Anthropic({
+      apiKey: config.apiKey,
+      timeout: 45_000,    // 45s ceiling per attempt
+      maxRetries: 2,      // up to 3 total attempts on transient errors (overload/timeout)
+    });
 
     // Separate system message from user/assistant messages
     const systemMsg = messages.find((m) => m.role === "system");

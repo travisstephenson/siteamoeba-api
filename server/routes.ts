@@ -5372,7 +5372,22 @@ export async function registerRoutes(server: Server, app: Express) {
       rawResponse = await callLLM(llmConfigResolved.config, messages);
     } catch (err: any) {
       console.error('LLM call failed:', err);
-      return res.status(502).json({ error: err.message || "AI provider error. Check your API key and credits in Settings." });
+      // Map common transient errors to actionable user messages so people
+      // don't see raw 'AI provider error' (Gedas, feedback #18 Apr 28).
+      // The Anthropic client now retries up to 3 times internally so any error
+      // surfacing here is genuinely persistent.
+      const msg = (err?.message || '').toLowerCase();
+      const isOverload   = msg.includes('overload') || msg.includes('529') || err?.status === 529;
+      const isRateLimit  = msg.includes('rate') || msg.includes('429') || err?.status === 429;
+      const isAuth       = msg.includes('auth') || msg.includes('401') || err?.status === 401 || msg.includes('invalid api key');
+      const isTimeout    = msg.includes('timeout') || msg.includes('timed out') || err?.status === 408;
+      let friendly: string;
+      if (isAuth)         friendly = "Your API key looks invalid. Open Settings → LLM Provider and re-enter it.";
+      else if (isOverload) friendly = "The AI provider is temporarily overloaded. Try again in 30 seconds — we already retried 3 times automatically.";
+      else if (isRateLimit) friendly = "You hit your AI provider's rate limit. Wait a minute and try again, or upgrade to autopilot to use our shared brain.";
+      else if (isTimeout)  friendly = "The AI took too long to respond. This usually clears in a few minutes — try again, or generate fewer variants at once.";
+      else                 friendly = err?.message || "AI provider error. Check your API key and credits in Settings.";
+      return res.status(502).json({ error: friendly, code: err?.status || null });
     }
 
     // Parse the JSON response — handle markdown code blocks

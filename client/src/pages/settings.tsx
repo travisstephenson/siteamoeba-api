@@ -530,19 +530,34 @@ function StripeIntegration({ userId }: { userId?: number }) {
     queryKey: ["/api/settings/stripe-status"],
   });
 
-  // Detect stripe_connected=true from OAuth redirect
+  // Detect stripe_connected=true from OAuth redirect.
+  // FIX (May 4, 2026): The app uses HASH ROUTING (wouter useHashLocation), so
+  // query params from the Stripe OAuth callback land inside window.location.hash,
+  // NOT window.location.search. Stu McInnis (#19 feedback) reported "add stripe
+  // gives you an error page" — the cause was that this useEffect parsed search
+  // (which is empty for hash-routed URLs) so the success/error toast never fired,
+  // refetchStatus() never ran, and the page just sat in its pre-OAuth state.
+  // Now we parse params from BOTH search and the part of hash after the first '?'.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const stripeConnected = params.get("stripe_connected");
-    const stripeError = params.get("stripe_error");
+    const hashParams = (() => {
+      const h = window.location.hash || "";
+      const i = h.indexOf("?");
+      return i >= 0 ? new URLSearchParams(h.slice(i + 1)) : new URLSearchParams();
+    })();
+    const searchParams = new URLSearchParams(window.location.search);
+    const stripeConnected = hashParams.get("stripe_connected") || searchParams.get("stripe_connected");
+    const stripeError     = hashParams.get("stripe_error")     || searchParams.get("stripe_error");
     if (stripeConnected === "true") {
       toast({ title: "Stripe connected!", description: "Your Stripe account has been linked successfully." });
       refetchStatus();
-      // Clean up URL
-      window.history.replaceState({}, "", window.location.pathname + window.location.hash.replace(/[?&]stripe_connected=true/, ""));
+      // Clean up URL — strip the param from BOTH search and hash so the toast
+      // doesn't re-fire on re-render.
+      const newHash = (window.location.hash || "").replace(/[?&]stripe_connected=true/, "").replace(/[?&]stripe_error=[^&]*/, "");
+      window.history.replaceState({}, "", window.location.pathname + window.location.search.replace(/[?&]stripe_connected=true/,"").replace(/[?&]stripe_error=[^&]*/,"") + newHash);
     } else if (stripeError) {
       toast({ title: "Stripe connection failed", description: decodeURIComponent(stripeError), variant: "destructive" });
-      window.history.replaceState({}, "", window.location.pathname + window.location.hash.replace(/[?&]stripe_error=[^&]*/, ""));
+      const newHash = (window.location.hash || "").replace(/[?&]stripe_error=[^&]*/, "").replace(/[?&]stripe_connected=true/, "");
+      window.history.replaceState({}, "", window.location.pathname + window.location.search.replace(/[?&]stripe_error=[^&]*/,"").replace(/[?&]stripe_connected=true/,"") + newHash);
     }
   }, []);
 
