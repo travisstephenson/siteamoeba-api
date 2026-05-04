@@ -2000,6 +2000,22 @@ export async function registerRoutes(server: Server, app: Express) {
 
   function previewText(newText) {
     if (!_selectedEl) return;
+    // BODY-COPY HTML SUPPORT: AI variants for body_copy / hero_journey come
+    // back as HTML (the prompt asks for <p><strong><ul><li>). If we shove
+    // that into textContent the user sees literal '<p>WARNING...' on the page.
+    // Detect block-level markup and apply via innerHTML on the selected element
+    // so multi-paragraph variants render correctly.
+    var hasBlockHTML = /<\\s*(p|ul|ol|li|h[1-6]|div|section|blockquote|br)\\b/i.test(newText);
+    if (hasBlockHTML) {
+      // Sanitize to a known-safe subset before injecting (prevents script
+      // injection if a future LLM goes off-script).
+      var safe = newText
+        .replace(/<\\s*script[\\s\\S]*?<\\s*\\/\\s*script\\s*>/gi, '')
+        .replace(/<\\s*iframe[\\s\\S]*?<\\s*\\/\\s*iframe\\s*>/gi, '')
+        .replace(/\\son\\w+\\s*=\\s*"[^"]*"/gi, '')
+        .replace(/\\son\\w+\\s*=\\s*'[^']*'/gi, '');
+      try { _selectedEl.innerHTML = safe; return; } catch (e) {}
+    }
     // Preserve the wrapper structure: if the element's only meaningful child
     // chain is a single STRONG/SPAN/DIV wrapping the text (common on GHL and
     // Elementor), write the new text on the deepest wrapper so authored bold/
@@ -2010,6 +2026,16 @@ export async function registerRoutes(server: Server, app: Express) {
       var t = (leaf.children[0].tagName || '').toUpperCase();
       if (t !== 'SPAN' && t !== 'STRONG' && t !== 'EM' && t !== 'B' && t !== 'DIV' && t !== 'I' && t !== 'U' && t !== 'FONT' && t !== 'MARK') break;
       leaf = leaf.children[0];
+    }
+    // Inline-only HTML (just <strong>/<em>/<br>): use innerHTML on the leaf
+    // so the formatting renders. Plain text: use textContent.
+    var hasInlineHTML = /<\\s*(strong|b|em|i|u|br|span|mark)\\b/i.test(newText);
+    if (hasInlineHTML) {
+      var safe2 = newText
+        .replace(/<\\s*script[\\s\\S]*?<\\s*\\/\\s*script\\s*>/gi, '')
+        .replace(/\\son\\w+\\s*=\\s*"[^"]*"/gi, '')
+        .replace(/\\son\\w+\\s*=\\s*'[^']*'/gi, '');
+      try { (leaf || _selectedEl).innerHTML = safe2; return; } catch (e) {}
     }
     if (leaf) leaf.textContent = newText;
     else _selectedEl.textContent = newText;

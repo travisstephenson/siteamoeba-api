@@ -792,7 +792,27 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
                   {!aiLoading && aiSuggestions.length === 0 && (
                     <div className="text-xs text-muted-foreground">No suggestions yet. Try Regenerate.</div>
                   )}
-                  {aiSuggestions.map((s, i) => (
+                  {aiSuggestions.map((s, i) => {
+                    // Body-copy variants come back as HTML. Show a plain-text
+                    // preview in the suggestion card (raw <p> tags are
+                    // unreadable), but keep the HTML in s.text so it renders
+                    // correctly when the user picks it.
+                    const looksHtml = /<[a-z][^>]*>/i.test(s.text);
+                    const previewText = looksHtml
+                      ? s.text
+                          .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n")
+                          .replace(/<br\s*\/?>/gi, "\n")
+                          .replace(/<\/li>\s*<li[^>]*>/gi, "\n• ")
+                          .replace(/<li[^>]*>/gi, "• ")
+                          .replace(/<[^>]+>/g, "")
+                          .replace(/&nbsp;/g, " ")
+                          .replace(/&amp;/g, "&")
+                          .replace(/&quot;/g, '"')
+                          .replace(/&#39;/g, "'")
+                          .replace(/[ \t]+\n/g, "\n")
+                          .trim()
+                      : s.text;
+                    return (
                     <button
                       key={i}
                       onClick={() => pickAiSuggestion(i)}
@@ -804,7 +824,7 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
                       data-testid={`button-ai-suggestion-${i}`}
                     >
                       <div className="flex items-start justify-between gap-2 mb-1">
-                        <div className="text-sm font-medium">{s.text}</div>
+                        <div className="text-sm font-medium whitespace-pre-line line-clamp-6">{previewText}</div>
                         {chosenAiIndex === i && <Check className="w-4 h-4 text-primary shrink-0" />}
                       </div>
                       {s.strategy && (
@@ -817,7 +837,8 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
                         <div className="text-[11px] text-muted-foreground mt-1 line-clamp-2">{s.reasoning}</div>
                       )}
                     </button>
-                  ))}
+                    );
+                  })}
                   <button
                     className="text-xs text-muted-foreground hover:underline"
                     onClick={() => setMode("manual")}
@@ -843,6 +864,11 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
                     />
                     <div className="text-[11px] text-muted-foreground mt-1">
                       Updates the page live as you type.
+                      {/<\/?(p|ul|ol|li|strong|em|br|h[1-6])\b/i.test(variantText) && (
+                        <span className="block mt-0.5">
+                          This variant uses HTML formatting (<code>&lt;p&gt;</code>, <code>&lt;strong&gt;</code>, <code>&lt;ul&gt;</code>, etc). Tags will render on the page — they’re not shown literally.
+                        </span>
+                      )}
                     </div>
                   </div>
 
