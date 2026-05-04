@@ -422,6 +422,21 @@ export function AppSidebar() {
     refetchInterval: 60000,
   });
 
+  // Unread feedback responses — surfaces a notification dot on Settings when
+  // an admin replies to feedback the user submitted. Travis flagged on May 4
+  // that users had no way to know a response had been sent. Pulls the same
+  // /api/feedback/my endpoint Settings already uses; cached for 60s.
+  const { data: myFeedback = [] } = useQuery<Array<{ admin_response: string | null; response_read: boolean }>>({
+    queryKey: ["/api/feedback/my"],
+    queryFn: async () => {
+      const res = await apiRequest("GET", "/api/feedback/my");
+      return res.json();
+    },
+    enabled: isAuthenticated,
+    refetchInterval: 60000,
+  });
+  const unreadFeedbackResponses = myFeedback.filter(f => f.admin_response && !f.response_read).length;
+
   return (
     <>
     <Sidebar>
@@ -539,6 +554,15 @@ export function AppSidebar() {
               <Link href="/settings" data-testid="link-settings">
                 <Settings className="w-4 h-4" />
                 <span className="text-sm">Settings</span>
+                {unreadFeedbackResponses > 0 && (
+                  <Badge
+                    className="ml-auto h-5 min-w-5 px-1.5 bg-blue-500 hover:bg-blue-500 text-white text-[10px] font-semibold"
+                    data-testid="badge-unread-feedback"
+                    title={`${unreadFeedbackResponses} new repl${unreadFeedbackResponses === 1 ? "y" : "ies"} to your feedback`}
+                  >
+                    {unreadFeedbackResponses}
+                  </Badge>
+                )}
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>

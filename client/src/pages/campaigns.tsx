@@ -81,6 +81,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { ActivationSuggestionsBanner } from "@/components/activation-suggestions-banner";
+import { FeedbackReplyBanner } from "@/components/feedback-reply-banner";
 
 // ============================================================
 // TYPES
@@ -1815,6 +1816,12 @@ export default function CampaignsPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
+
+        {/* Feedback reply banner — shown when an admin has responded to feedback
+            the user submitted. Pulls from /api/feedback/my; renders nothing when
+            there are no unread responses. Clicking the card jumps to /settings
+            where the full reply is shown. Added May 4, 2026. */}
+        <FeedbackReplyBanner />
 
         {/* Activation suggestions — surfaces dormant campaigns with traffic so users
             see exactly which page is wasting traffic and what action to take. Hidden
