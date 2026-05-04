@@ -2081,28 +2081,160 @@ export async function registerRoutes(server: Server, app: Express) {
     } else if (msg.type === 'SA_COMMAND_CLEAR') {
       clearSelection();
     } else if (msg.type === 'SA_COMMAND_FOCUS_BY_TEXT') {
-      var q = (msg.text || '').toLowerCase().trim();
-      if (!q) return;
-      var best = null;
-      var candidates = document.querySelectorAll('h1,h2,h3,h4,h5,h6,strong,b,p,span,div');
-      var bestRank = -1;
+      // ---------- Fuzzy section auto-focus (April 2026 v3) ----------
+      // Sections in our DB include short text (headlines/CTAs) AND long
+      // multi-paragraph body_copy. The page DOM rarely matches verbatim:
+      //   - whitespace + line breaks differ
+      //   - long body sections span multiple <p> siblings, not one element
+      //   - GHL/Elementor wrap headlines in nested <span><strong>...
+      // The old handler did strict equality only, which silently failed for
+      // any section longer than a single line. Result: builder loaded the
+      // top of the page instead of the section the user clicked.
+      //
+      // New strategy:
+      //   1. Normalize both haystack + needle (lowercase, collapse whitespace)
+      //   2. Use a distinctive 50-char SLICE (first non-empty line of the
+      //      section text) as the search needle — long enough to be unique,
+      //      short enough to survive line-break / punctuation drift.
+      //   3. Walk all candidate elements; find every element whose normalized
+      //      innerText CONTAINS the slice. Pick the smallest (most specific)
+      //      that's still a real text container.
+      //   4. For body_copy / multi-paragraph categories, prefer the first
+      //      <p>/<div> in the matched region (so user is taken to the start
+      //      of the section, not a deep span).
+      //   5. Fallback: if no slice match, try first 6 words.
+      //   6. Always scroll + flash a highlight, even if we don't selectElement.
+      function _saNorm(s) {
+        return (s || '').toLowerCase().replace(/\\s+/g, ' ').trim();
+      }
+      function _saFlash(el) {
+        if (!el) return;
+        try {
+          el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          var prevOutline = el.style.outline;
+          var prevOffset = el.style.outlineOffset;
+          var prevTransition = el.style.transition;
+          el.style.transition = 'outline-color 0.6s ease, box-shadow 0.6s ease';
+          el.style.outline = '3px solid #f59e0b';
+          el.style.outlineOffset = '4px';
+          setTimeout(function() {
+            el.style.outline = prevOutline || '';
+            el.style.outlineOffset = prevOffset || '';
+            el.style.transition = prevTransition || '';
+          }, 1400);
+        } catch (_e) {}
+      }
+
+      var qFull = _saNorm(msg.text);
+      if (!qFull) return;
+      var category = (msg.category || '').toLowerCase();
+      var isBody = category === 'body_copy' || category === 'social_proof' ||
+                   category === 'product_stack' || category === 'bonus' ||
+                   category === 'hero_journey' || category === 'pricing' ||
+                   qFull.length > 120;
+
+      // Build the search needle — first sentence/line, capped at 80 chars.
+      var firstLine = (msg.text || '').split(/[\\n\\r]/)[0].trim();
+      if (!firstLine) firstLine = msg.text || '';
+      var needle = _saNorm(firstLine).slice(0, 80);
+      // If the section starts with a very short fragment (like "AI Is the Goldmine..."),
+      // pad the needle with the next characters from the full text so we have
+      // enough signal to be unique.
+      if (needle.length < 25 && qFull.length > needle.length) {
+        needle = qFull.slice(0, Math.min(80, qFull.length));
+      }
+      if (!needle) return;
+
+      // Candidate selector — broad. Excludes structural/non-text elements.
+      var SKIP = { SCRIPT:1, STYLE:1, NOSCRIPT:1, IFRAME:1, SVG:1, HEAD:1, META:1, LINK:1, INPUT:1, TEXTAREA:1, SELECT:1, BUTTON:0 };
+      var candidates = document.body ? document.body.getElementsByTagName('*') : [];
+      var matches = [];
       for (var i = 0; i < candidates.length; i++) {
-        var ct = (candidates[i].innerText || '').toLowerCase().trim();
-        if (!ct || ct !== q) continue;
-        var t = candidates[i].tagName.toUpperCase();
-        var rank = 2;
-        if (t === 'H1' || t === 'H2' || t === 'H3' || t === 'H4' || t === 'H5' || t === 'H6') rank = candidates[i].querySelector('strong,b') ? 10 : 9;
-        else if (t === 'STRONG' || t === 'B') rank = 7;
-        else if (t === 'P') rank = 5;
-        else if (t === 'SPAN') rank = 4;
-        if (rank > bestRank) { bestRank = rank; best = candidates[i]; }
+        var c = candidates[i];
+        if (!c || !c.tagName) continue;
+        var tag = c.tagName.toUpperCase();
+        if (SKIP[tag]) continue;
+        // Skip elements that are not visible (display:none / 0-size)
+        var ct = _saNorm(c.innerText || c.textContent || '');
+        if (!ct) continue;
+        if (ct.indexOf(needle) === -1) continue;
+        // Filter: must have non-trivial text (we want real text containers,
+        // not the entire <body>). Cap by text length ratio so we prefer the
+        // most specific (smallest) container.
+        matches.push({ el: c, len: ct.length, tag: tag });
       }
-      if (best) {
-        selectElement(best);
-        best.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      } else {
+
+      // Fallback: try first 6 words if no match.
+      if (matches.length === 0) {
+        var firstWords = qFull.split(' ').slice(0, 6).join(' ');
+        if (firstWords && firstWords.length >= 12) {
+          for (var j = 0; j < candidates.length; j++) {
+            var c2 = candidates[j];
+            if (!c2 || !c2.tagName) continue;
+            var tag2 = c2.tagName.toUpperCase();
+            if (SKIP[tag2]) continue;
+            var ct2 = _saNorm(c2.innerText || c2.textContent || '');
+            if (!ct2 || ct2.indexOf(firstWords) === -1) continue;
+            matches.push({ el: c2, len: ct2.length, tag: tag2 });
+          }
+        }
+      }
+
+      if (matches.length === 0) {
         window.parent.postMessage({ type: 'SA_FOCUS_NOT_FOUND' }, '*');
+        return;
       }
+
+      // Sort: smallest text length first (most specific match wins).
+      matches.sort(function(a, b) { return a.len - b.len; });
+
+      // For body_copy / long sections, the smallest match is often a tiny
+      // <span> containing one phrase. We want the natural "section start" —
+      // walk up to the nearest <p>, <div>, <section>, or <article> that
+      // wholly contains the match. For short sections (headlines/CTAs), the
+      // smallest specific match IS what we want.
+      var pick = matches[0].el;
+      if (isBody) {
+        var walker = pick;
+        var depth = 0;
+        while (walker && walker !== document.body && depth < 8) {
+          var wt = walker.tagName ? walker.tagName.toUpperCase() : '';
+          if (wt === 'P' || wt === 'SECTION' || wt === 'ARTICLE' ||
+              (wt === 'DIV' && (walker.innerText || '').length > Math.min(60, qFull.length / 2))) {
+            pick = walker;
+            break;
+          }
+          walker = walker.parentElement;
+          depth++;
+        }
+      }
+
+      // For headline-y categories, prefer wrapping H1-H6 if available.
+      if (!isBody) {
+        var h = pick;
+        var hd = 0;
+        while (h && h !== document.body && hd < 4) {
+          var ht = h.tagName ? h.tagName.toUpperCase() : '';
+          if (ht === 'H1' || ht === 'H2' || ht === 'H3' || ht === 'H4' || ht === 'H5' || ht === 'H6') {
+            pick = h; break;
+          }
+          h = h.parentElement; hd++;
+        }
+      }
+
+      // Try to selectElement (so the parent gets SA_ELEMENT_SELECTED and the
+      // sidebar pre-fills original text + computed styles). If the picked
+      // element isn't a valid "selectable" container (e.g. a giant section
+      // wrapper), fall back to scrolling + flashing without selecting.
+      try {
+        var bestForSelect = findBestContainer(pick) || pick;
+        if (bestForSelect && bestForSelect.tagName) {
+          selectElement(bestForSelect);
+          _saFlash(bestForSelect);
+          return;
+        }
+      } catch (_err) {}
+      _saFlash(pick);
     }
   });
 

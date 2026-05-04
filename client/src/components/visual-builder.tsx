@@ -137,12 +137,17 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
     if (!seedText) return;
     const t = setTimeout(() => {
       iframeRef.current?.contentWindow?.postMessage(
-        { type: "SA_COMMAND_FOCUS_BY_TEXT", text: seedText },
+        {
+          type: "SA_COMMAND_FOCUS_BY_TEXT",
+          text: seedText,
+          category: section.category || "",
+          sectionLabel: section.label || "",
+        },
         "*",
       );
     }, 500);
     return () => clearTimeout(t);
-  }, [iframeReady, editingVariant, section.currentText]);
+  }, [iframeReady, editingVariant, section.currentText, section.category, section.label]);
 
   // ---------- Push variantText → iframe live preview on change ----------
   useEffect(() => {
