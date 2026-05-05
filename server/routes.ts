@@ -7839,6 +7839,71 @@ export async function registerRoutes(server: Server, app: Express) {
   });
 
 
+  // GET /api/widget/prehide/:campaignId.js — tiny synchronous anti-flicker shim.
+  //
+  // CONTEXT (May 2026): The existing widget script tag is in BODY on most
+  // customer pages (GHL/Webflow/Wix all inject custom code at end-of-body),
+  // so by the time it executes the page has already painted with control
+  // content. Travis was still seeing the headline flash on his own pages.
+  //
+  // This endpoint serves a separate, tiny ( < 1 KB ) script designed to be
+  // pasted in <head> ABOVE everything else. It synchronously injects a
+  // <style id="sa-hide"> with the campaign's pre-baked selectors so the
+  // protected elements never paint as control. The main widget script
+  // (loaded later, in body) tears the hide style down once variants apply.
+  // A safety timeout reveals after 2.5s so the page never stays stuck.
+  app.get("/api/widget/prehide/:campaignId.js", widgetLimiter, async (req: Request, res: Response) => {
+    const campaignId = parseInt(String(req.params.campaignId));
+    if (isNaN(campaignId)) return res.status(400).send("/* invalid campaign id */");
+
+    let antiFlickerEnabled = false;
+    let preBakedSelectors: string[] = [];
+    try {
+      const r = await pool.query(
+        `SELECT c.anti_flicker_enabled,
+                (SELECT json_agg(ts.selector) FROM test_sections ts
+                 WHERE ts.campaign_id = c.id AND ts.is_active = true AND ts.selector IS NOT NULL) AS selectors
+         FROM campaigns c WHERE c.id = $1`,
+        [campaignId]
+      );
+      const row = r.rows[0];
+      if (row) {
+        antiFlickerEnabled = !!row.anti_flicker_enabled;
+        preBakedSelectors = Array.isArray(row.selectors)
+          ? row.selectors.filter((s: any) => typeof s === "string" && s.length > 0 && s.length < 500)
+          : [];
+      }
+    } catch (err) {
+      console.warn(`[widget/prehide] lookup failed for ${campaignId}:`, (err as Error).message);
+    }
+
+    res.set("Content-Type", "application/javascript");
+    res.set("Cache-Control", "public, max-age=60");
+
+    // Anti-flicker disabled or no selectors yet — ship a no-op so the tag
+    // is harmless to leave in <head>.
+    if (!antiFlickerEnabled || preBakedSelectors.length === 0) {
+      return res.send(`/* siteamoeba prehide v1: no-op for cid=${campaignId} */`);
+    }
+
+    // Inline the selector list. JSON.stringify already escapes quotes safely.
+    const selectorsJson = JSON.stringify(preBakedSelectors);
+    const cssRule = preBakedSelectors.join(",") +
+      "{opacity:0!important;visibility:hidden!important;transition:none!important}";
+
+    const script = `(function(){try{
+var sels=${selectorsJson};
+var st=document.createElement('style');st.id='sa-hide';
+st.textContent=${JSON.stringify(cssRule)};
+(document.head||document.documentElement).appendChild(st);
+// Safety: reveal after 2.5s if main widget never tore the style down
+// (e.g. user blocked api.siteamoeba.com, ad blocker, slow network).
+setTimeout(function(){var s=document.getElementById('sa-hide');if(s&&s.parentNode)s.parentNode.removeChild(s);},2500);
+}catch(e){}})();`;
+
+    res.send(script);
+  });
+
   // GET /api/widget/script/:campaignId — serve the widget JS with API base baked in.
   // We also bake in the campaign's anti-flicker selectors at generation time
   // so first-time visitors don't see the original headline flash before the

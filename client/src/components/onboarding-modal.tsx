@@ -91,8 +91,18 @@ function PlatformGrid({ items }: { items: { platform: string; instruction: strin
 // shipped "YOUR_CAMPAIGN_ID" verbatim and asked users to find it themselves
 // instead of just giving them the value once they had a campaign.
 function buildCampaignPixel(campaignId: number | null): string {
+  // Ship a TWO-TAG snippet:
+  //   1. The pre-hide shim — must go in <head>, runs synchronously before
+  //      the page paints, hides protected sections so visitors never see
+  //      the control flash. Tiny ( < 1KB ).
+  //   2. The main widget script — can go anywhere; handles variant assignment,
+  //      DOM swaps, tracking, and tears the pre-hide style down when ready.
+  // Customers should paste both in <head> for best results, but the widget
+  // script also works in body for backward compat with existing installs.
   const idStr = campaignId != null ? String(campaignId) : "YOUR_CAMPAIGN_ID";
-  return `<script src="https://api.siteamoeba.com/api/widget/script/${idStr}"></script>`;
+  return `<!-- SiteAmoeba: paste BOTH tags inside <head>, prehide first -->
+<script src="https://api.siteamoeba.com/api/widget/prehide/${idStr}.js"></script>
+<script src="https://api.siteamoeba.com/api/widget/script/${idStr}"></script>`;
 }
 
 function buildSteps(campaignId: number | null) {
