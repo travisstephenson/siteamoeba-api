@@ -3325,24 +3325,28 @@ export async function registerRoutes(server: Server, app: Express) {
           }
 
           if (targetPlan !== u.plan) {
-            // Update plan + matching credits/campaigns limits
-            const planLimits: Record<string, { credits: number; campaigns: number }> = {
-              free: { credits: 10, campaigns: 1 },
-              pro: { credits: 50, campaigns: 3 },
-              business: { credits: 200, campaigns: 10 },
-              autopilot: { credits: 1000, campaigns: 50 },
-            };
-            const limits = planLimits[targetPlan] || planLimits.free;
+            // Source-of-truth: the top-of-file PLANS + PLAN_LIMITS maps that
+            // also feed the marketing site and pricing UI. The local map that
+            // used to live here had stale numbers (Pro=50 instead of 500) and
+            // was the reason Austin's upgrade gave him only 10 credits when
+            // Travis flipped his plan manually — fixing once at the canonical
+            // source so manual upgrades + Stripe upgrades stay in sync.
+            const credits = PLANS[targetPlan]?.credits ?? PLANS.free.credits;
+            const campaigns = PLANS[targetPlan]?.campaigns ?? PLANS.free.campaigns;
+            const concurrentTests = PLAN_LIMITS[targetPlan]?.concurrentTests ?? PLAN_LIMITS.free.concurrentTests;
             await pool.query(
-              `UPDATE users SET plan = $1, credits_limit = $2, campaigns_limit = $3 WHERE id = $4`,
-              [targetPlan, limits.credits, limits.campaigns, u.id]
+              `UPDATE users SET plan = $1, credits_limit = $2, campaigns_limit = $3, concurrent_test_limit = $4 WHERE id = $5`,
+              [targetPlan, credits, campaigns, concurrentTests, u.id]
             );
-            console.log(`[plan-sync] User ${u.id} (${u.email}): ${u.plan} → ${targetPlan} (stripe status=${sub.status}, cancel_at=${sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : 'none'})`);
+            console.log(`[plan-sync] User ${u.id} (${u.email}): ${u.plan} → ${targetPlan} (credits=${credits}, campaigns=${campaigns}, concurrent=${concurrentTests}, stripe status=${sub.status}, cancel_at=${sub.cancel_at ? new Date(sub.cancel_at * 1000).toISOString() : 'none'})`);
           }
         } catch (subErr: any) {
           // If Stripe says the subscription doesn't exist anymore, drop to free
           if (subErr?.code === 'resource_missing' && u.plan !== 'free') {
-            await pool.query(`UPDATE users SET plan = 'free', credits_limit = 10, campaigns_limit = 1 WHERE id = $1`, [u.id]);
+            await pool.query(
+              `UPDATE users SET plan = 'free', credits_limit = $1, campaigns_limit = $2, concurrent_test_limit = $3 WHERE id = $4`,
+              [PLANS.free.credits, PLANS.free.campaigns, PLAN_LIMITS.free.concurrentTests, u.id]
+            );
             console.log(`[plan-sync] User ${u.id} (${u.email}): subscription gone → free`);
           } else {
             console.error(`[plan-sync] User ${u.id} error:`, subErr.message);

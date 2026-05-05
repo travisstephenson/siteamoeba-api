@@ -45,7 +45,7 @@ const NEW_PLANS = [
     features: [
       "Everything in Free — minus the SiteAmoeba badge",
       "Brain access — AI trained on real tests",
-      "1,000 AI credits/month",
+      "500 AI credits/month",
       "All page sections (CTAs, social proof, body copy)",
       "Brain Chat for guided optimization",
       "Daily observations",
@@ -63,7 +63,7 @@ const NEW_PLANS = [
     badge: "Beta — 50% off" as string | null,
     features: [
       "Everything in Pro",
-      "2,400 AI credits/month",
+      "1,200 AI credits/month",
       "Multi-seat team access",
       "Advanced analytics & CSV exports",
       "Custom webhook integrations",
@@ -81,7 +81,7 @@ const NEW_PLANS = [
     badge: "Most Popular — 50% off",
     features: [
       "Everything in Business",
-      "6,000 AI credits/month",
+      "3,000 AI credits/month",
       "Autonomous page optimization — no manual work",
       "Continuous multi-section testing",
       "AI-driven winner promotion",
