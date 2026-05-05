@@ -1,6 +1,10 @@
 [build]
   builder = "NIXPACKS"
-  buildCommand = "npm run build"
+  # Force-include devDeps for the build step. Production NODE_ENV is set in
+  # Railway's env, which makes npm ci default to --omit=dev and strips out
+  # tsx/esbuild/vite so the build script literally can't run. Setting
+  # NODE_ENV=development for the build phase only (deploy still runs prod).
+  buildCommand = "NODE_ENV=development npm ci --include=dev && npm run build"
   
 [deploy]
   startCommand = "node dist/index.cjs"
