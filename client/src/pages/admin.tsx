@@ -26,7 +26,7 @@ import {
   LogIn, UserPlus, Trash2, Search, ChevronRight, Building2,
   Shield, PlusCircle, ExternalLink, CheckCircle, XCircle,
   AlertCircle, Share2, Eye, EyeOff, Clock, Zap, ArrowUpDown, Bug,
-  MessageSquare, Send, Reply,
+  MessageSquare, Send, Reply, Sparkles,
 } from "lucide-react";
 
 // ─── Admin token (in-memory, separate from user auth) ─────────────────────────
@@ -790,6 +790,7 @@ export default function AdminPage() {
             <TabsTrigger value="enterprise" className="gap-1.5"><Building2 className="w-3.5 h-3.5" />Enterprise</TabsTrigger>
             <TabsTrigger value="errors" className="gap-1.5"><Bug className="w-3.5 h-3.5" />Errors</TabsTrigger>
             <TabsTrigger value="feedback" className="gap-1.5"><MessageSquare className="w-3.5 h-3.5" />Feedback</TabsTrigger>
+            <TabsTrigger value="badge" className="gap-1.5"><Sparkles className="w-3.5 h-3.5" />Badge</TabsTrigger>
           </TabsList>
 
           {/* Users */}
@@ -967,6 +968,10 @@ export default function AdminPage() {
             <ClientErrorsPanel />
           </TabsContent>
 
+          <TabsContent value="badge" className="mt-4">
+            <BadgeAttributionPanel />
+          </TabsContent>
+
           <TabsContent value="feedback" className="mt-4">
             <FeedbackPanel />
           </TabsContent>
@@ -976,6 +981,192 @@ export default function AdminPage() {
       <UserDetailSheet userId={selectedUserId} onClose={() => setSelectedUserId(null)} />
       <CreateUserDialog open={showCreateUser} onClose={() => setShowCreateUser(false)} />
     </div>
+  );
+}
+
+// ─── Badge Attribution Panel ──────────────────────────────────────────────────
+// Real-time "Page Optimized With SiteAmoeba" badge performance. Refetches
+// every 30 seconds so an admin can leave the tab open and watch traffic
+// roll in. All numbers come from cid=36 (the marketing-site campaign).
+function BadgeAttributionPanel() {
+  const { data, isLoading, refetch, dataUpdatedAt } = useQuery<any>({
+    queryKey: ["/api/admin/badge-attribution"],
+    queryFn: async () => {
+      const res = await fetch(`${API_BASE}/api/admin/badge-attribution`, {
+        headers: { Authorization: `Bearer ${getAdminToken()}` },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    refetchInterval: 30000, // 30s real-time-ish refresh
+    refetchOnWindowFocus: true,
+    staleTime: 15000,
+  });
+
+  if (isLoading) {
+    return <div className="text-sm text-muted-foreground">Loading badge metrics…</div>;
+  }
+  if (!data) {
+    return <div className="text-sm text-muted-foreground">No data yet.</div>;
+  }
+
+  const t = data.totals || {};
+  const lastUpdate = dataUpdatedAt ? new Date(dataUpdatedAt).toLocaleTimeString() : "—";
+  const conversionRate = t.badge_clicks_7d > 0
+    ? ((t.signups_attributed_to_badge_7d / t.badge_clicks_7d) * 100).toFixed(1)
+    : "0.0";
+
+  return (
+    <div className="space-y-4">
+      {/* Header + refresh */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold">“Page Optimized With SiteAmoeba” badge</h3>
+          <p className="text-xs text-muted-foreground">
+            Live attribution from siteamoeba.com (campaign #36). Auto-refreshes every 30s.
+            Last update: {lastUpdate}
+          </p>
+        </div>
+        <Button size="sm" variant="outline" onClick={() => refetch()}>Refresh</Button>
+      </div>
+
+      {/* KPI tiles */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <KpiTile label="Badge clicks (1h)" value={t.badge_clicks_1h} sub="last hour" />
+        <KpiTile label="Badge clicks (24h)" value={t.badge_clicks_24h} sub="last 24 hours" highlight />
+        <KpiTile label="Badge clicks (7d)" value={t.badge_clicks_7d} sub="last 7 days" />
+        <KpiTile label="Total visitors (24h)" value={t.visitors_24h} sub={`${t.visitors_7d} last 7d`} />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+        <KpiTile label="Signups (24h)" value={t.signups_24h} sub="all sources" />
+        <KpiTile label="Attributed signups (7d)" value={t.signups_attributed_to_badge_7d} sub="badge click → signup within 24h" highlight />
+        <KpiTile label="Click → signup rate" value={`${conversionRate}%`} sub="7d, generous attribution" />
+      </div>
+
+      {/* Hourly breakdown */}
+      {data.hourly_today?.length > 0 && (
+        <Card>
+          <CardContent className="p-3">
+            <div className="text-xs font-semibold mb-2">Hourly traffic (last 24h, UTC)</div>
+            <div className="flex items-end gap-1 h-24">
+              {data.hourly_today.map((h: any) => {
+                const total = Number(h.total_visitors || 0);
+                const badge = Number(h.badge_clicks || 0);
+                const max = Math.max(...data.hourly_today.map((x: any) => Number(x.total_visitors || 0)), 1);
+                const heightPct = Math.max((total / max) * 100, 4);
+                const badgePct = total > 0 ? (badge / total) * 100 : 0;
+                return (
+                  <div key={h.hour_utc} className="flex-1 flex flex-col items-center" title={`${h.hour_utc}: ${total} visitors, ${badge} from badge`}>
+                    <div
+                      className="w-full bg-muted rounded-sm relative overflow-hidden"
+                      style={{ height: `${heightPct}%` }}
+                    >
+                      <div className="absolute bottom-0 left-0 right-0 bg-primary" style={{ height: `${badgePct}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-3 text-[10px] text-muted-foreground mt-2">
+              <span className="flex items-center gap-1"><span className="w-2 h-2 bg-primary rounded-sm" />Badge</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 bg-muted rounded-sm" />Other</span>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* Top source customer pages */}
+        <Card>
+          <CardContent className="p-3">
+            <div className="text-xs font-semibold mb-2">Top customer sites driving badge clicks</div>
+            {data.top_source_campaigns?.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No badge clicks yet.</div>
+            ) : (
+              <div className="space-y-1">
+                {data.top_source_campaigns.map((row: any) => (
+                  <div key={row.source_campaign_id} className="flex items-center justify-between text-xs py-1 border-b last:border-0">
+                    <div className="min-w-0 flex-1">
+                      <div className="font-medium truncate">{row.source_campaign_name || `cid ${row.source_campaign_id}`}</div>
+                      <div className="text-[10px] text-muted-foreground truncate">
+                        {row.source_owner_email} · {row.source_owner_plan}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="font-semibold tabular-nums">{row.clicks_7d}</div>
+                      <div className="text-[10px] text-muted-foreground tabular-nums">{row.clicks_24h} today</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Top referrer hosts */}
+        <Card>
+          <CardContent className="p-3">
+            <div className="text-xs font-semibold mb-2">Top referrers (raw)</div>
+            {data.top_referrers?.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No referrer data yet.</div>
+            ) : (
+              <div className="space-y-1">
+                {data.top_referrers.slice(0, 12).map((row: any) => (
+                  <div key={row.host} className="flex items-center justify-between text-xs py-1 border-b last:border-0">
+                    <span className="truncate flex-1 min-w-0">{row.host}</span>
+                    <span className="shrink-0 tabular-nums font-medium ml-2">{row.visits_7d}</span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums ml-2">{row.visits_24h}/24h</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Attributed signups */}
+      <Card>
+        <CardContent className="p-3">
+          <div className="text-xs font-semibold mb-2">
+            Signups attributed to badge ({data.attributed_signups?.length || 0})
+          </div>
+          {(!data.attributed_signups || data.attributed_signups.length === 0) ? (
+            <div className="text-xs text-muted-foreground">
+              No signups have arrived from a badge click yet. Attribution window: badge
+              click → signup within 24 hours.
+            </div>
+          ) : (
+            <div className="space-y-1">
+              {data.attributed_signups.map((u: any) => (
+                <div key={u.user_id} className="flex items-center justify-between text-xs py-1 border-b last:border-0">
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium truncate">{u.name || u.email}</div>
+                    <div className="text-[10px] text-muted-foreground truncate">{u.email}</div>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <Badge variant={u.plan === "free" ? "secondary" : "default"} className="text-[10px]">{u.plan}</Badge>
+                    <div className="text-[10px] text-muted-foreground">{new Date(u.created_at).toLocaleString()}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function KpiTile({ label, value, sub, highlight }: { label: string; value: number | string; sub?: string; highlight?: boolean }) {
+  return (
+    <Card className={highlight ? "border-primary/30 bg-primary/5" : undefined}>
+      <CardContent className="p-3">
+        <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+        <div className="text-2xl font-bold tabular-nums mt-0.5">{value ?? 0}</div>
+        {sub && <div className="text-[10px] text-muted-foreground">{sub}</div>}
+      </CardContent>
+    </Card>
   );
 }
 

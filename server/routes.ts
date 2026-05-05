@@ -9443,6 +9443,152 @@ setTimeout(function(){var s=document.getElementById('sa-hide');if(s&&s.parentNod
     res.json(result.rows);
   });
 
+  // GET /api/admin/badge-attribution — real-time "Page Optimized With
+  // SiteAmoeba" badge performance for the marketing-site campaign (cid=36).
+  //
+  // Returns:
+  //   - badge_clicks: visitors who arrived with utm_source=siteamoeba_badge
+  //   - other_visitors: everyone else who hit siteamoeba.com today
+  //   - top_source_campaigns: which customer cids drove the most badge clicks
+  //     (we encode the source cid in utm_campaign as 'cid_<id>')
+  //   - signups_attributed: free-plan signups created within 24h of a badge
+  //     click from the same anonymous visitor session (best-effort attribution)
+  //   - hourly_today: hourly badge-click counts so the admin can see real-time
+  //   - referrers: top customer-page referrers (works even if utm_* is
+  //     stripped by an embed platform that rewrites links)
+  app.get("/api/admin/badge-attribution", requireAdmin, async (_req: Request, res: Response) => {
+    try {
+      // Single round-trip: aggregate windows + breakdowns. We treat "today"
+      // as the last 24h sliding window so the admin sees fresh data even on
+      // a browser opened pre-midnight UTC.
+      const totals = await pool.query(`
+        WITH v AS (
+          SELECT * FROM visitors
+          WHERE campaign_id = 36
+            AND first_seen::timestamptz > now() - INTERVAL '7 days'
+        )
+        SELECT
+          COUNT(*) AS visitors_7d,
+          COUNT(*) FILTER (WHERE first_seen::timestamptz > now() - INTERVAL '24 hours') AS visitors_24h,
+          COUNT(*) FILTER (WHERE first_seen::timestamptz > now() - INTERVAL '1 hour') AS visitors_1h,
+          COUNT(*) FILTER (WHERE utm_source = 'siteamoeba_badge') AS badge_clicks_7d,
+          COUNT(*) FILTER (WHERE utm_source = 'siteamoeba_badge' AND first_seen::timestamptz > now() - INTERVAL '24 hours') AS badge_clicks_24h,
+          COUNT(*) FILTER (WHERE utm_source = 'siteamoeba_badge' AND first_seen::timestamptz > now() - INTERVAL '1 hour') AS badge_clicks_1h,
+          COUNT(*) FILTER (WHERE utm_source != 'siteamoeba_badge' OR utm_source IS NULL) AS other_visitors_7d
+        FROM v
+      `);
+
+      // Top customer pages driving badge clicks (utm_campaign = 'cid_<id>')
+      const topCampaigns = await pool.query(`
+        SELECT
+          REPLACE(v.utm_campaign, 'cid_', '')::int AS source_campaign_id,
+          c.name AS source_campaign_name,
+          c.url AS source_campaign_url,
+          u.email AS source_owner_email,
+          u.plan AS source_owner_plan,
+          COUNT(*) AS clicks_7d,
+          COUNT(*) FILTER (WHERE v.first_seen::timestamptz > now() - INTERVAL '24 hours') AS clicks_24h
+        FROM visitors v
+        LEFT JOIN campaigns c ON c.id = NULLIF(REPLACE(v.utm_campaign, 'cid_', ''), '')::int
+        LEFT JOIN users u ON u.id = c.user_id
+        WHERE v.campaign_id = 36
+          AND v.utm_source = 'siteamoeba_badge'
+          AND v.utm_campaign LIKE 'cid_%'
+          AND v.first_seen::timestamptz > now() - INTERVAL '7 days'
+        GROUP BY 1, 2, 3, 4, 5
+        ORDER BY clicks_7d DESC
+        LIMIT 20
+      `);
+
+      // Top referrer hostnames (this catches badge clicks even when utm_*
+      // is stripped by some embed platforms that rewrite links).
+      const referrers = await pool.query(`
+        SELECT
+          regexp_replace(referrer, '^https?://([^/]+).*', '\\1') AS host,
+          COUNT(*) AS visits_7d,
+          COUNT(*) FILTER (WHERE first_seen::timestamptz > now() - INTERVAL '24 hours') AS visits_24h
+        FROM visitors
+        WHERE campaign_id = 36
+          AND first_seen::timestamptz > now() - INTERVAL '7 days'
+          AND referrer IS NOT NULL AND referrer != ''
+        GROUP BY 1
+        ORDER BY visits_7d DESC
+        LIMIT 20
+      `);
+
+      // Hourly buckets (last 24h) so the admin can see real-time arrival.
+      const hourly = await pool.query(`
+        SELECT
+          to_char(date_trunc('hour', first_seen::timestamptz), 'YYYY-MM-DD HH24:00') AS hour_utc,
+          COUNT(*) FILTER (WHERE utm_source = 'siteamoeba_badge') AS badge_clicks,
+          COUNT(*) AS total_visitors
+        FROM visitors
+        WHERE campaign_id = 36
+          AND first_seen::timestamptz > now() - INTERVAL '24 hours'
+        GROUP BY 1 ORDER BY 1
+      `);
+
+      // Best-effort signup attribution. We treat a signup as "attributed" if
+      // a badge-click visitor arrived within 24h before the signup. Since we
+      // don't have a stable cross-session ID between marketing visitor and
+      // app signup, this is intentionally generous — it gives an upper bound.
+      // Stripe customer state and email match are available later for a
+      // tighter cohort if we want to harden this.
+      const attributedSignups = await pool.query(`
+        SELECT
+          u.id AS user_id,
+          u.email,
+          u.name,
+          u.plan,
+          u.created_at
+        FROM users u
+        WHERE u.created_at::timestamptz > now() - INTERVAL '7 days'
+          AND EXISTS (
+            SELECT 1 FROM visitors v
+            WHERE v.campaign_id = 36
+              AND v.utm_source = 'siteamoeba_badge'
+              AND v.first_seen::timestamptz BETWEEN u.created_at::timestamptz - INTERVAL '24 hours' AND u.created_at::timestamptz
+          )
+        ORDER BY u.created_at DESC
+        LIMIT 50
+      `);
+
+      const signupsTotal = await pool.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE created_at::timestamptz > now() - INTERVAL '24 hours') AS signups_24h,
+          COUNT(*) FILTER (WHERE created_at::timestamptz > now() - INTERVAL '7 days') AS signups_7d
+        FROM users
+      `);
+
+      const t = totals.rows[0] || {};
+      const s = signupsTotal.rows[0] || {};
+
+      res.json({
+        generated_at: new Date().toISOString(),
+        marketing_campaign_id: 36,
+        totals: {
+          visitors_1h: Number(t.visitors_1h || 0),
+          visitors_24h: Number(t.visitors_24h || 0),
+          visitors_7d: Number(t.visitors_7d || 0),
+          badge_clicks_1h: Number(t.badge_clicks_1h || 0),
+          badge_clicks_24h: Number(t.badge_clicks_24h || 0),
+          badge_clicks_7d: Number(t.badge_clicks_7d || 0),
+          other_visitors_7d: Number(t.other_visitors_7d || 0),
+          signups_24h: Number(s.signups_24h || 0),
+          signups_7d: Number(s.signups_7d || 0),
+          signups_attributed_to_badge_7d: attributedSignups.rows.length,
+        },
+        hourly_today: hourly.rows,
+        top_source_campaigns: topCampaigns.rows,
+        top_referrers: referrers.rows,
+        attributed_signups: attributedSignups.rows,
+      });
+    } catch (err) {
+      console.error("[admin/badge-attribution]", (err as Error).message);
+      res.status(500).json({ error: "Failed to load badge attribution" });
+    }
+  });
+
   // GET /api/admin/client-errors — view recent React crashes for debugging
   app.get("/api/admin/client-errors", requireAdmin, async (req: Request, res: Response) => {
     try {

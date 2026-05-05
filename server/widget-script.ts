@@ -2273,7 +2273,7 @@ export function generateWidgetScript(
           '.sa-x:hover{opacity:1;}' +
           '@media (max-width:480px){.sa-pill{font-size:11px;padding:7px 10px;}}' +
         '</style>' +
-        '<a class="sa-pill" href="https://siteamoeba.com/?ref=badge&cid=' + CID + '" target="_blank" rel="noopener" aria-label="Page optimized with SiteAmoeba">' +
+        '<a class="sa-pill" href="https://siteamoeba.com/?utm_source=siteamoeba_badge&utm_medium=badge&utm_campaign=cid_' + CID + '" target="_blank" rel="noopener" aria-label="Page optimized with SiteAmoeba">' +
           '<span class="sa-dot"></span>' +
           '<span>Page Optimized With SiteAmoeba.com</span>' +
         '</a>';
