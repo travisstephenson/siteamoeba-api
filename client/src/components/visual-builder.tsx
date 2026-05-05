@@ -130,12 +130,24 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
     return () => window.removeEventListener("message", onMessage);
   }, []);
 
-  // ---------- Auto-focus the section's element when the iframe is ready ----------
+  // ---------- Auto-focus the section's element ----------
+  // Strategy: send the focus command BOTH on initial iframe load AND each time
+  // the bridge posts SA_BRIDGE_READY. SPAs (Nuxt/Next/Vue) hydrate content
+  // after the iframe load event fires, and the bridge sends ready pings at
+  // 0/1/2.5/4 seconds. The bridge also retries internally up to 6 times if
+  // the section text isn't in the DOM yet, so the user sees a scroll+highlight
+  // as soon as the page is hydrated enough to find the target.
+  const focusedOnceRef = useRef(false);
+  useEffect(() => {
+    focusedOnceRef.current = false; // re-allow when section changes
+  }, [section.id]);
+
   useEffect(() => {
     if (!iframeReady) return;
     const seedText = editingVariant?.captureOriginalText || section.currentText;
     if (!seedText) return;
-    const t = setTimeout(() => {
+
+    function sendFocus() {
       iframeRef.current?.contentWindow?.postMessage(
         {
           type: "SA_COMMAND_FOCUS_BY_TEXT",
@@ -145,9 +157,25 @@ export function VisualBuilder({ open, onClose, campaignId, editingVariant, secti
         },
         "*",
       );
-    }, 500);
-    return () => clearTimeout(t);
-  }, [iframeReady, editingVariant, section.currentText, section.category, section.label]);
+    }
+
+    // Initial send after a short delay so iframe has its first paint.
+    const t1 = setTimeout(() => { sendFocus(); focusedOnceRef.current = true; }, 400);
+
+    // Listen for SA_BRIDGE_READY pings — bridge sends them at 0/1/2.5/4s
+    // after script load. Re-send the focus command each time so a hydrated
+    // SPA gets focused even if the first attempt found nothing.
+    function onMessage(e: MessageEvent) {
+      if (e.data?.type === "SA_BRIDGE_READY") {
+        sendFocus();
+      }
+    }
+    window.addEventListener("message", onMessage);
+    return () => {
+      clearTimeout(t1);
+      window.removeEventListener("message", onMessage);
+    };
+  }, [iframeReady, editingVariant, section.id, section.currentText, section.category, section.label]);
 
   // ---------- Push variantText → iframe live preview on change ----------
   useEffect(() => {

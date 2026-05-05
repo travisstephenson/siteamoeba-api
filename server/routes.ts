@@ -2107,6 +2107,48 @@ export async function registerRoutes(server: Server, app: Express) {
     } else if (msg.type === 'SA_COMMAND_CLEAR') {
       clearSelection();
     } else if (msg.type === 'SA_COMMAND_FOCUS_BY_TEXT') {
+      // Cache the request and run a retry loop. SPAs (Nuxt/Next/Vue) often
+      // stream content in well after the iframe load event fires, so the
+      // first attempt can run against a half-rendered DOM. We retry up to 6
+      // times over 4.5 seconds before giving up.
+      var _saFocusReq = { text: msg.text, category: msg.category, sectionLabel: msg.sectionLabel };
+      var _saAttempt = 0;
+      function _saTryFocus() {
+        _saAttempt++;
+        var ok = _saFocusOnce(_saFocusReq);
+        if (!ok && _saAttempt < 6) {
+          setTimeout(_saTryFocus, 400 + (_saAttempt * 250));
+        } else if (!ok) {
+          window.parent.postMessage({ type: 'SA_FOCUS_NOT_FOUND' }, '*');
+        }
+      }
+      _saTryFocus();
+    }
+  });
+
+  // ---------- Bridge-ready signal ----------
+  // Tell the parent visual-builder once the iframe has both finished its
+  // initial paint AND the page has substantial hydrated content. This lets
+  // the parent send SA_COMMAND_FOCUS_BY_TEXT at the right time instead of
+  // racing the SPA framework.
+  function _saSendReady() {
+    try {
+      var bodyTextLen = (document.body && (document.body.innerText || document.body.textContent) || '').length;
+      window.parent.postMessage({
+        type: 'SA_BRIDGE_READY',
+        bodyTextLen: bodyTextLen,
+        readyState: document.readyState,
+      }, '*');
+    } catch (e) {}
+  }
+  // Send once on initial load, again at 1s, 2.5s, 4s to cover SPA late-render.
+  if (document.readyState === 'complete') _saSendReady();
+  else window.addEventListener('load', _saSendReady, { once: true });
+  setTimeout(_saSendReady, 1000);
+  setTimeout(_saSendReady, 2500);
+  setTimeout(_saSendReady, 4000);
+
+  function _saFocusOnce(req) {
       // ---------- Fuzzy section auto-focus (April 2026 v3) ----------
       // Sections in our DB include short text (headlines/CTAs) AND long
       // multi-paragraph body_copy. The page DOM rarely matches verbatim:
@@ -2151,9 +2193,9 @@ export async function registerRoutes(server: Server, app: Express) {
         } catch (_e) {}
       }
 
-      var qFull = _saNorm(msg.text);
-      if (!qFull) return;
-      var category = (msg.category || '').toLowerCase();
+      var qFull = _saNorm(req.text);
+      if (!qFull) return false;
+      var category = (req.category || '').toLowerCase();
       var isBody = category === 'body_copy' || category === 'social_proof' ||
                    category === 'product_stack' || category === 'bonus' ||
                    category === 'hero_journey' || category === 'pricing' ||
@@ -2183,8 +2225,8 @@ export async function registerRoutes(server: Server, app: Express) {
         return found;
       }
 
-      var firstLine = (msg.text || '').split(/[\\n\\r]/)[0].trim();
-      if (!firstLine) firstLine = (msg.text || '');
+      var firstLine = (req.text || '').split(/[\\n\\r]/)[0].trim();
+      if (!firstLine) firstLine = (req.text || '');
       var firstLineNorm = _saNorm(firstLine);
 
       // Build needle candidates in order of preference.
@@ -2225,12 +2267,12 @@ export async function registerRoutes(server: Server, app: Express) {
       }
 
       if (matches.length === 0) {
-        window.parent.postMessage({ type: 'SA_FOCUS_NOT_FOUND' }, '*');
-        return;
+        // Don't send NOT_FOUND yet — caller will retry. Just return false.
+        return false;
       }
 
       // Sort: smallest text length first (most specific match wins).
-      matches.sort(function(a, b) { return a.len - b.len; });
+      matches.sort(function(_a, _b) { return _a.len - _b.len; });
 
       // For body_copy / long sections, the smallest match is often a tiny
       // <span> containing one phrase. We want the natural "section start" —
@@ -2275,14 +2317,14 @@ export async function registerRoutes(server: Server, app: Express) {
         if (bestForSelect && bestForSelect.tagName) {
           selectElement(bestForSelect);
           _saFlash(bestForSelect);
-          return;
+          return true;
         }
       } catch (_err) {}
       _saFlash(pick);
+      return true;
     }
-  });
 
-  console.log('[SiteAmoeba] Visual builder bridge v2 loaded for campaign ' + _SA_CAMPAIGN_ID);
+  console.log('[SiteAmoeba] Visual builder bridge v3 loaded for campaign ' + _SA_CAMPAIGN_ID);
 })();
 <\/script>`;
     }
