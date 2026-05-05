@@ -10,44 +10,46 @@ export function generateWidgetScript(
   antiFlickerEnabled: boolean = false,
   showFreeBadge: boolean = false,
   campaignUrl: string = "",
+  conversionUrl: string = "",
 ): string {
   return `(function(){
   var API = "${apiBase}";
   var CID = ${campaignId};
-  var SA_CAMPAIGN_URL = ${JSON.stringify(campaignUrl || "")};
+  var SA_CONVERSION_URL = ${JSON.stringify(conversionUrl || "")};
 
   // ============================================================
-  // OFFER-PAGE GUARD (May 2026 — Tiffany incident)
+  // CONVERSION-PIXEL GUARD (May 2026 — Tiffany incident, v2)
   // ============================================================
   // The same widget script gets installed on TWO pages: the offer/landing
   // page (where we run A/B tests) AND the thank-you/success page (where the
-  // conversion pixel reads vid + fires conversion events). Without this
-  // guard, the thank-you page also gets variant DOM swaps because the
-  // selectors for the offer-page test happen to match elements on the
-  // thank-you page (Tiffany's H1 is the same wrapper class on both pages).
+  // pixel reads vid + fires the conversion event). On the thank-you page we
+  // must NEVER mutate the DOM, even if a test selector happens to match an
+  // element there.
   //
-  // Logic: compare the campaign's configured URL pathname against the current
-  // page's pathname. If they don't match (allowing for trailing slashes,
-  // query strings, fragments), we treat this as the conversion-pixel context
-  // and skip ALL variant behavior. Visitor tracking + conversion tracking
-  // still fire.
-  function _saIsOfferPage() {
+  // Strategy: deny-list using the campaign's configured conversion_url.
+  // Earlier (busted) attempt: try to match the offer URL exactly. That
+  // failed because customer offer pages often live at a different path
+  // than the campaign URL (e.g. campaign URL = '/', actual page = '/main1'),
+  // and we accidentally suppressed swaps on the real offer page too.
+  //
+  // Now: only suppress swaps when the page IS the conversion URL. Any other
+  // page on any other path runs normally. If conversion_url is empty
+  // (legacy customers), we behave like before — no gating, no breakage.
+  function _saIsConversionPage() {
     try {
-      if (!SA_CAMPAIGN_URL) return true; // No campaign URL configured — fall back to old behavior
-      var u = new URL(SA_CAMPAIGN_URL);
+      if (!SA_CONVERSION_URL) return false;
+      var u = new URL(SA_CONVERSION_URL);
       var here = location.pathname.replace(/\\/+$/, "") || "/";
       var there = u.pathname.replace(/\\/+$/, "") || "/";
-      // Host has to match too — don't let a localhost test page accidentally
-      // count as the offer page. We allow same-host or no-host (relative).
       var hostOk = !u.hostname || location.hostname === u.hostname || location.hostname === "www." + u.hostname || "www." + location.hostname === u.hostname;
       return hostOk && (here === there || here.indexOf(there + "/") === 0);
     } catch (e) {
-      return true; // Parse failed — don't break existing customers, behave as before
+      return false; // On parse error: don't gate (avoid silently breaking things)
     }
   }
-  var SA_IS_OFFER_PAGE = _saIsOfferPage();
+  var SA_IS_OFFER_PAGE = !_saIsConversionPage();
   if (!SA_IS_OFFER_PAGE) {
-    try { console.log("[SiteAmoeba] Conversion-pixel mode (not offer page) for cid=" + CID + " \u2014 variant swaps disabled"); } catch(e){}
+    try { console.log("[SiteAmoeba] Conversion-pixel page detected for cid=" + CID + " \u2014 variant swaps disabled, tracking continues"); } catch(e){}
   }
 
   // === ANTI-FLICKER PRE-HIDE ===
