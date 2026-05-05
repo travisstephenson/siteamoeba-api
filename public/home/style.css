@@ -1220,6 +1220,19 @@ a, button, [role="button"] {
 
 .pricing__card-features li:last-child { border-bottom: none; }
 
+/* Free-plan branding-trade-off note: subtle italic + accent color so it
+   reads as a footnote-style disclosure rather than a feature checkmark. */
+.pricing__card-feature--note {
+  font-style: italic;
+  font-size: calc(var(--text-sm) * 0.95);
+  opacity: 0.85;
+}
+.pricing__card-feature--note::before {
+  content: " · ";
+  color: var(--accent, #10b981);
+  font-style: normal;
+}
+
 .pricing__brain-icon {
   font-size: 1rem;
 }

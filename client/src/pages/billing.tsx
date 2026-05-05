@@ -30,6 +30,7 @@ const NEW_PLANS = [
       "Analytics dashboard",
       "Embed widget & conversion pixel",
       "Behavioral tracking",
+      "“Page Optimized With SiteAmoeba” badge shown on your site",
     ],
   },
   {
@@ -42,7 +43,7 @@ const NEW_PLANS = [
     highlight: false,
     badge: "Beta — 50% off" as string | null,
     features: [
-      "Everything in Free",
+      "Everything in Free — minus the SiteAmoeba badge",
       "Brain access — AI trained on real tests",
       "1,000 AI credits/month",
       "All page sections (CTAs, social proof, body copy)",
