@@ -9,10 +9,46 @@ export function generateWidgetScript(
   preBakedSelectors: string[] = [],
   antiFlickerEnabled: boolean = false,
   showFreeBadge: boolean = false,
+  campaignUrl: string = "",
 ): string {
   return `(function(){
   var API = "${apiBase}";
   var CID = ${campaignId};
+  var SA_CAMPAIGN_URL = ${JSON.stringify(campaignUrl || "")};
+
+  // ============================================================
+  // OFFER-PAGE GUARD (May 2026 — Tiffany incident)
+  // ============================================================
+  // The same widget script gets installed on TWO pages: the offer/landing
+  // page (where we run A/B tests) AND the thank-you/success page (where the
+  // conversion pixel reads vid + fires conversion events). Without this
+  // guard, the thank-you page also gets variant DOM swaps because the
+  // selectors for the offer-page test happen to match elements on the
+  // thank-you page (Tiffany's H1 is the same wrapper class on both pages).
+  //
+  // Logic: compare the campaign's configured URL pathname against the current
+  // page's pathname. If they don't match (allowing for trailing slashes,
+  // query strings, fragments), we treat this as the conversion-pixel context
+  // and skip ALL variant behavior. Visitor tracking + conversion tracking
+  // still fire.
+  function _saIsOfferPage() {
+    try {
+      if (!SA_CAMPAIGN_URL) return true; // No campaign URL configured — fall back to old behavior
+      var u = new URL(SA_CAMPAIGN_URL);
+      var here = location.pathname.replace(/\\/+$/, "") || "/";
+      var there = u.pathname.replace(/\\/+$/, "") || "/";
+      // Host has to match too — don't let a localhost test page accidentally
+      // count as the offer page. We allow same-host or no-host (relative).
+      var hostOk = !u.hostname || location.hostname === u.hostname || location.hostname === "www." + u.hostname || "www." + location.hostname === u.hostname;
+      return hostOk && (here === there || here.indexOf(there + "/") === 0);
+    } catch (e) {
+      return true; // Parse failed — don't break existing customers, behave as before
+    }
+  }
+  var SA_IS_OFFER_PAGE = _saIsOfferPage();
+  if (!SA_IS_OFFER_PAGE) {
+    try { console.log("[SiteAmoeba] Conversion-pixel mode (not offer page) for cid=" + CID + " \u2014 variant swaps disabled"); } catch(e){}
+  }
 
   // === ANTI-FLICKER PRE-HIDE ===
   // Two-stage hiding so the page NEVER flashes the control text:
@@ -35,7 +71,10 @@ export function generateWidgetScript(
   //   * The widget's own handleAssignData calls saReveal() when variants land
   //   * A 2.5s setTimeout reveal fires unconditionally (see later in this file)
   //   So the page can NEVER stay stuck hidden, even if every network call fails.
-  var SA_PREHIDE_SELECTORS = ${JSON.stringify(antiFlickerEnabled ? preBakedSelectors : [])};
+  // OFFER-PAGE GUARD: empty selector list when this isn't the offer page so
+  // pre-hide is a no-op. We don't want a thank-you page to ever pre-hide its
+  // own headline based on the offer page's selectors.
+  var SA_PREHIDE_SELECTORS = SA_IS_OFFER_PAGE ? ${JSON.stringify(antiFlickerEnabled ? preBakedSelectors : [])} : [];
   (function preHide(){
     try {
       // STAGE 1: pre-baked selectors (works on first visit)
@@ -63,7 +102,10 @@ export function generateWidgetScript(
 
   // Refresh the bundle cache for next page load (fire-and-forget).
   // Runs in parallel with the assign call below so it doesn't slow anything down.
+  // OFFER-PAGE GUARD: skip on conversion-pixel pages — we don't want to cache
+  // any variant selectors on the thank-you page.
   (function refreshBundle(){
+    if (!SA_IS_OFFER_PAGE) return;
     try {
       fetch(API + "/api/widget/bundle?cid=" + CID, { cache: "no-store" })
         .then(function(r){ return r.json(); })
@@ -1291,6 +1333,16 @@ export function generateWidgetScript(
   function handleAssignData(data) {
       // Remember this payload so SPA navigation + bfcache can replay it.
       SA_H.lastAssignData = data;
+
+      // OFFER-PAGE GUARD: on conversion-pixel pages (thank-you / success) we
+      // never apply variants to the DOM. Visitor tracking + conversion event
+      // capture continue normally (those are wired up separately downstream).
+      // This is the fix for Tiffany's thank-you page being mutated by an
+      // offer-page test selector that happened to match her thank-you H1.
+      if (!SA_IS_OFFER_PAGE) {
+        if (typeof window._saReveal === "function") window._saReveal();
+        return;
+      }
 
       // Reveal early for control-only assignments (no variant to wait for).
       if (typeof window._saRevealIfControl === "function") window._saRevealIfControl(data);

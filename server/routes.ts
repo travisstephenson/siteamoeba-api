@@ -7890,12 +7890,40 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.send(`/* siteamoeba prehide v1: no-op for cid=${campaignId} */`);
     }
 
+    // Look up the campaign URL so we can gate the pre-hide to the offer page
+    // only. This is the prehide-side companion to the main widget's
+    // SA_IS_OFFER_PAGE guard — on a thank-you/success page that's also got
+    // the prehide tag in <head>, we must NOT hide elements that happen to
+    // match the offer-page selectors (Tiffany incident, May 2026).
+    let campaignUrl = "";
+    try {
+      const urlRow = await pool.query(
+        `SELECT url FROM campaigns WHERE id = $1`,
+        [campaignId]
+      );
+      campaignUrl = urlRow.rows[0]?.url || "";
+    } catch (e) { /* non-fatal */ }
+
     // Inline the selector list. JSON.stringify already escapes quotes safely.
     const selectorsJson = JSON.stringify(preBakedSelectors);
     const cssRule = preBakedSelectors.join(",") +
       "{opacity:0!important;visibility:hidden!important;transition:none!important}";
 
     const script = `(function(){try{
+// OFFER-PAGE GUARD: only pre-hide when the prehide is loaded on the
+// campaign's actual offer page. On thank-you/success pages the same script
+// tag would otherwise hide unrelated elements that happen to match the
+// offer-page selectors. We compare host + pathname; bail silently otherwise.
+var SA_CAMPAIGN_URL=${JSON.stringify(campaignUrl || "")};
+if (SA_CAMPAIGN_URL) {
+  try {
+    var u=new URL(SA_CAMPAIGN_URL);
+    var here=location.pathname.replace(/\\/+$/,'')||'/';
+    var there=u.pathname.replace(/\\/+$/,'')||'/';
+    var hostOk=!u.hostname||location.hostname===u.hostname||location.hostname==='www.'+u.hostname||'www.'+location.hostname===u.hostname;
+    if (!(hostOk && (here===there || here.indexOf(there+'/')===0))) return;
+  } catch(e){}
+}
 var sels=${selectorsJson};
 var st=document.createElement('style');st.id='sa-hide';
 st.textContent=${JSON.stringify(cssRule)};
@@ -7927,12 +7955,14 @@ setTimeout(function(){var s=document.getElementById('sa-hide');if(s&&s.parentNod
     let antiFlickerEnabled = false;
     let preBakedSelectors: string[] = [];
     let showFreeBadge = false;
+    let campaignUrl = "";
     try {
       // Pull anti-flicker config + active selectors + the campaign owner's
       // billing plan in one round-trip. The plan drives whether we ship the
       // "Page Optimized With SiteAmoeba.com" badge code (free plan only).
       const r = await pool.query(
         `SELECT c.anti_flicker_enabled,
+                c.url AS campaign_url,
                 u.plan AS owner_plan,
                 (SELECT json_agg(ts.selector) FROM test_sections ts
                  WHERE ts.campaign_id = c.id AND ts.is_active = true AND ts.selector IS NOT NULL) AS selectors
@@ -7950,13 +7980,14 @@ setTimeout(function(){var s=document.getElementById('sa-hide');if(s&&s.parentNod
         // missing (orphaned campaign), default to NOT showing the badge so we
         // never accidentally brand a paid customer's page.
         showFreeBadge = String(row.owner_plan || "").toLowerCase() === "free";
+        campaignUrl = row.campaign_url || "";
       }
     } catch (err) {
       // Non-fatal — widget will still work, just without first-visit flicker protection.
       console.warn(`[widget/script] config lookup failed for ${campaignId}:`, (err as Error).message);
     }
 
-    const script = generateWidgetScript(baseUrl, campaignId, preBakedSelectors, antiFlickerEnabled, showFreeBadge);
+    const script = generateWidgetScript(baseUrl, campaignId, preBakedSelectors, antiFlickerEnabled, showFreeBadge, campaignUrl);
     res.set("Content-Type", "application/javascript");
     res.set("Cache-Control", "public, max-age=30"); // short TTL so fixes propagate quickly
     res.send(script);
