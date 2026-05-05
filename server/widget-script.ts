@@ -8,6 +8,7 @@ export function generateWidgetScript(
   campaignId: number,
   preBakedSelectors: string[] = [],
   antiFlickerEnabled: boolean = false,
+  showFreeBadge: boolean = false,
 ): string {
   return `(function(){
   var API = "${apiBase}";
@@ -2228,6 +2229,76 @@ export function generateWidgetScript(
   // (stored globally so handleAssignData can call it)
   window._saInitLeadTracking = initLeadTracking;
   window._saLeadTrackingInited = false;
+
+  // ============================================================
+  // FREE-PLAN BADGE
+  // ============================================================
+  // Renders a small "Page Optimized With SiteAmoeba.com" pill in the
+  // bottom-left of the customer's page when the campaign owner is on the
+  // free plan. The flag is computed at script-generation time on the server
+  // (see /api/widget/script/:id route) so the badge can never appear if the
+  // owner has paid — the badge code literally isn't shipped.
+  //
+  // Implementation notes:
+  //   * Skip on the visual-editor proxy host (the campaign owner's own admin
+  //     UI iframes the page; we don't want them seeing the badge while editing).
+  //   * Skip if it's already injected (in case multiple campaigns share a domain).
+  //   * Skip on print + iframes inside the customer's own page that aren't
+  //     the top window — we only want the badge once per visible page.
+  //   * Inject after DOMContentLoaded so we don't fight with anti-flicker
+  //     pre-hide / paint timing.
+  //   * Uses Shadow DOM so customer page styles can't accidentally bury or
+  //     break the badge, and our styles can't bleed into their page.
+  ${showFreeBadge ? `(function saBadge(){
+    try {
+      // Don't show inside the visual-editor proxy iframe
+      if (window.location.hostname === 'api.siteamoeba.com') return;
+      // Don't double-inject if multiple campaign scripts run on the same page
+      if (document.getElementById('sa-free-badge-host')) return;
+      // Don't render in nested iframes — only top window
+      if (window.top !== window.self) return;
+
+      function mount() {
+        if (document.getElementById('sa-free-badge-host')) return;
+        var host = document.createElement('div');
+        host.id = 'sa-free-badge-host';
+        host.style.cssText = 'all:initial;position:fixed;left:16px;bottom:16px;z-index:2147483646;pointer-events:auto';
+        var shadow = host.attachShadow ? host.attachShadow({ mode: 'closed' }) : null;
+        var html = '<style>' +
+          ':host,*{box-sizing:border-box;}' +
+          '.sa-pill{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:9999px;background:#10b981;color:#fff;font:600 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;text-decoration:none;box-shadow:0 4px 12px rgba(0,0,0,.18),0 0 0 1px rgba(255,255,255,.08);transition:transform .15s ease,box-shadow .15s ease;cursor:pointer;}' +
+          '.sa-pill:hover{transform:translateY(-1px);box-shadow:0 6px 16px rgba(0,0,0,.22),0 0 0 1px rgba(255,255,255,.12);}' +
+          '.sa-dot{width:8px;height:8px;border-radius:50%;background:#fff;display:inline-block;}' +
+          '.sa-x{margin-left:4px;opacity:.7;cursor:pointer;background:transparent;border:0;color:#fff;font:600 12px/1 inherit;padding:0 0 0 4px;}' +
+          '.sa-x:hover{opacity:1;}' +
+          '@media (max-width:480px){.sa-pill{font-size:11px;padding:7px 10px;}}' +
+        '</style>' +
+        '<a class="sa-pill" href="https://siteamoeba.com/?ref=badge&cid=' + CID + '" target="_blank" rel="noopener" aria-label="Page optimized with SiteAmoeba">' +
+          '<span class="sa-dot"></span>' +
+          '<span>Page Optimized With SiteAmoeba.com</span>' +
+        '</a>';
+        if (shadow) {
+          var wrapper = document.createElement('div');
+          wrapper.innerHTML = html;
+          while (wrapper.firstChild) shadow.appendChild(wrapper.firstChild);
+        } else {
+          // Shadow DOM unsupported (very old browsers) — fallback to inline,
+          // accept some style-leak risk in exchange for any visibility at all.
+          host.innerHTML = html;
+        }
+        (document.body || document.documentElement).appendChild(host);
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', mount, { once: true });
+      } else {
+        mount();
+      }
+      // Re-mount if the SPA tears the badge down on route change.
+      setTimeout(function(){ if (!document.getElementById('sa-free-badge-host')) mount(); }, 2500);
+      setTimeout(function(){ if (!document.getElementById('sa-free-badge-host')) mount(); }, 6000);
+    } catch (e) {}
+  })();` : `/* SiteAmoeba: free-plan badge skipped (campaign owner is on a paid plan) */`}
 
 })();`;
 }

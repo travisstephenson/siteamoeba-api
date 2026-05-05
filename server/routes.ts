@@ -7922,25 +7922,37 @@ setTimeout(function(){var s=document.getElementById('sa-hide');if(s&&s.parentNod
     // an empty list (anti-flicker is then a no-op for this request).
     let antiFlickerEnabled = false;
     let preBakedSelectors: string[] = [];
+    let showFreeBadge = false;
     try {
+      // Pull anti-flicker config + active selectors + the campaign owner's
+      // billing plan in one round-trip. The plan drives whether we ship the
+      // "Page Optimized With SiteAmoeba.com" badge code (free plan only).
       const r = await pool.query(
         `SELECT c.anti_flicker_enabled,
+                u.plan AS owner_plan,
                 (SELECT json_agg(ts.selector) FROM test_sections ts
                  WHERE ts.campaign_id = c.id AND ts.is_active = true AND ts.selector IS NOT NULL) AS selectors
-         FROM campaigns c WHERE c.id = $1`,
+         FROM campaigns c
+         LEFT JOIN users u ON u.id = c.user_id
+         WHERE c.id = $1`,
         [campaignId]
       );
       const row = r.rows[0];
       if (row) {
         antiFlickerEnabled = !!row.anti_flicker_enabled;
         preBakedSelectors = Array.isArray(row.selectors) ? row.selectors.filter((s: any) => typeof s === "string" && s.length > 0 && s.length < 500) : [];
+        // Free badge shows for the literal 'free' plan only. Pro / autopilot /
+        // business / anything custom = no badge. If the user row is somehow
+        // missing (orphaned campaign), default to NOT showing the badge so we
+        // never accidentally brand a paid customer's page.
+        showFreeBadge = String(row.owner_plan || "").toLowerCase() === "free";
       }
     } catch (err) {
       // Non-fatal — widget will still work, just without first-visit flicker protection.
-      console.warn(`[widget/script] anti-flicker lookup failed for ${campaignId}:`, (err as Error).message);
+      console.warn(`[widget/script] config lookup failed for ${campaignId}:`, (err as Error).message);
     }
 
-    const script = generateWidgetScript(baseUrl, campaignId, preBakedSelectors, antiFlickerEnabled);
+    const script = generateWidgetScript(baseUrl, campaignId, preBakedSelectors, antiFlickerEnabled, showFreeBadge);
     res.set("Content-Type", "application/javascript");
     res.set("Cache-Control", "public, max-age=30"); // short TTL so fixes propagate quickly
     res.send(script);
