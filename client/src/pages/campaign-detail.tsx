@@ -1,6 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect, createContext, useContext } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { VisualBuilder } from "@/components/visual-builder";
+import { MismatchBanner } from "@/components/mismatch-banner";
 
 // ---- Visual Builder context ----
 // Any component inside a campaign page can call openBuilder({section, editingVariant?})
@@ -6034,7 +6035,14 @@ export default function CampaignDetailPage() {
         </div>
       )}
 
-      {/* Page Changed Warning */}
+      {/* Real-time mismatch fail-safe banner (beacon-driven) */}
+      <div className="mx-6 mt-3">
+        <MismatchBanner campaignId={campaign.id} />
+      </div>
+
+      {/* Legacy stats-driven mismatch warning (kept for safety — catches
+          drift detected during scheduled scans before any visitor traffic
+          fires the live beacon) */}
       {stats?.mismatchSections?.length > 0 && (
         <div className="mx-6 mt-3 rounded-lg border border-amber-500/40 bg-amber-50 dark:bg-amber-950/20 px-4 py-3">
           <div className="flex items-start justify-between gap-3">

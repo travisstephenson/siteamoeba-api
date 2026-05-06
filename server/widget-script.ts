@@ -313,7 +313,7 @@ export function generateWidgetScript(
   //     Setting textContent on the element replaces ALL child nodes cleanly.
   //     Do NOT drill into child spans — that would put the new text inside a colored span
   //     (e.g. the orange "Offer-Ad Loop" span) instead of replacing the whole headline.
-  function applyTextToElement(el, text, testMethod, category, styleOverrides) {
+  function applyTextToElement(el, text, testMethod, category, styleOverrides, testSectionId) {
     // ============================================================
     // DESTRUCTIVE-WRITE SAFETY (May 2026 — Stu incident)
     // ============================================================
@@ -348,9 +348,10 @@ export function generateWidgetScript(
                 existingTxt.length + " chars, variant only " + variantTxt.length + " chars. " +
                 "Wrong selector match likely. Section will fall back to control.");
             } catch (e) {}
-            // Mark the element so other code can know we skipped — useful
-            // for telemetry / debugging in the visual editor.
             try { el.setAttribute("data-sa-refused-write", "size-mismatch"); } catch(e) {}
+            // Beacon to the server so the dashboard can show the user that
+            // their tests are paused on this section pending a rescan.
+            if (testSectionId) reportSectionMismatch(testSectionId, "size_mismatch");
             return;
           }
         }
@@ -767,6 +768,42 @@ export function generateWidgetScript(
     } catch(e) {}
   }
 
+  // ============================================================
+  // SECTION-LEVEL MISMATCH BEACON (May 2026 — Stu fail-safe)
+  // ============================================================
+  // Posts to /api/widget/text-mismatch when the widget intentionally bails
+  // out of applying a variant because it can't be sure of the target. The
+  // server flags the section so the dashboard can surface 'No Tests Are
+  // Active Due To Text Mismatch — Please Rescan Your Page' to the user.
+  //
+  // We dedupe per (sectionId, reason) on the client side so a single page
+  // load that loops through 5 sections only sends one beacon per actually-
+  // affected section, not 5 per pageview.
+  var _saReported = {};
+  function reportSectionMismatch(sectionId, reason) {
+    if (!sectionId || !reason) return;
+    var k = String(sectionId) + ":" + reason;
+    if (_saReported[k]) return;
+    _saReported[k] = 1;
+    try {
+      var body = JSON.stringify({
+        cid: CID,
+        sectionId: sectionId,
+        reason: reason,
+        url: location.href
+      });
+      // Use sendBeacon when available so the report fires even if the page
+      // is unloading. Fall back to fetch keepalive for older browsers.
+      var endpoint = API + "/api/widget/text-mismatch";
+      if (navigator && typeof navigator.sendBeacon === "function") {
+        var blob = new Blob([body], { type: "application/json" });
+        navigator.sendBeacon(endpoint, blob);
+      } else {
+        fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: body, keepalive: true }).catch(function(){});
+      }
+    } catch(e) {}
+  }
+
   // findByCapture — when a variant was saved through the Visual Builder, we
   // have a reliable identity for the element (captureOriginalText + capturedTagName).
   // Use that first. This is more specific than the generic text/selector cascade
@@ -816,7 +853,7 @@ export function generateWidgetScript(
     if (leaf && leaf !== el) apply(leaf);
   }
 
-  function applySectionVariant(selector, text, testMethod, controlText, category, currentText, variantId, capturedTagName, captureOriginalText, capturedStyles) {
+  function applySectionVariant(selector, text, testMethod, controlText, category, currentText, variantId, capturedTagName, captureOriginalText, capturedStyles, testSectionId) {
     if (!text) return;
 
     // ----- CAPTURE-FIRST PATH -----
@@ -827,7 +864,7 @@ export function generateWidgetScript(
       if (capMatches.length > 0) {
         console.log("[SA] capture-first: " + capMatches.length + " match(es) for " + capturedTagName + " '" + captureOriginalText.slice(0, 40) + "'");
         for (var cm = 0; cm < capMatches.length; cm++) {
-          applyTextToElement(capMatches[cm], text, testMethod, category);
+          applyTextToElement(capMatches[cm], text, testMethod, category, null, testSectionId);
           if (capturedStyles) applyCapturedStyles(capMatches[cm], capturedStyles);
           capMatches[cm].setAttribute("data-sa-swapped", "true");
         }
@@ -838,6 +875,21 @@ export function generateWidgetScript(
 
     var allElements = findElements(selector, currentText, controlText, category, testMethod);
     console.log("[SA] applySectionVariant", category, "found", allElements.length, "elements", "selector:", selector);
+
+    // ============================================================
+    // FAIL-SAFE: SELECTOR MISS (May 2026 — Stu fail-safe)
+    // ============================================================
+    // findElements returned 0 results — no exact text, no fuzzy text, no
+    // selector match. We have no safe place to put the variant. Bail out
+    // (page stays on control, untouched) and beacon home so the dashboard
+    // can prompt the user to rescan their page.
+    if (allElements.length === 0) {
+      console.warn("[SiteAmoeba] No element found for " + category + " section. " +
+                   "Tests paused for this section. selector='" + selector + "' " +
+                   "controlText='" + (controlText || currentText || "").slice(0, 60) + "...'");
+      if (testSectionId) reportSectionMismatch(testSectionId, "selector_miss");
+      return;
+    }
 
     // === CONTENT MISMATCH DETECTION ===
     // If the page's actual content has changed since the scan (user edited their page),
@@ -867,6 +919,9 @@ export function generateWidgetScript(
           controlText: ctrlText.substring(0, 200),
           matchRatio: matchRatio
         });
+        // Also beacon the section-level mismatch so the dashboard's
+        // 'No Tests Are Active Due To Text Mismatch' banner triggers.
+        if (testSectionId) reportSectionMismatch(testSectionId, "text_drift");
         return; // Do NOT apply the swap
       }
     }
@@ -1406,10 +1461,11 @@ export function generateWidgetScript(
               data.headline.testMethod || "text_swap",
               data.headline.controlText, data.headline.category || "headline",
               data.headline.currentText, data.headline.id,
-              data.headline.capturedTagName, data.headline.captureOriginalText, data.headline.capturedStyles
+              data.headline.capturedTagName, data.headline.captureOriginalText, data.headline.capturedStyles,
+              data.headline.testSectionId
             );
           } else if (directMatch) {
-            applyTextToElement(directMatch, data.headline.text, data.headline.testMethod || "text_swap", "headline");
+            applyTextToElement(directMatch, data.headline.text, data.headline.testMethod || "text_swap", "headline", null, data.headline.testSectionId);
             directMatch.setAttribute("data-sa-swapped", "true");
             console.log("[SA] preview: direct text match applied for headline");
           } else {
@@ -1418,7 +1474,8 @@ export function generateWidgetScript(
               data.headline.testMethod || "text_swap",
               data.headline.controlText, data.headline.category || "headline",
               data.headline.currentText, data.headline.id,
-              data.headline.capturedTagName, data.headline.captureOriginalText, data.headline.capturedStyles
+              data.headline.capturedTagName, data.headline.captureOriginalText, data.headline.capturedStyles,
+              data.headline.testSectionId
             );
           }
         } else {
@@ -1427,7 +1484,8 @@ export function generateWidgetScript(
             data.headline.testMethod || "text_swap",
             data.headline.controlText, data.headline.category || "headline",
             data.headline.currentText, data.headline.id,
-            data.headline.capturedTagName, data.headline.captureOriginalText, data.headline.capturedStyles
+            data.headline.capturedTagName, data.headline.captureOriginalText, data.headline.capturedStyles,
+            data.headline.testSectionId
           );
         }
       }
@@ -1440,12 +1498,13 @@ export function generateWidgetScript(
               data.subheadline.testMethod || "text_swap",
               data.subheadline.controlText, data.subheadline.category || "subheadline",
               data.subheadline.currentText, data.subheadline.id,
-              data.subheadline.capturedTagName, data.subheadline.captureOriginalText, data.subheadline.capturedStyles
+              data.subheadline.capturedTagName, data.subheadline.captureOriginalText, data.subheadline.capturedStyles,
+              data.subheadline.testSectionId
             );
           } else {
             var directSubMatch = directTextFind(data.subheadline.controlText, "subheadline");
             if (directSubMatch) {
-              applyTextToElement(directSubMatch, data.subheadline.text, data.subheadline.testMethod || "text_swap", "subheadline");
+              applyTextToElement(directSubMatch, data.subheadline.text, data.subheadline.testMethod || "text_swap", "subheadline", null, data.subheadline.testSectionId);
               directSubMatch.setAttribute("data-sa-swapped", "true");
               console.log("[SA] preview: direct text match applied for subheadline");
             } else {
@@ -1454,7 +1513,8 @@ export function generateWidgetScript(
                 data.subheadline.testMethod || "text_swap",
                 data.subheadline.controlText, data.subheadline.category || "subheadline",
                 data.subheadline.currentText, data.subheadline.id,
-                null, null, null
+                null, null, null,
+                data.subheadline.testSectionId
               );
             }
           }
@@ -1464,7 +1524,8 @@ export function generateWidgetScript(
             data.subheadline.testMethod || "text_swap",
             data.subheadline.controlText, data.subheadline.category || "subheadline",
             data.subheadline.currentText, data.subheadline.id,
-            data.subheadline.capturedTagName, data.subheadline.captureOriginalText, data.subheadline.capturedStyles
+            data.subheadline.capturedTagName, data.subheadline.captureOriginalText, data.subheadline.capturedStyles,
+            data.subheadline.testSectionId
           );
         }
       }
@@ -1475,7 +1536,8 @@ export function generateWidgetScript(
           applySectionVariant(
             sv.selector, sv.text, sv.testMethod || "text_swap",
             sv.controlText, sv.category, sv.currentText, sv.id,
-            sv.capturedTagName, sv.captureOriginalText, sv.capturedStyles
+            sv.capturedTagName, sv.captureOriginalText, sv.capturedStyles,
+            sv.testSectionId
           );
         });
       }

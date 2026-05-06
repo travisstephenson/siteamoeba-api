@@ -4873,6 +4873,70 @@ export async function registerRoutes(server: Server, app: Express) {
     res.json(sections);
   });
 
+  // ============================================================
+  // GET /api/campaigns/:id/mismatches
+  // ============================================================
+  // Returns the list of active sections that have hit a recent mismatch
+  // (selector miss / size mismatch / text drift). The dashboard renders the
+  // 'No Tests Are Active Due To Text Mismatch — Please Rescan Your Page'
+  // banner when this returns at least one unacknowledged entry.
+  app.get("/api/campaigns/:id/mismatches", requireAuth, async (req: Request, res: Response) => {
+    const campaign = await storage.getCampaign(paramId(req.params.id));
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    try {
+      // Only show mismatches from the last 7 days, AND only those not yet
+      // dismissed by the user. The `mismatch_acknowledged_at` is reset by
+      // the beacon on every fresh hit, so dismissals don't hide ongoing
+      // problems — they only hide already-resolved ones.
+      const r = await pool.query(
+        `SELECT id, label, category, selector, current_text,
+                last_mismatch_at, last_mismatch_reason, last_mismatch_url,
+                mismatch_hit_count
+         FROM test_sections
+         WHERE campaign_id = $1
+           AND is_active = true
+           AND last_mismatch_at IS NOT NULL
+           AND last_mismatch_at > now() - INTERVAL '7 days'
+           AND (mismatch_acknowledged_at IS NULL OR last_mismatch_at > mismatch_acknowledged_at)
+         ORDER BY last_mismatch_at DESC`,
+        [campaign.id]
+      );
+      res.json({
+        campaignId: campaign.id,
+        campaignUrl: campaign.url,
+        mismatches: r.rows,
+      });
+    } catch (err) {
+      console.error("[campaigns/mismatches]", (err as Error).message);
+      res.status(500).json({ error: "Could not load mismatch data" });
+    }
+  });
+
+  // POST /api/campaigns/:id/mismatches/dismiss — user clicks "Got it" on the
+  // banner without rescanning. Hides the banner until a NEW mismatch fires.
+  app.post("/api/campaigns/:id/mismatches/dismiss", requireAuth, async (req: Request, res: Response) => {
+    const campaign = await storage.getCampaign(paramId(req.params.id));
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    try {
+      await pool.query(
+        `UPDATE test_sections
+         SET mismatch_acknowledged_at = now()
+         WHERE campaign_id = $1
+           AND last_mismatch_at IS NOT NULL
+           AND (mismatch_acknowledged_at IS NULL OR last_mismatch_at > mismatch_acknowledged_at)`,
+        [campaign.id]
+      );
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[campaigns/mismatches/dismiss]", (err as Error).message);
+      res.status(500).json({ error: "Dismiss failed" });
+    }
+  });
+
   app.post("/api/campaigns/:id/sections", requireAuth, async (req: Request, res: Response) => {
     const campaign = await storage.getCampaign(paramId(req.params.id));
     if (!campaign || campaign.userId !== req.userId) {
@@ -6809,6 +6873,11 @@ Return ONLY valid JSON, no markdown fences:
         // currentText is the actual rendered text captured at scan time
         // It's the most reliable cross-platform fingerprint for finding the element
         payload.currentText = matchedSection.currentText || "";
+        // DB section primary key — the widget uses this to beacon
+        // /api/widget/text-mismatch when it intentionally bails out, so the
+        // dashboard can show 'Tests paused, please rescan' on this exact
+        // section. Sending it here means the widget doesn't have to guess.
+        payload.testSectionId = matchedSection.id;
       } else if (variant.type === "headline" && campaign.headlineSelector) {
         payload.selector = campaign.headlineSelector;
       } else if (variant.type === "subheadline" && campaign.subheadlineSelector) {
@@ -7983,6 +8052,66 @@ Return ONLY valid JSON, no markdown fences:
   });
 
   // POST /api/widget/styles — receive captured computed styles from the widget (fire-and-forget)
+  // ============================================================
+  // POST /api/widget/text-mismatch — fail-safe beacon
+  // ============================================================
+  // The widget calls this when it can't safely apply a variant (selector
+  // missed every element, exact + fuzzy text searches all failed, OR a
+  // destructive-write safety guard refused the swap because the target was
+  // far larger than the variant). This is the foundation for the user-
+  // visible 'No Tests Are Active Due To Text Mismatch — Please Rescan Your
+  // Page' alert in the dashboard.
+  //
+  // No auth (called from public customer pages). Heavily rate-limited via
+  // widgetLimiter. Dedupes within a 60-second window per (campaign, section,
+  // reason) so a high-traffic page can't flood us with reports.
+  app.post("/api/widget/text-mismatch", widgetLimiter, async (req: Request, res: Response) => {
+    try {
+      const { cid, sectionId, reason, url } = req.body || {};
+      const campaignId = parseInt(String(cid || ""));
+      if (isNaN(campaignId) || !sectionId) {
+        return res.status(400).json({ ok: false });
+      }
+      const safeReason = ["selector_miss", "text_drift", "size_mismatch"].includes(String(reason))
+        ? String(reason)
+        : "unknown";
+      const safeUrl = typeof url === "string" ? url.slice(0, 500) : "";
+
+      // Fire-and-forget update so we don't slow the customer's page down.
+      (async () => {
+        try {
+          // Match section by either string section_id (legacy) or numeric DB id.
+          // Most beacons send the DB primary-key id; fall through to section_id text if not.
+          await pool.query(
+            `UPDATE test_sections
+             SET last_mismatch_at = now(),
+                 last_mismatch_reason = $1,
+                 last_mismatch_url = $2,
+                 mismatch_hit_count = mismatch_hit_count + 1,
+                 -- A new mismatch invalidates any prior dismiss; force the
+                 -- banner to re-show until the user actually rescans.
+                 mismatch_acknowledged_at = NULL
+             WHERE campaign_id = $3
+               AND (id::text = $4 OR section_id = $4)
+               AND is_active = true
+               -- Don't bother updating the same hit twice in 60s
+               AND (last_mismatch_at IS NULL OR last_mismatch_at < now() - INTERVAL '60 seconds'
+                    OR last_mismatch_reason IS DISTINCT FROM $1)`,
+            [safeReason, safeUrl, campaignId, String(sectionId)]
+          );
+        } catch (err) {
+          console.warn("[widget/text-mismatch] update failed:", (err as Error).message);
+        }
+      })();
+
+      // Always 204 — the widget doesn't care about the response, and we don't
+      // want to leak schema info to the public.
+      res.status(204).end();
+    } catch {
+      res.status(204).end();
+    }
+  });
+
   app.post("/api/widget/styles", widgetLimiter, async (req: Request, res: Response) => {
     try {
       const { cid, styles } = req.body as {

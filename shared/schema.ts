@@ -1,4 +1,4 @@
-import { pgTable, text, integer, serial, boolean, real, varchar, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, text, integer, serial, boolean, real, varchar, jsonb, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -209,6 +209,20 @@ export const testSections = pgTable("test_sections", {
   originalTextHash: text("original_text_hash"),
   // 0-based order on the page — disambiguates duplicates
   positionIndex: integer("position_index"),
+  // ============================================================
+  // MISMATCH FAIL-SAFE FIELDS (May 2026 — Stu incident response)
+  // ============================================================
+  // When the widget can't safely apply a variant (selector misses + text
+  // doesn't match + a destructive write would lose customer content), it
+  // beacons home with a mismatch report instead of mutating the page. The
+  // dashboard surfaces these to the user as 'No Tests Are Active Due To
+  // Text Mismatch — Please Rescan Your Page' so the customer knows their
+  // tests are paused and why.
+  lastMismatchAt: timestamp("last_mismatch_at", { withTimezone: true }),
+  lastMismatchReason: text("last_mismatch_reason"), // "selector_miss" | "size_mismatch" | "text_drift"
+  lastMismatchUrl: text("last_mismatch_url"),       // page URL where the mismatch was observed
+  mismatchHitCount: integer("mismatch_hit_count").notNull().default(0), // total hits since last rescan
+  mismatchAcknowledgedAt: timestamp("mismatch_acknowledged_at", { withTimezone: true }), // user dismissed the warning
   createdAt: text("created_at").notNull().$defaultFn(() => new Date().toISOString()),
 });
 
