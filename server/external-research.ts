@@ -29,35 +29,71 @@ interface ExternalResearchResult {
 
 type SourceTier = "dr_canon" | "cro_academic" | "practitioner";
 
-// Rotate through these query seeds so the agent explores the landscape over time
-// rather than hammering the same topic every day. Day-of-year modulo pool length.
+// COPYWRITING-ONLY query pool (May 2026 refocus).
+// We deliberately strip out general UX / checkout / form-field / eye-tracking
+// research because that's not what SiteAmoeba can affect for users — we change
+// COPY, so the brain should be world-class at copy. Every query below pulls
+// signal that maps to a section-type variant we can actually generate:
+// headlines, subheadlines, body copy, CTAs, social proof copy, offer framing,
+// guarantees, and named copy frameworks (Lego, F.A.T.E., R.I.C.E., AIDA, PAS,
+// Pre-Suasion, etc.) the brain already knows about and uses in generation.
 const QUERY_POOL: Array<{ tier: SourceTier; query: string }> = [
-  // Direct response canon
-  { tier: "dr_canon", query: "Eugene Schwartz market sophistication stages headline principles" },
-  { tier: "dr_canon", query: "Gary Halbert headline formulas direct response" },
-  { tier: "dr_canon", query: "Joe Sugarman slippery slide copy principles" },
-  { tier: "dr_canon", query: "John Caples proven headline formulas Tested Advertising" },
-  { tier: "dr_canon", query: "David Ogilvy long form copy principles" },
-  { tier: "dr_canon", query: "Clayton Makepeace emotional copy triggers" },
-  { tier: "dr_canon", query: "Drayton Bird direct response fundamentals" },
-  { tier: "dr_canon", query: "AIDA copywriting framework examples conversions" },
+  // ---- Direct response canon: headline + body copy frameworks ----
+  { tier: "dr_canon", query: "Eugene Schwartz Breakthrough Advertising market sophistication stages headline rewrite examples" },
+  { tier: "dr_canon", query: "Gary Halbert proven direct mail headline formulas tested winners" },
+  { tier: "dr_canon", query: "Joe Sugarman slippery slide copy first sentence opening hooks" },
+  { tier: "dr_canon", query: "John Caples Tested Advertising Methods proven headline structures" },
+  { tier: "dr_canon", query: "David Ogilvy long-form magazine ad copy headline subhead body principles" },
+  { tier: "dr_canon", query: "Clayton Makepeace emotional copy triggers fear greed envy guilt" },
+  { tier: "dr_canon", query: "Drayton Bird Commonsense Direct Marketing headline opener tactics" },
+  { tier: "dr_canon", query: "Dan Kennedy Ultimate Sales Letter section structure copy" },
+  { tier: "dr_canon", query: "Robert Collier sales letter principles emotional connection" },
+  { tier: "dr_canon", query: "Victor Schwab How to Write a Good Advertisement five-step formula" },
 
-  // CRO research + academic
-  { tier: "cro_academic", query: "Baymard Institute checkout usability research 2025" },
-  { tier: "cro_academic", query: "NN Group landing page eye tracking studies" },
-  { tier: "cro_academic", query: "ConversionXL headline a/b test meta analysis" },
-  { tier: "cro_academic", query: "Cialdini scarcity urgency conversion research" },
-  { tier: "cro_academic", query: "Kahneman loss aversion landing page studies" },
-  { tier: "cro_academic", query: "form field reduction conversion rate research" },
-  { tier: "cro_academic", query: "social proof numeric specificity landing page research" },
-  { tier: "cro_academic", query: "video sales letter conversion rate studies" },
+  // ---- Named frameworks the SiteAmoeba Brain already uses ----
+  { tier: "dr_canon", query: "Lego Method paired-fact body copy persuasion examples" },
+  { tier: "dr_canon", query: "F.A.T.E. model Focus Authority Tribe Emotion landing page" },
+  { tier: "dr_canon", query: "R.I.C.E. framework copy reward identity ideology emotion" },
+  { tier: "dr_canon", query: "AIDA Attention Interest Desire Action sales copy" },
+  { tier: "dr_canon", query: "Problem Agitate Solution PAS sales page body copy" },
+  { tier: "dr_canon", query: "Cialdini Pre-Suasion priming opening pages high-conversion examples" },
+  { tier: "dr_canon", query: "new bad guy enemy frame absolution sales copy" },
+  { tier: "dr_canon", query: "unique mechanism naming formula sales page reveal" },
+  { tier: "dr_canon", query: "earned borrowed proximal authority types sales copy" },
+  { tier: "dr_canon", query: "identity-based copywriting tribe belonging messaging" },
 
-  // Practitioners actively running ads
-  { tier: "practitioner", query: "best performing Facebook ad headline patterns 2025" },
-  { tier: "practitioner", query: "VSL conversion optimization 2025 high ticket offers" },
-  { tier: "practitioner", query: "CTA button copy test winners direct response 2025" },
-  { tier: "practitioner", query: "sales page headline structure cold traffic 2025" },
-  { tier: "practitioner", query: "subheadline conversion a b test results" },
+  // ---- Headline structure / formulas (specific) ----
+  { tier: "cro_academic", query: "how to write a headline split test data 2024 2025 specificity numbers" },
+  { tier: "cro_academic", query: "contrarian headline frame conversion rate test results" },
+  { tier: "cro_academic", query: "curiosity gap headline body copy psychology research" },
+  { tier: "cro_academic", query: "specificity precise numbers headline conversion lift study" },
+  { tier: "cro_academic", query: "question vs declarative headline conversion rate test" },
+  { tier: "cro_academic", query: "how to headline vs benefit headline split test winners" },
+  { tier: "cro_academic", query: "transformation outcome headline sales page conversion lift" },
+
+  // ---- CTA / button / micro-commitment copy ----
+  { tier: "cro_academic", query: "CTA button copy first person 'get my' vs 'submit' test results" },
+  { tier: "cro_academic", query: "micro commitment ladder yes-set sales page copy" },
+  { tier: "cro_academic", query: "action verb call to action button copy split test winners" },
+
+  // ---- Social proof copy specifically (text, not just star ratings) ----
+  { tier: "cro_academic", query: "specific numerical social proof copy lift over generic 'thousands trust us'" },
+  { tier: "cro_academic", query: "testimonial quote selection believability sales page conversion" },
+  { tier: "cro_academic", query: "identity-mirror testimonial wording conversion rate research" },
+
+  // ---- Offer framing + guarantee copy ----
+  { tier: "cro_academic", query: "price anchor sales copy how to frame discount stack" },
+  { tier: "cro_academic", query: "risk reversal guarantee wording conversion lift research" },
+  { tier: "cro_academic", query: "value stack bonus stack copy structure sales page" },
+
+  // ---- Practitioner: what's working in copy *right now* ----
+  { tier: "practitioner", query: "top performing direct response sales letter headlines 2025 swipe file" },
+  { tier: "practitioner", query: "VSL hook opening lines high converting 2025" },
+  { tier: "practitioner", query: "Facebook ad copy hook formulas working 2025 cold traffic" },
+  { tier: "practitioner", query: "high-ticket sales page body copy patterns 2025 winners" },
+  { tier: "practitioner", query: "info product sales page rewrite case study before after copy" },
+  { tier: "practitioner", query: "DTC product page benefit-led copy patterns conversion 2025" },
+  { tier: "practitioner", query: "email subject line opening hook conversion split test winners 2025" },
 ];
 
 function dayOfYearRotation<T>(pool: T[]): T[] {
@@ -190,26 +226,47 @@ async function fetchPrinciplesForQuery(
   tier: SourceTier,
   query: string
 ): Promise<ExternalPrinciple[]> {
-  const prompt = `You are a CRO research agent. Your job is to identify proven copywriting or landing-page conversion principles from ESTABLISHED published sources and return them as structured JSON for ingestion into a knowledge base.
+  const prompt = `You are SiteAmoeba's COPYWRITING research agent. Your sole job is to identify proven *copywriting* and *sales-psychology* principles from established published sources — specifically things that change WORDS on a page — and return them as structured JSON for the knowledge base.
 
 SEARCH FOCUS (this run): ${query}
 SOURCE TIER: ${tier}
 
-Return 2-5 principles. HARD RULES:
-1. Every principle MUST have a real source_url pointing to a real published source (book reference, article, study, documented case study). Do NOT invent URLs.
-2. Every principle MUST include at least one verbatim quote from the source that supports the claim.
-3. Every principle MUST specify the CONDITION under which it applies — page_type (sales_page|landing_page|optin|checkout|masterclass), section_type (headline|subheadline|cta|social_proof|guarantee|pricing|body_copy), and optionally niche, traffic_source (cold_paid|warm_email|organic), offer_position (above_fold|below_fold|linked_page), and winner_strategy (curiosity_gap|contrarian|social_proof|transformation|urgency|loss_aversion|specificity|feature_benefit).
-4. Skip common-sense filler. Do NOT return "use a clear CTA" or "write compelling headlines." Only specific, actionable principles with numbers or named frameworks.
-5. Prefer principles that conflict with common copywriting advice (these are the most valuable).
+WHAT WE CARE ABOUT (admit these):
+- Headline / subheadline structure, formulas, and patterns (specificity, contrarian, curiosity gap, transformation, identity, mechanism reveal)
+- Body-copy techniques (Lego Method paired facts, Pre-Suasion priming, Problem-Agitate-Solution, AIDA, the New Bad Guy / enemy frame, story arcs, R.I.C.E. ideology-over-reward, identity-based messaging, micro-commitment ladder)
+- Authority placement copy (earned vs borrowed vs proximal authority WORDING)
+- Social-proof copy WORDING (specific numbers, identity-mirror testimonials, named outcomes)
+- CTA button / link COPY (action verbs, first-person, specificity)
+- Offer framing / value stack / risk-reversal / guarantee WORDING
+- Pricing copy framing (anchoring, drop, chunking)
+- Wallpaper-filter / pattern-interrupt opening lines
+
+WHAT WE EXPLICITLY DO NOT WANT (reject these):
+- Page LAYOUT, design, typography, color, button color, button size, image placement
+- Form-field reduction, checkout flow, multi-step funnels (we don't change those)
+- Eye-tracking studies, heatmap research about non-text elements
+- Page load speed, anti-flicker, technical performance
+- A/B test methodology / statistical-significance advice
+- Generic 'use a clear CTA' / 'write compelling headlines' filler. We need *specific* claims with named frameworks or numbers.
+
+Return 2–5 principles. HARD RULES:
+1. Every principle MUST be about COPY — the actual words / phrasing on a page — not layout, UX, or technical CRO.
+2. Every principle MUST have a real source_url pointing to a real published source (book, article, documented case study). Do NOT invent URLs.
+3. Every principle MUST include at least one verbatim quote from the source.
+4. Every principle MUST specify CONDITION:
+   - page_type: sales_page | landing_page | optin | checkout | masterclass | pricing
+   - section_type: headline | subheadline | cta | social_proof | guarantee | pricing | body_copy | hero_journey | offer_stack
+   - optionally: niche, traffic_source (cold_paid | warm_email | organic), offer_position (above_fold | below_fold), winner_strategy (curiosity_gap | contrarian | social_proof | transformation | urgency | loss_aversion | specificity | feature_benefit | identity | lego_method | new_bad_guy | pre_suasion | mechanism_reveal | risk_reversal | authority_borrowed | authority_proximal)
+5. Prefer principles that contradict naive copywriting advice (those are the ones the Brain can teach users they wouldn't know).
 
 Return ONLY a JSON array, no markdown fences, matching this shape:
 [
   {
-    "principle": "One sentence summary.",
+    "principle": "One sentence summary describing a COPY change a user could make.",
     "source_url": "https://...",
     "source_citation": "Author, Book Title (Year)",
     "verbatim_quote": "Direct quote from the source.",
-    "condition": { "page_type": "sales_page", "section_type": "headline", "traffic_source": "cold_paid" },
+    "condition": { "page_type": "sales_page", "section_type": "headline", "traffic_source": "cold_paid", "winner_strategy": "specificity" },
     "rationale": "Why this claim is credible — cite the evidence."
   }
 ]`;

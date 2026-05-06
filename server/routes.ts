@@ -6047,6 +6047,17 @@ export async function registerRoutes(server: Server, app: Express) {
       return res.status(404).json({ error: "Campaign not found" });
     }
 
+    // ----- AUDIT INTENT DETECTION -----
+    // When the user asks an audit-style question ("how do I make my site
+    // better?" / "what's missing on my page?" / "audit my page" / "what
+    // should I add?"), we want the chat to return a copywriting-framework
+    // gap analysis instead of a single-issue diagnosis. The standard chat
+    // prompt deliberately suppresses framework-gap audits to avoid generic
+    // advice on tactical questions — we override here for explicit audit
+    // intent only.
+    const auditIntentRe = /(audit|what(?:'s|\s+is)?\s+missing|how\s+(?:can|do|would)\s+i\s+(?:make|improve|fix|optimize|optimise)\s+(?:my|this|the)\s+(?:site|page|landing|website|copy)|make\s+(?:my|this|the)\s+(?:site|page|website|landing|copy)\s+better|improve\s+(?:my|this|the)\s+(?:site|page|website|copy|conversion)|what\s+should\s+i\s+(?:add|include|put|change)|techniques?\s+(?:i'?m|are)\s+missing)/i;
+    const isAuditIntent = typeof message === "string" && auditIntentRe.test(message);
+
     // Gather campaign context
     const allVariantStats = await storage.getVariantStats(campaign.id);
     const allTestSections = await storage.getTestSectionsByCampaign(campaign.id);
@@ -6189,6 +6200,53 @@ export async function registerRoutes(server: Server, app: Express) {
       console.warn("Failed to fetch campaign test history:", err);
     }
 
+    // Inject an explicit audit-mode block into brainKnowledge when the user
+    // asks an audit-style question. This overrides the default prompt's
+    // "don't audit against frameworks" rule for this single message.
+    let auditModeOverride = "";
+    if (isAuditIntent) {
+      const externalBrief = await pool.query(
+        `SELECT insight, source_citation, source_url FROM brain_knowledge
+         WHERE source_type = 'external' AND status = 'active'
+         ORDER BY created_at DESC LIMIT 8`
+      ).catch(() => ({ rows: [] as any[] }));
+      const externalLines = externalBrief.rows.length > 0
+        ? externalBrief.rows.map((r: any) => `• ${(r.insight || "").split("\n")[0]} (${r.source_citation || ""})`).join("\n")
+        : "";
+      auditModeOverride = [
+        "",
+        "========================================",
+        "AUDIT MODE — OVERRIDE the default 'no framework audit' rule for THIS message only.",
+        "========================================",
+        "The user asked an audit-style question. They explicitly want to know what's MISSING on their page.",
+        "",
+        "Respond as a SiteAmoeba copywriting auditor. Look at the page text above and the campaign data, then surface 5–9 specific copy techniques the page is MISSING. Use the brain's frameworks (Lego Method, F.A.T.E., R.I.C.E., Pre-Suasion, the New Bad Guy, Wallpaper Filter / Pattern Interrupt, micro-commitment ladder, identity framing, unique mechanism reveal, risk reversal, borrowed authority, specific numerical social proof, etc.).",
+        "",
+        "Format the response as markdown:",
+        "",
+        "## What this page already does well",
+        "- 2–3 short bullets",
+        "",
+        "## What's missing (highest impact first)",
+        "For each missing technique, write a block:",
+        "",
+        "**[Technique name]** — [framework source]",
+        "What's missing: [one sentence — cite specific text from their page if you can]",
+        "Why it matters: [one sentence — the conversion mechanism]",
+        "Try this copy: [1–3 sentences of READY-TO-PASTE copy tailored to their offer/niche — NOT generic advice]",
+        "Expected impact: low | mid | high",
+        "",
+        "RULES:",
+        "- Only flag what is GENUINELY absent. If they already do borrowed authority well, do not list it.",
+        "- Skip layout / design / image / button-color advice. We change COPY only.",
+        "- Skip generic 'add a testimonial' — give them the actual sentence.",
+        "- If you reference a framework name, briefly explain it in plain English in parens (e.g., 'Lego Method (paired facts that let the reader connect the dots themselves)').",
+        "- Order by Expected impact desc.",
+        externalLines ? "\nFresh external principles to consider when auditing:\n" + externalLines : "",
+        "========================================",
+      ].join("\n");
+    }
+
     const chatContext = {
       campaignUrl: campaign.url,
       campaignName: campaign.name,
@@ -6219,7 +6277,7 @@ export async function registerRoutes(server: Server, app: Express) {
       totalVisitors,
       totalConversions,
       conversionRate,
-      brainKnowledge: brainKnowledge + dynamicBrainKnowledge,
+      brainKnowledge: brainKnowledge + dynamicBrainKnowledge + auditModeOverride,
       winConfidenceThreshold: user.winConfidenceThreshold,
       pageType: campaign.pageType || undefined,
       pageGoal: campaign.pageGoal || undefined,
@@ -6295,6 +6353,175 @@ export async function registerRoutes(server: Server, app: Express) {
     }
 
     res.json({ response });
+  });
+
+  // ============================================================
+  // POST /api/ai/site-audit
+  // ============================================================
+  // "How can I make my website better?" — scan the campaign's offer page
+  // and run it through the SiteAmoeba copywriting brain. Returns a structured
+  // list of MISSING techniques: Lego Method, F.A.T.E. (Focus / Authority /
+  // Tribe / Emotion), R.I.C.E., Pre-Suasion, the New Bad Guy, Wallpaper
+  // Filter / Pattern Interrupt, micro-commitment ladder, identity framing,
+  // unique mechanism, risk reversal, etc. Each finding has a one-sentence
+  // diagnosis + a concrete copy suggestion.
+  //
+  // This is a paid feature (uses platform LLM credits). Free users get the
+  // upgrade prompt.
+  app.post("/api/ai/site-audit", aiLimiter, requireAuth, async (req: Request, res: Response) => {
+    const user = await storage.getUserById(req.userId!);
+    if (!user) return res.status(401).json({ error: "User not found" });
+
+    let llmConfigResolved;
+    try {
+      llmConfigResolved = resolveLLMConfig({
+        operation: "chat",
+        userPlan: user.plan || "free",
+        userProvider: user.llmProvider,
+        userApiKey: user.llmApiKey ? decryptApiKey(user.llmApiKey) : null,
+        userModel: user.llmModel,
+      });
+    } catch {
+      return res.status(403).json({
+        error: "UPGRADE_REQUIRED",
+        message: "Site Audit is a paid feature. Upgrade to unlock the SiteAmoeba copywriting brain audit.",
+      });
+    }
+
+    // Audits cost more than chat — they fetch+analyze the whole page.
+    const auditCreditCost = (llmConfigResolved.creditCost || 1) * 2;
+    const creditCheck = await consumeCredits(req.userId!, auditCreditCost);
+    if (!creditCheck.ok) return res.status(402).json({ error: creditCheck.errorMsg });
+
+    const { campaignId } = req.body;
+    if (!campaignId) return res.status(400).json({ error: "campaignId is required" });
+
+    const campaign = await storage.getCampaign(parseInt(campaignId));
+    if (!campaign || campaign.userId !== req.userId) {
+      return res.status(404).json({ error: "Campaign not found" });
+    }
+    if (!campaign.url) {
+      return res.status(400).json({ error: "Campaign has no URL set" });
+    }
+
+    // Fetch the live page so the audit reflects what's on the page RIGHT NOW,
+    // not what was scanned weeks ago.
+    let pageText = "";
+    let pageTitle = "";
+    try {
+      const r = await fetch(campaign.url, {
+        headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36" },
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!r.ok) return res.status(502).json({ error: `Could not fetch page (HTTP ${r.status})` });
+      const rawHtml = await r.text();
+      const headEnd = rawHtml.toLowerCase().indexOf("</head>");
+      const bodyHtml = headEnd > 0 ? rawHtml.slice(headEnd + 7) : rawHtml;
+      pageText = extractPageText(bodyHtml).slice(0, 35000);
+      const m = rawHtml.match(/<title[^>]*>([^<]+)<\/title>/i);
+      pageTitle = m ? m[1].trim() : "";
+    } catch (err: any) {
+      return res.status(502).json({ error: `Could not fetch page: ${err.message || "network error"}` });
+    }
+
+    // Pull the brain's copywriting frameworks reference + relevant external
+    // principles so the audit cites real techniques the system knows about.
+    const brainFrameworks = getBrainPageAuditKnowledge();
+
+    let externalPrinciples = "";
+    try {
+      const ext = await pool.query(
+        `SELECT insight, source_citation, source_url, tags
+         FROM brain_knowledge
+         WHERE source_type = 'external'
+           AND status = 'active'
+         ORDER BY created_at DESC
+         LIMIT 12`
+      );
+      if (ext.rows.length > 0) {
+        externalPrinciples = "EXTERNAL COPYWRITING PRINCIPLES (researched from direct-response canon, CRO sources, practitioners):\n\n" +
+          ext.rows.map((r: any, i: number) =>
+            `${i + 1}. ${(r.insight || "").split("\n")[0]}\n   Source: ${r.source_citation || "(unknown)"} — ${r.source_url || ""}`
+          ).join("\n\n");
+      }
+    } catch (err) {
+      console.warn("[site-audit] external knowledge lookup failed:", (err as Error).message);
+    }
+
+    const prompt = `You are SiteAmoeba's COPYWRITING auditor. The user asked "how can I make my website better?" — your job is to look at THEIR LIVE PAGE and tell them what proven copywriting techniques are MISSING that, if added, would lift conversion.
+
+You are NOT a generic web design consultant. You only look at COPY — the actual words on the page.
+
+# THEIR LIVE PAGE
+URL: ${campaign.url}
+Title: ${pageTitle || "(no title)"}
+Page type: ${campaign.pageType || "sales_page"}${campaign.niche ? `\nNiche: ${campaign.niche}` : ""}${campaign.pricePoint ? `\nPrice point: ${campaign.pricePoint}` : ""}
+
+Page text (extracted, first 35KB):
+"""
+${pageText}
+"""
+
+# THE BRAIN'S COPYWRITING FRAMEWORKS
+${brainFrameworks}
+
+${externalPrinciples}
+
+# YOUR TASK
+Audit this page against the frameworks above. Find 5–9 specific TECHNIQUES THAT ARE MISSING. For each, return:
+
+  technique: short name (e.g., "Lego Method", "Pre-Suasion primer", "Borrowed Authority", "New Bad Guy frame")
+  category: one of [headline | subheadline | body_copy | cta | social_proof | guarantee | offer_stack | pre_suasion | authority | story]
+  whats_missing: one sentence — exactly what's absent on THEIR page (cite specific text from the extract above when you can)
+  why_it_matters: one sentence — the conversion mechanism it triggers
+  proposed_copy: 1–3 sentences of READY-TO-PASTE copy they can drop in (not generic advice — actual words tailored to their offer/niche)
+  framework_source: name of the framework or canon source (e.g., "F.A.T.E. model", "Cialdini Pre-Suasion", "Joe Sugarman")
+  expected_lift_band: "low" | "mid" | "high" — your honest gut estimate of impact magnitude
+
+IMPORTANT FILTERING:
+- Skip anything the page already does well. Only list what's GENUINELY missing.
+- Skip page-LAYOUT advice. We change copy, not design.
+- Skip generic advice ("add testimonials"). Be specific about WHAT KIND, WHERE, and provide the exact copy.
+- If the page already has strong examples of a framework, do NOT flag it as missing.
+- Order by expected_lift_band desc (high → mid → low) then by category importance.
+
+Return ONLY valid JSON, no markdown fences:
+{
+  "summary": "One paragraph: the single biggest copy opportunity on this page.",
+  "page_strengths": ["short bullet of what they ALREADY do well", "…"],
+  "missing_techniques": [
+    { "technique": "…", "category": "…", "whats_missing": "…", "why_it_matters": "…", "proposed_copy": "…", "framework_source": "…", "expected_lift_band": "high" }
+  ]
+}`;
+
+    let raw: string;
+    try {
+      raw = await callLLM(llmConfigResolved.config, [{ role: "user", content: prompt }], { maxTokens: 6000 });
+    } catch (err: any) {
+      console.error("[site-audit] LLM call failed:", err);
+      return res.status(502).json({ error: err.message || "AI provider error. Check your API key in Settings." });
+    }
+
+    // Parse JSON tolerantly
+    const cleaned = raw.replace(/^\s*```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+    let parsed: any = null;
+    try { parsed = JSON.parse(cleaned); }
+    catch {
+      const m = cleaned.match(/\{[\s\S]*\}/);
+      if (m) try { parsed = JSON.parse(m[0]); } catch {}
+    }
+    if (!parsed || !Array.isArray(parsed.missing_techniques)) {
+      return res.status(500).json({ error: "Could not parse audit response. Try again." });
+    }
+
+    res.json({
+      campaignId: campaign.id,
+      campaignUrl: campaign.url,
+      generatedAt: new Date().toISOString(),
+      summary: typeof parsed.summary === "string" ? parsed.summary : "",
+      pageStrengths: Array.isArray(parsed.page_strengths) ? parsed.page_strengths.slice(0, 6) : [],
+      missingTechniques: parsed.missing_techniques.slice(0, 12),
+    });
   });
 
   // ============== CRO REPORT ==============
