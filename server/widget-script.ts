@@ -314,6 +314,49 @@ export function generateWidgetScript(
   //     Do NOT drill into child spans — that would put the new text inside a colored span
   //     (e.g. the orange "Offer-Ad Loop" span) instead of replacing the whole headline.
   function applyTextToElement(el, text, testMethod, category, styleOverrides) {
+    // ============================================================
+    // DESTRUCTIVE-WRITE SAFETY (May 2026 — Stu incident)
+    // ============================================================
+    // Stu's Elementor page had a body_copy section whose CSS selector failed
+    // to match anything, fuzzy fallback then matched a giant <div> wrapper
+    // (1002 chars of mixed content), and we wrote textContent = 165-char
+    // variant on it — wiping 837 chars of unrelated headline + content. Stu
+    // saw "everything is gone, only the test headline shows."
+    //
+    // Guard: refuse to text-swap any element whose existing text is more
+    // than 4x the variant text length (i.e. we'd destroy more content than
+    // we'd write). This catches mis-targeted matches without blocking
+    // legitimate same-size swaps. html_swap / image_swap / cta have their
+    // own paths that skip this gate (CTA buttons are explicitly small).
+    if (testMethod !== "html_swap" && testMethod !== "image_swap" &&
+        category !== "cta" && category !== "button" && el && text) {
+      try {
+        var existingTxt = (el.innerText || el.textContent || "").trim();
+        var variantTxt = ("" + text).trim();
+        // Only check when the variant is a single text block (no <p>/<div>
+        // structure of its own — those are HTML and go through innerHTML).
+        if (existingTxt.length > 0 && variantTxt.length > 0) {
+          // If the existing element holds at least 4x the new text AND the
+          // existing text doesn't START with the variant (meaning we're not
+          // about to legitimately replace a known leading sentence), bail.
+          // The 4x ratio is generous — a 50-char headline can become a
+          // 200-char one, but a 1000-char wrapper holding 165 chars of new
+          // text is almost certainly a wrong target.
+          if (existingTxt.length > Math.max(80, variantTxt.length * 4)) {
+            try {
+              console.warn("[SiteAmoeba] Refused destructive text-swap: target had " +
+                existingTxt.length + " chars, variant only " + variantTxt.length + " chars. " +
+                "Wrong selector match likely. Section will fall back to control.");
+            } catch (e) {}
+            // Mark the element so other code can know we skipped — useful
+            // for telemetry / debugging in the visual editor.
+            try { el.setAttribute("data-sa-refused-write", "size-mismatch"); } catch(e) {}
+            return;
+          }
+        }
+      } catch (e) { /* fall through to normal write — don't break on guard exceptions */ }
+    }
+
     // IMAGE VARIANT: swap src attribute when text is an image URL.
     // Recognized patterns:
     //   * Any URL ending in .jpg/.jpeg/.png/.gif/.webp/.svg (+ optional query)
