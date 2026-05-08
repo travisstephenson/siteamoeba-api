@@ -1021,10 +1021,20 @@ class StorageImpl implements IStorage {
           )`,
           [campaignId, jsonPatternExact, jsonPatternSpaced]
         );
+        // Count DISTINCT buyer emails so a buyer who triggered N visitor
+        // rows + N upsells across the same email doesn't show as N
+        // conversions. Falls back to distinct visitor IDs when email is
+        // missing. (May 2026 — Tiffany incident: Jeff had 20 visitor rows
+        // marked converted from a single buyer.)
         convResult = await pool.query(
-          `SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1 AND converted = true AND (
-            section_variant_assignments LIKE $2 OR section_variant_assignments LIKE $3
-          )`,
+          `SELECT COUNT(*) as count FROM (
+             SELECT COALESCE(NULLIF(LOWER(TRIM(customer_email)), ''), id) AS buyer_key
+             FROM visitors
+             WHERE campaign_id = $1 AND converted = true AND (
+               section_variant_assignments LIKE $2 OR section_variant_assignments LIKE $3
+             )
+             GROUP BY 1
+           ) buyers`,
           [campaignId, jsonPatternExact, jsonPatternSpaced]
         );
         revResult = await pool.query(
@@ -1043,8 +1053,14 @@ class StorageImpl implements IStorage {
           `SELECT COUNT(DISTINCT id) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND first_seen >= $3`,
           [campaignId, v.id, testStart]
         );
+        // Same dedupe-by-email rule as the section-variant path above.
         convResult = await pool.query(
-          `SELECT COUNT(*) as count FROM visitors WHERE campaign_id = $1 AND ${column} = $2 AND converted = true AND first_seen >= $3`,
+          `SELECT COUNT(*) as count FROM (
+             SELECT COALESCE(NULLIF(LOWER(TRIM(customer_email)), ''), id) AS buyer_key
+             FROM visitors
+             WHERE campaign_id = $1 AND ${column} = $2 AND converted = true AND first_seen >= $3
+             GROUP BY 1
+           ) buyers`,
           [campaignId, v.id, testStart]
         );
         // Revenue: sum ALL revenue_events (purchases + refunds) for net revenue
@@ -1164,23 +1180,25 @@ class StorageImpl implements IStorage {
         "SELECT COUNT(*) as count FROM visitors v WHERE v.campaign_id = $1",
         [campaign.id]
       );
+      // Conversions = distinct INITIAL buyers per Travis's directive: 'CVR
+      // should ONLY EVER SHOW the sales that take place initially, and not
+      // add in every potential upsell.' One buyer = one conversion, even
+      // if they triggered N upsells across N visits. (May 2026 — Tiffany.)
       const convResult = await pool.query(
-        `SELECT (
-           -- Unique converted visitors (pixel-tracked)
-           SELECT COUNT(*) FROM visitors v WHERE v.campaign_id = $1 AND v.converted = true
-         ) + (
-           -- Unique unmatched buyers by email/external_id (no pixel, e.g. Stripe sync)
-           SELECT COUNT(DISTINCT COALESCE(re.customer_email, re.external_id))
-           FROM revenue_events re
-           WHERE re.campaign_id = $1 AND re.visitor_id IS NULL AND re.event_type = 'purchase'
-         ) AS count`,
+        `SELECT COUNT(*) AS count FROM (
+           SELECT COALESCE(NULLIF(LOWER(TRIM(customer_email)), ''), external_id, visitor_id) AS buyer_key
+           FROM revenue_events
+           WHERE campaign_id = $1 AND event_type = 'purchase'
+             AND COALESCE(NULLIF(LOWER(TRIM(customer_email)), ''), external_id, visitor_id) IS NOT NULL
+           GROUP BY 1
+         ) buyers`,
         [campaign.id]
       );
-      // All revenue_events for this campaign — net of refunds
+      // Revenue = sum of all purchase events (initial + upsells = total).
       const revResult = await pool.query(
         `SELECT COALESCE(SUM(amount), 0) AS total
          FROM revenue_events
-         WHERE campaign_id = $1`,
+         WHERE campaign_id = $1 AND event_type = 'purchase'`,
         [campaign.id]
       );
       const varResult = await pool.query(
@@ -1717,14 +1735,26 @@ class StorageImpl implements IStorage {
     const testsLost = losses.length;
     const winRate = testsCompleted > 0 ? (testsWon / testsCompleted) * 100 : 0;
 
-    // Aggregate visitor/conversion/revenue stats
+    // Aggregate visitor/conversion/revenue stats. Conversions = distinct
+    // buyer emails across all this user's campaigns (one buyer = one
+    // conversion). Revenue sums all PURCHASE-type revenue events. Refunds
+    // don't decrement here — the per-campaign view shows them separately.
+    // (May 2026 dedupe — Tiffany incident.)
     const visitorStatsResult = await pool.query(
       `SELECT
-         COUNT(*) as total_visitors,
-         SUM(CASE WHEN converted = true THEN 1 ELSE 0 END) as total_conversions,
-         COALESCE(SUM(CASE WHEN converted = true THEN revenue ELSE 0 END), 0) as total_revenue
-       FROM visitors
-       WHERE campaign_id IN (${idList})`
+         (SELECT COUNT(*) FROM visitors WHERE campaign_id IN (${idList})) AS total_visitors,
+         (
+           SELECT COUNT(*) FROM (
+             SELECT COALESCE(NULLIF(LOWER(TRIM(customer_email)), ''), id) AS buyer_key
+             FROM visitors
+             WHERE campaign_id IN (${idList}) AND converted = true
+             GROUP BY 1
+           ) buyers
+         ) AS total_conversions,
+         COALESCE((
+           SELECT SUM(amount) FROM revenue_events
+           WHERE campaign_id IN (${idList}) AND event_type = 'purchase'
+         ), 0) AS total_revenue`
     );
     const vs = visitorStatsResult.rows[0] || {};
     const totalVisitors = parseInt(vs.total_visitors) || 0;

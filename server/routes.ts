@@ -2584,41 +2584,71 @@ export async function registerRoutes(server: Server, app: Express) {
     }
     const variantStats = await storage.getVariantStats(campaign.id);
 
-    // Total visitors and conversions = actual counts from the visitors table (NOT scoped to test start)
-    // The variant stats are scoped to test start for fair A/B comparison,
-    // but the top-level campaign KPIs should show ALL-TIME data.
-    const campaignTotals = await pool.query(
-      `SELECT COUNT(*) as total_visitors,
-              COUNT(*) FILTER (WHERE converted = true) as total_conversions
-       FROM visitors WHERE campaign_id = $1`,
+    // ============================================================
+    // CONVERSIONS = UNIQUE INITIAL BUYERS (May 2026 — Tiffany incident)
+    // ============================================================
+    // Travis's directive: 'Conversion rate should ONLY EVER SHOW the sales
+    // that take place initially, and not add in every potential upsell.'
+    //
+    // Three bugs the old math had:
+    //   1. visitors.converted=true was being set on MANY rows per buyer
+    //      (Stripe sync iterated by email and flagged every visitor row
+    //      that buyer had ever generated). Tiffany's Jeff has 20 visitor
+    //      rows all marked converted from one purchase -> 20x inflation.
+    //   2. Counted upsell + bump charges as conversions (Tiffany's $97
+    //      and $199 upsells made every initial $14.95 buyer count 3-4x).
+    //   3. unmatched_conversions was added to the visitor count, double-
+    //      counting any buyer whose email matched (case/whitespace drift).
+    //
+    // New approach — conversions = COUNT(DISTINCT customer_email) of
+    // PURCHASE-type revenue events (excluding refunds/disputes), regardless
+    // of how many charges that buyer ever made. One buyer = one conversion.
+    // Revenue still sums all purchase events (initial + upsells = total
+    // revenue), but the CVR denominator and the conversion count itself
+    // only reflect first-time buyers.
+    //
+    // For pixel-only campaigns where customer_email is NULL on revenue
+    // events (older Stripe webhook data), we fall back to COUNT(DISTINCT
+    // visitor_id) on purchase events. Better than COUNT(*) which over-
+    // counts upsells.
+    const totalsRow = await pool.query(
+      `WITH purchase_events AS (
+         SELECT customer_email, visitor_id, amount, created_at
+         FROM revenue_events
+         WHERE campaign_id = $1 AND event_type = 'purchase'
+       )
+       SELECT
+         (SELECT COUNT(*) FROM visitors WHERE campaign_id = $1) AS total_visitors,
+         -- Distinct buyers by email (preferred); if email is missing, count
+         -- by visitor_id; final fallback to row count for legacy data with
+         -- neither field populated.
+         (
+           SELECT COUNT(DISTINCT customer_email)
+           FROM purchase_events WHERE customer_email IS NOT NULL
+         ) AS distinct_email_buyers,
+         (
+           SELECT COUNT(DISTINCT visitor_id)
+           FROM purchase_events
+           WHERE visitor_id IS NOT NULL
+             AND (customer_email IS NULL
+                  OR customer_email NOT IN (
+                    SELECT customer_email FROM purchase_events WHERE customer_email IS NOT NULL
+                  ))
+         ) AS distinct_vid_only_buyers,
+         COALESCE((SELECT SUM(amount) FROM purchase_events), 0) AS total_revenue,
+         COALESCE((SELECT SUM(amount) FROM revenue_events WHERE campaign_id = $1 AND event_type = 'refund'), 0) AS total_refunds`,
       [campaign.id]
     );
-    const totalVisitors = parseInt(campaignTotals.rows[0]?.total_visitors) || 0;
-    const visitorConversions = parseInt(campaignTotals.rows[0]?.total_conversions) || 0;
-
-    // Total revenue = ALL revenue_events (includes upsells for all matched + unmatched)
-    const reRow = await pool.query(
-      `SELECT
-        -- Unmatched conversions: unique buyers NOT already tracked by pixel
-        -- Exclude emails that already appear in converted visitors to avoid double-counting
-        COUNT(DISTINCT re.customer_email) FILTER (
-          WHERE re.visitor_id IS NULL
-          AND re.event_type = 'purchase'
-          AND re.customer_email IS NOT NULL
-          AND re.customer_email NOT IN (
-            SELECT customer_email FROM visitors
-            WHERE campaign_id = $1 AND converted = true AND customer_email IS NOT NULL
-          )
-        ) AS unmatched_conversions,
-        COALESCE(SUM(re.amount), 0) AS total_revenue_all
-       FROM revenue_events re WHERE re.campaign_id = $1`,
-      [campaign.id]
-    );
-    const unmatchedConversions = parseInt(reRow.rows[0]?.unmatched_conversions || "0");
-    const totalRevenueFromEvents = parseFloat(reRow.rows[0]?.total_revenue_all || "0");
-
-    const totalConversions = visitorConversions + unmatchedConversions;
-    const totalRevenue = totalRevenueFromEvents;
+    const tRow = totalsRow.rows[0] || {};
+    const totalVisitors = parseInt(tRow.total_visitors) || 0;
+    const distinctEmailBuyers = parseInt(tRow.distinct_email_buyers) || 0;
+    const distinctVidOnlyBuyers = parseInt(tRow.distinct_vid_only_buyers) || 0;
+    // Distinct INITIAL buyers — each buyer counted once regardless of how
+    // many charges (upsells/bumps) they triggered.
+    const totalConversions = distinctEmailBuyers + distinctVidOnlyBuyers;
+    // Revenue stays gross-of-upsells per Travis's preference: 'Revenue can
+    // still total everything.'
+    const totalRevenue = parseFloat(tRow.total_revenue) || 0;
     const conversionRate = totalVisitors > 0 ? totalConversions / totalVisitors : 0;
 
     // Map to the shape the frontend expects
