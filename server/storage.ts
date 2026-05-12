@@ -968,6 +968,24 @@ class StorageImpl implements IStorage {
     // Store customer email for downstream Stripe attribution (OTO/upsell tracking)
     if (customerEmail) updates.customerEmail = customerEmail;
     await db.update(visitors).set(updates).where(eq(visitors.id, visitorId));
+
+    // Mirror the conversion onto visitor_sessions so section-drop-off
+    // analytics can compute conversion_rate_reaching correctly. Wrapped in
+    // try/catch — a stale session flag is preferable to breaking the
+    // revenue/conversion write path.
+    try {
+      const sessRes = await pool.query(
+        `UPDATE visitor_sessions
+           SET converted = true, updated_at = NOW()::text
+         WHERE visitor_id = $1 AND converted = false`,
+        [visitorId]
+      );
+      if (sessRes.rowCount && sessRes.rowCount > 0) {
+        console.log(`[session backfill] visitor=${visitorId} flipped ${sessRes.rowCount} session(s) converted=true`);
+      }
+    } catch (err: any) {
+      console.error('[session backfill] markConverted: non-fatal error:', err?.message || err);
+    }
   }
 
   async getVisitorCountByCampaign(campaignId: number): Promise<number> {
