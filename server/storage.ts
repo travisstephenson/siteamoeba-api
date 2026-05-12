@@ -2260,7 +2260,97 @@ class StorageImpl implements IStorage {
         new Date().toISOString(),
       ]
     );
+
+    // Backfill visitor_sessions.converted = true so section-drop-off analytics
+    // can compute conversion_rate_reaching correctly. Refunds do not flip the
+    // flag back — a refunded visitor still "converted" for funnel purposes.
+    if (data.eventType === 'purchase') {
+      await this.markSessionsConvertedForRevenueEvent({
+        visitorId: data.visitorId,
+        campaignId: data.campaignId,
+        customerEmail: data.customerEmail,
+      });
+    }
     return true;
+  }
+
+  /**
+   * Mark visitor_sessions.converted = true (and visitors.converted = true)
+   * for the buyer of a revenue_event. Resolves the buyer in this order:
+   *   1. visitor_id from the event itself (pixel + stripe_account paths)
+   *   2. email → visitors.customer_email lookup (stripe_webhook path,
+   *      since Stripe doesn't know our visitor IDs)
+   * Scoped to the event's campaign so we never cross-attribute between
+   * campaigns that share a buyer.
+   *
+   * Failure is logged but never thrown — conversion analytics being slightly
+   * stale is preferable to breaking the revenue insert.
+   */
+  private async markSessionsConvertedForRevenueEvent(args: {
+    visitorId?: string | null;
+    campaignId: number;
+    customerEmail?: string | null;
+  }): Promise<void> {
+    try {
+      const visitorIds = new Set<string>();
+
+      // Source 1: the visitor_id on the event itself
+      if (args.visitorId) {
+        visitorIds.add(args.visitorId);
+      }
+
+      // Source 2: resolve by customer_email when the event has no visitor_id
+      // (typical of Stripe webhook events) — or also when we have both, to
+      // catch repeat buyers who visited under multiple visitor IDs.
+      if (args.customerEmail) {
+        const r = await pool.query(
+          `SELECT DISTINCT id FROM visitors
+             WHERE campaign_id = $1
+               AND customer_email IS NOT NULL
+               AND LOWER(customer_email) = LOWER($2)`,
+          [args.campaignId, args.customerEmail]
+        );
+        for (const row of r.rows) visitorIds.add(row.id);
+      }
+
+      if (visitorIds.size === 0) return; // nothing to mark, no-op
+
+      const ids = Array.from(visitorIds);
+
+      // Update sessions — scoped to campaign so we don't accidentally flip
+      // sessions on other campaigns where this visitor also browsed.
+      const sessRes = await pool.query(
+        `UPDATE visitor_sessions
+           SET converted = true, updated_at = NOW()::text
+         WHERE visitor_id = ANY($1::text[])
+           AND campaign_id = $2
+           AND converted = false`,
+        [ids, args.campaignId]
+      );
+
+      // Also flip visitors.converted as a belt-and-suspenders. The pixel
+      // already does this when it fires, but the Stripe webhook path
+      // doesn't, so this closes that gap.
+      const visRes = await pool.query(
+        `UPDATE visitors
+           SET converted = true,
+               converted_at = COALESCE(converted_at, NOW()::text),
+               customer_email = COALESCE(customer_email, $3)
+         WHERE id = ANY($1::text[])
+           AND campaign_id = $2
+           AND converted = false`,
+        [ids, args.campaignId, args.customerEmail || null]
+      );
+
+      if (sessRes.rowCount || visRes.rowCount) {
+        console.log(
+          `[session backfill] C${args.campaignId} marked ${sessRes.rowCount || 0} session(s) + ${visRes.rowCount || 0} visitor(s) converted (visitors: ${ids.length})`
+        );
+      }
+    } catch (err: any) {
+      // Never let an analytics backfill break a revenue insert. Just log.
+      console.error('[session backfill] non-fatal error:', err?.message || err);
+    }
   }
 
   async getRevenueEventsByVisitor(visitorId: string): Promise<any[]> {
